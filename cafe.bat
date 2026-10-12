@@ -248,6 +248,7 @@ public static class FabMouseNotify {
 }
 
 function Open-NvidiaControlPanel {
+    Write-Log "Opening NVIDIA Control Panel (open-only; it does not itself apply requested options)."
     # Traditional desktop installation
     $paths = @(
         "$env:ProgramFiles\NVIDIA Corporation\Control Panel Client\nvcplui.exe",
@@ -282,6 +283,188 @@ function Open-NvidiaControlPanel {
     Write-Log "NVIDIA Control Panel executable/app not found; opening Store listing." "WARN"
     Start-Process "ms-windows-store://pdp/?ProductId=9NF8H0H7WMLT"
 }
+
+
+# Windows display-mode API. This deliberately changes DISPLAY1 only, and only
+# when Windows/NVIDIA advertises 1920x1080 at exactly 360 Hz as a supported mode.
+if (-not ("FabDisplayNative" -as [type])) {
+    Add-Type @"
+using System;
+using System.Runtime.InteropServices;
+
+public static class FabDisplayNative {
+    [StructLayout(LayoutKind.Sequential)]
+    public struct POINTL {
+        public int x;
+        public int y;
+    }
+
+    [StructLayout(LayoutKind.Explicit, Size = 16)]
+    public struct DISPLAYUNION {
+        [FieldOffset(0)] public POINTL position;
+        [FieldOffset(8)] public int displayOrientation;
+        [FieldOffset(12)] public int displayFixedOutput;
+    }
+
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    public struct DEVMODE {
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)] public string dmDeviceName;
+        public short dmSpecVersion;
+        public short dmDriverVersion;
+        public short dmSize;
+        public short dmDriverExtra;
+        public int dmFields;
+        public DISPLAYUNION dmUnion;
+        public short dmColor;
+        public short dmDuplex;
+        public short dmYResolution;
+        public short dmTTOption;
+        public short dmCollate;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)] public string dmFormName;
+        public short dmLogPixels;
+        public int dmBitsPerPel;
+        public int dmPelsWidth;
+        public int dmPelsHeight;
+        public int dmDisplayFlags;
+        public int dmDisplayFrequency;
+        public int dmICMMethod;
+        public int dmICMIntent;
+        public int dmMediaType;
+        public int dmDitherType;
+        public int dmReserved1;
+        public int dmReserved2;
+        public int dmPanningWidth;
+        public int dmPanningHeight;
+    }
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode, EntryPoint = "EnumDisplaySettingsW")]
+    public static extern bool EnumDisplaySettings(
+        string deviceName, int modeNum, ref DEVMODE devMode);
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode, EntryPoint = "ChangeDisplaySettingsExW")]
+    public static extern int ChangeDisplaySettingsEx(
+        string deviceName, ref DEVMODE devMode, IntPtr hwnd,
+        uint flags, IntPtr lParam);
+
+    private static DEVMODE NewMode() {
+        DEVMODE dm = new DEVMODE();
+        dm.dmDeviceName = "";
+        dm.dmFormName = "";
+        dm.dmSize = (short)Marshal.SizeOf(typeof(DEVMODE));
+        return dm;
+    }
+
+    private static string ResultName(int code) {
+        switch (code) {
+            case 0: return "DISP_CHANGE_SUCCESSFUL";
+            case 1: return "DISP_CHANGE_RESTART";
+            case -1: return "DISP_CHANGE_FAILED";
+            case -2: return "DISP_CHANGE_BADMODE";
+            case -3: return "DISP_CHANGE_NOTUPDATED";
+            case -4: return "DISP_CHANGE_BADFLAGS";
+            case -5: return "DISP_CHANGE_BADPARAM";
+            case -6: return "DISP_CHANGE_BADDUALVIEW";
+            default: return "code " + code;
+        }
+    }
+
+    public static bool TrySetDisplay1To1080p360(out string report) {
+        const string device = @"\\.\DISPLAY1";
+        DEVMODE candidate = NewMode();
+        bool found32 = false;
+        bool foundAny = false;
+        int count = 0;
+
+        for (int i = 0; i < 4096; i++) {
+            DEVMODE dm = NewMode();
+            if (!EnumDisplaySettings(device, i, ref dm)) break;
+            count++;
+            if (dm.dmPelsWidth == 1920 && dm.dmPelsHeight == 1080 &&
+                dm.dmDisplayFrequency == 360 && dm.dmBitsPerPel >= 24) {
+                if (!foundAny || dm.dmBitsPerPel >= 32) {
+                    candidate = dm;
+                    foundAny = true;
+                    if (dm.dmBitsPerPel >= 32) { found32 = true; break; }
+                }
+            }
+        }
+
+        if (!foundAny) {
+            DEVMODE current = NewMode();
+            string currentText = "current mode unavailable";
+            if (EnumDisplaySettings(device, -1, ref current)) {
+                currentText = current.dmPelsWidth + "x" + current.dmPelsHeight +
+                    " @" + current.dmDisplayFrequency + "Hz";
+            }
+            report = device + " current=" + currentText +
+                ". Windows did not advertise 1920x1080 @ 360Hz (modes checked: " +
+                count + "). No display mode was changed.";
+            return false;
+        }
+
+        candidate.dmFields |= 0x00040000 | 0x00080000 | 0x00100000 | 0x00400000;
+        int test = ChangeDisplaySettingsEx(device, ref candidate, IntPtr.Zero, 0x00000002, IntPtr.Zero);
+        if (test != 0) {
+            report = "Windows rejected the display-mode test: " + ResultName(test) +
+                " (" + test + "). No display mode was changed.";
+            return false;
+        }
+
+        int apply = ChangeDisplaySettingsEx(device, ref candidate, IntPtr.Zero, 0x00000001, IntPtr.Zero);
+        if (apply != 0) {
+            report = "Windows could not apply the tested display mode: " + ResultName(apply) +
+                " (" + apply + ").";
+            return false;
+        }
+
+        DEVMODE after = NewMode();
+        if (EnumDisplaySettings(device, -1, ref after)) {
+            report = device + " now reports " + after.dmPelsWidth + "x" +
+                after.dmPelsHeight + " @" + after.dmDisplayFrequency + "Hz, " +
+                after.dmBitsPerPel + " bpp. Requested 1920x1080 @ 360Hz.";
+            return after.dmPelsWidth == 1920 && after.dmPelsHeight == 1080 &&
+                after.dmDisplayFrequency == 360;
+        }
+
+        report = "Windows accepted the requested mode, but the current mode could not be read back.";
+        return true;
+    }
+}
+"@
+}
+
+function Apply-NvidiaGamingSettings {
+    Write-Log "NVIDIA gaming-settings apply started."
+    Write-Log "Attempting Windows display 1: native target 1920x1080 at 360 Hz."
+    try {
+        $displayReport = ""
+        $displayOk = [FabDisplayNative]::TrySetDisplay1To1080p360([ref]$displayReport)
+        if ($displayOk) {
+            Write-Log $displayReport
+        } else {
+            Write-Log $displayReport "WARN"
+        }
+    } catch {
+        Write-Log "Display resolution/refresh attempt failed: $($_.Exception.Message)" "ERROR"
+    }
+
+    # These options are driver-managed NVIDIA Control Panel settings. Do not edit
+    # undocumented NVIDIA registry keys or claim success without the NVIDIA driver API.
+    Write-Log "Manual NVIDIA Control Panel items still required: Image Settings with Preview -> Use my preference emphasizing Performance."
+    Write-Log "Manual NVIDIA Control Panel item still required: Configure Surround, PhysX -> select the NVIDIA GPU (not CPU)."
+    Write-Log "Manual NVIDIA Control Panel item still required: Adjust desktop color settings -> Digital Vibrance 75%."
+    Write-Log "Manual NVIDIA Control Panel items still required: Adjust desktop size and position -> Full-screen, Perform scaling on GPU, enable override scaling mode set by games/programs."
+    Write-Log "Manual NVIDIA Control Panel item still required: Set up G-SYNC -> disable G-SYNC for display 1."
+    Write-Log "Opening NVIDIA Control Panel. The manual items above have NOT been changed automatically." "WARN"
+    Open-NvidiaControlPanel
+    [System.Windows.Forms.MessageBox]::Show(
+        "The script attempted to set display 1 to 1920x1080 at 360 Hz (check LIVE LOGS for the result).`n`nThis BAT does not automatically change the five NVIDIA-driver options listed in LIVE LOGS; the NVIDIA Control Panel is open for those settings.",
+        "NVIDIA Settings",
+        [System.Windows.Forms.MessageBoxButtons]::OK,
+        [System.Windows.Forms.MessageBoxIcon]::Information
+    ) | Out-Null
+}
+
 
 function Open-GHub {
     Launch-App -Name "Logitech G HUB" -Paths @(
@@ -404,12 +587,9 @@ New-Tile "Spotify" 4 { Open-Spotify }
 New-Tile "FabMode" 5 { Apply-FabMode } -Primary
 New-Tile "Mouse Pointer Options" 6 { Open-MousePointerOptions }
 New-Tile "NVIDIA Control Panel" 7 { Open-NvidiaControlPanel }
-New-Tile "Logitech G HUB" 8 { Open-GHub }
-New-Tile "Sound Settings" 9 { Start-Process "mmsys.cpl" }
-New-Tile "Display Settings" 10 { Start-Process "ms-settings:display" }
-New-Tile "Network Connections" 11 { Start-Process "ncpa.cpl" }
-New-Tile "Task Manager" 12 { Start-Process "taskmgr.exe" }
-New-Tile "Exit" 13 { $form.Close() }
+New-Tile "Apply NVIDIA Settings" 8 { Apply-NvidiaGamingSettings } -Primary
+New-Tile "Logitech G HUB" 9 { Open-GHub }
+New-Tile "Exit" 10 { $form.Close() }
 
 # Live diagnostic log panel (visible only while the launcher is open)
 $logTitle = New-Object System.Windows.Forms.Label
