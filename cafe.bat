@@ -285,27 +285,16 @@ function Open-NvidiaControlPanel {
 }
 
 
-# Windows display-mode API. This deliberately changes DISPLAY1 only, and only
-# when Windows/NVIDIA advertises 1920x1080 at exactly 360 Hz as a supported mode.
-if (-not ("FabDisplayNative" -as [type])) {
-    Add-Type @"
+# Windows display-mode API and NVIDIA NVAPI first-stage settings helper.
+# The display mode helper uses a byte-array placeholder for DEVMODE's 16-byte union,
+# avoiding compiler/layout problems from the prior explicit union implementation.
+try {
+    if (-not ("FabDisplayNative" -as [type])) {
+        Add-Type -ErrorAction Stop @"
 using System;
 using System.Runtime.InteropServices;
 
 public static class FabDisplayNative {
-    [StructLayout(LayoutKind.Sequential)]
-    public struct POINTL {
-        public int x;
-        public int y;
-    }
-
-    [StructLayout(LayoutKind.Explicit, Size = 16)]
-    public struct DISPLAYUNION {
-        [FieldOffset(0)] public POINTL position;
-        [FieldOffset(8)] public int displayOrientation;
-        [FieldOffset(12)] public int displayFixedOutput;
-    }
-
     [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
     public struct DEVMODE {
         [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)] public string dmDeviceName;
@@ -314,7 +303,7 @@ public static class FabDisplayNative {
         public short dmSize;
         public short dmDriverExtra;
         public int dmFields;
-        public DISPLAYUNION dmUnion;
+        [MarshalAs(UnmanagedType.ByValArray, SizeConst = 16)] public byte[] dmUnion;
         public short dmColor;
         public short dmDuplex;
         public short dmYResolution;
@@ -338,18 +327,17 @@ public static class FabDisplayNative {
     }
 
     [DllImport("user32.dll", CharSet = CharSet.Unicode, EntryPoint = "EnumDisplaySettingsW")]
-    public static extern bool EnumDisplaySettings(
-        string deviceName, int modeNum, ref DEVMODE devMode);
+    public static extern bool EnumDisplaySettings(string deviceName, int modeNum, ref DEVMODE devMode);
 
     [DllImport("user32.dll", CharSet = CharSet.Unicode, EntryPoint = "ChangeDisplaySettingsExW")]
-    public static extern int ChangeDisplaySettingsEx(
-        string deviceName, ref DEVMODE devMode, IntPtr hwnd,
-        uint flags, IntPtr lParam);
+    public static extern int ChangeDisplaySettingsEx(string deviceName, ref DEVMODE devMode,
+        IntPtr hwnd, uint flags, IntPtr lParam);
 
     private static DEVMODE NewMode() {
         DEVMODE dm = new DEVMODE();
         dm.dmDeviceName = "";
         dm.dmFormName = "";
+        dm.dmUnion = new byte[16];
         dm.dmSize = (short)Marshal.SizeOf(typeof(DEVMODE));
         return dm;
     }
@@ -371,25 +359,21 @@ public static class FabDisplayNative {
     public static bool TrySetDisplay1To1080p360(out string report) {
         const string device = @"\\.\DISPLAY1";
         DEVMODE candidate = NewMode();
-        bool found32 = false;
-        bool foundAny = false;
+        bool found = false;
         int count = 0;
-
         for (int i = 0; i < 4096; i++) {
             DEVMODE dm = NewMode();
             if (!EnumDisplaySettings(device, i, ref dm)) break;
             count++;
             if (dm.dmPelsWidth == 1920 && dm.dmPelsHeight == 1080 &&
                 dm.dmDisplayFrequency == 360 && dm.dmBitsPerPel >= 24) {
-                if (!foundAny || dm.dmBitsPerPel >= 32) {
-                    candidate = dm;
-                    foundAny = true;
-                    if (dm.dmBitsPerPel >= 32) { found32 = true; break; }
-                }
+                candidate = dm;
+                found = true;
+                if (dm.dmBitsPerPel >= 32) break;
             }
         }
 
-        if (!foundAny) {
+        if (!found) {
             DEVMODE current = NewMode();
             string currentText = "current mode unavailable";
             if (EnumDisplaySettings(device, -1, ref current)) {
@@ -405,66 +389,299 @@ public static class FabDisplayNative {
         candidate.dmFields |= 0x00040000 | 0x00080000 | 0x00100000 | 0x00400000;
         int test = ChangeDisplaySettingsEx(device, ref candidate, IntPtr.Zero, 0x00000002, IntPtr.Zero);
         if (test != 0) {
-            report = "Windows rejected the display-mode test: " + ResultName(test) +
-                " (" + test + "). No display mode was changed.";
+            report = "Windows rejected display-mode test: " + ResultName(test) + " (" + test + ").";
             return false;
         }
-
         int apply = ChangeDisplaySettingsEx(device, ref candidate, IntPtr.Zero, 0x00000001, IntPtr.Zero);
         if (apply != 0) {
-            report = "Windows could not apply the tested display mode: " + ResultName(apply) +
-                " (" + apply + ").";
+            report = "Windows could not apply display mode: " + ResultName(apply) + " (" + apply + ").";
             return false;
         }
 
         DEVMODE after = NewMode();
         if (EnumDisplaySettings(device, -1, ref after)) {
-            report = device + " now reports " + after.dmPelsWidth + "x" +
-                after.dmPelsHeight + " @" + after.dmDisplayFrequency + "Hz, " +
-                after.dmBitsPerPel + " bpp. Requested 1920x1080 @ 360Hz.";
+            report = device + " now reports " + after.dmPelsWidth + "x" + after.dmPelsHeight +
+                " @" + after.dmDisplayFrequency + "Hz, " + after.dmBitsPerPel +
+                " bpp (requested 1920x1080 @ 360Hz).";
             return after.dmPelsWidth == 1920 && after.dmPelsHeight == 1080 &&
                 after.dmDisplayFrequency == 360;
         }
-
-        report = "Windows accepted the requested mode, but the current mode could not be read back.";
+        report = "Windows accepted display mode, but current mode could not be read back.";
         return true;
     }
 }
 "@
+        Write-Log "Display-mode helper loaded."
+    }
+} catch {
+    Write-Log "Display-mode helper could not compile/load: $($_.Exception.Message)" "ERROR"
+}
+
+try {
+    if (-not ("FabNvApi" -as [type])) {
+        Add-Type -ErrorAction Stop @"
+using System;
+using System.Runtime.InteropServices;
+
+public static class FabNvApi {
+    [DllImport("nvapi64.dll", EntryPoint = "nvapi_QueryInterface", CallingConvention = CallingConvention.Cdecl)]
+    private static extern IntPtr NvApiQueryInterface(uint id);
+
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    private delegate int NvApiInitialize();
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    private delegate int NvApiUnload();
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    private delegate int NvApiEnumDisplayHandle(uint index, out IntPtr handle);
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    private delegate int NvApiGetAssociatedDisplayHandle([MarshalAs(UnmanagedType.LPStr)] string displayName, out IntPtr handle);
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    private delegate int NvApiGetDvcInfo(IntPtr handle, uint outputId, ref DvcInfo info);
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    private delegate int NvApiSetDvcLevel(IntPtr handle, uint outputId, int level);
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    private delegate int NvApiGetViewEx(IntPtr handle, ref NvDisplayPathInfo pathInfo, ref uint pathCount, ref uint viewMode);
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    private delegate int NvApiSetViewEx(IntPtr handle, ref NvDisplayPathInfo pathInfo, uint viewMode);
+
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    private struct DvcInfo {
+        public uint version;
+        public int currentLevel;
+        public int minLevel;
+        public int maxLevel;
+    }
+
+    // NV_DISPLAY_PATH as defined by NVIDIA's NVAPI header. Bitfields are retained
+    // in 32-bit containers so the rest of the path layout remains unchanged.
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    private struct NvDisplayPath {
+        public uint deviceMask;
+        public uint sourceId;
+        public uint primaryBits;
+        public int connector;
+        public uint width;
+        public uint height;
+        public uint depth;
+        public int colorFormat;
+        public int rotation;
+        public int scaling;
+        public uint refreshRate;
+        public uint interlacedBits;
+        public int tvFormat;
+        public uint posx;
+        public uint posy;
+        public uint trailingBits;
+    }
+
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    private struct NvDisplayPathInfo {
+        public uint version;
+        public uint count;
+        [MarshalAs(UnmanagedType.ByValArray, SizeConst = 4, ArraySubType = UnmanagedType.Struct)]
+        public NvDisplayPath[] path;
+    }
+
+    private static T Resolve<T>(uint id) where T : class {
+        IntPtr p = NvApiQueryInterface(id);
+        if (p == IntPtr.Zero) throw new Exception("NVAPI function 0x" + id.ToString("X8") + " is unavailable.");
+        return (T)(object)Marshal.GetDelegateForFunctionPointer(p, typeof(T));
+    }
+
+    private static IntPtr GetDisplayHandle() {
+        NvApiGetAssociatedDisplayHandle getAssociated = Resolve<NvApiGetAssociatedDisplayHandle>(0x35C29134);
+        IntPtr handle;
+        int status = getAssociated(@"\\.\DISPLAY1", out handle);
+        if (status == 0 && handle != IntPtr.Zero) return handle;
+
+        status = getAssociated(@"\\DISPLAY1", out handle);
+        if (status == 0 && handle != IntPtr.Zero) return handle;
+
+        NvApiEnumDisplayHandle enumerate = Resolve<NvApiEnumDisplayHandle>(0x9ABDD40D);
+        status = enumerate(0, out handle);
+        if (status != 0 || handle == IntPtr.Zero)
+            throw new Exception("Could not locate an NVIDIA display handle (NVAPI status " + status + ").");
+        return handle;
+    }
+
+    private static void Initialize(out NvApiUnload unload) {
+        NvApiInitialize initialize = Resolve<NvApiInitialize>(0x0150E828);
+        unload = Resolve<NvApiUnload>(0xD22BDD7E);
+        int status = initialize();
+        if (status != 0) throw new Exception("NvAPI_Initialize failed with status " + status + ".");
+    }
+
+    public static bool TrySetDigitalVibrance75(out string report) {
+        NvApiUnload unload = null;
+        bool initialized = false;
+        try {
+            Initialize(out unload);
+            initialized = true;
+
+            IntPtr handle = GetDisplayHandle();
+            NvApiGetDvcInfo getInfo = Resolve<NvApiGetDvcInfo>(0x4085DE45);
+            NvApiSetDvcLevel setLevel = Resolve<NvApiSetDvcLevel>(0x172409B4);
+
+            DvcInfo info = new DvcInfo();
+            info.version = (uint)(Marshal.SizeOf(typeof(DvcInfo)) | 0x10000);
+            int status = getInfo(handle, 0, ref info);
+            if (status != 0) throw new Exception("NvAPI_GetDVCInfo failed with status " + status + ".");
+            if (info.maxLevel <= info.minLevel) throw new Exception("NVIDIA returned an invalid Digital Vibrance range.");
+
+            // Map UI 75% onto the exact range advertised by the driver.
+            int requested = info.minLevel + (int)Math.Round((info.maxLevel - info.minLevel) * 0.75);
+            int setStatus = setLevel(handle, 0, requested);
+            if (setStatus != 0) throw new Exception("NvAPI_SetDVCLevel failed with status " + setStatus + ".");
+
+            DvcInfo verify = new DvcInfo();
+            verify.version = (uint)(Marshal.SizeOf(typeof(DvcInfo)) | 0x10000);
+            int verifyStatus = getInfo(handle, 0, ref verify);
+            if (verifyStatus != 0) throw new Exception("Digital Vibrance was set, but read-back failed with status " + verifyStatus + ".");
+            if (verify.currentLevel != requested)
+                throw new Exception("NVIDIA accepted the Digital Vibrance request but reports " + verify.currentLevel + " (requested " + requested + ").");
+
+            report = "Digital Vibrance set and verified at 75%: driver level " + verify.currentLevel +
+                " (range " + verify.minLevel + "-" + verify.maxLevel + ") for the NVIDIA display associated with DISPLAY1.";
+            return true;
+        } catch (Exception ex) {
+            report = "Digital Vibrance failed: " + ex.Message;
+            return false;
+        } finally {
+            if (initialized && unload != null) { try { unload(); } catch {} }
+        }
+    }
+
+    public static bool TrySetGpuFullscreenScaling(out string report) {
+        NvApiUnload unload = null;
+        bool initialized = false;
+        try {
+            Initialize(out unload);
+            initialized = true;
+
+            IntPtr handle = GetDisplayHandle();
+            NvApiGetViewEx getView = Resolve<NvApiGetViewEx>(0xDBBC0AF4);
+            NvApiSetViewEx setView = Resolve<NvApiSetViewEx>(0x06B89E68);
+
+            NvDisplayPathInfo info = new NvDisplayPathInfo();
+            info.path = new NvDisplayPath[4];
+            info.count = 4;
+            info.version = (uint)(Marshal.SizeOf(typeof(NvDisplayPathInfo)) | (4 << 16));
+            uint pathCount = 4;
+            uint viewMode = 0;
+            int getStatus = getView(handle, ref info, ref pathCount, ref viewMode);
+            if (getStatus != 0) throw new Exception("NvAPI_GetViewEx failed with status " + getStatus + ".");
+            if (pathCount < 1 || pathCount > 4)
+                throw new Exception("NVIDIA returned an unexpected display path count: " + pathCount + ".");
+            if (info.path == null || info.path.Length < 4)
+                throw new Exception("NVIDIA returned an invalid display-path array.");
+
+            int target = -1;
+            for (int i = 0; i < pathCount; i++) {
+                if ((info.path[i].trailingBits & 1u) != 0) { target = i; break; } // bGDIPrimary
+            }
+            if (target < 0) {
+                for (int i = 0; i < pathCount; i++) {
+                    if ((info.path[i].primaryBits & 1u) != 0) { target = i; break; } // bPrimary
+                }
+            }
+            if (target < 0) target = 0;
+
+            int oldScaling = info.path[target].scaling;
+            info.path[target].scaling = 2; // NV_SCALING_GPU_SCALING_TO_NATIVE = Force GPU - Full Screen
+            info.count = pathCount;
+            int setStatus = setView(handle, ref info, viewMode);
+            if (setStatus != 0)
+                throw new Exception("NvAPI_SetViewEx failed with status " + setStatus + ".");
+
+            NvDisplayPathInfo verify = new NvDisplayPathInfo();
+            verify.path = new NvDisplayPath[4];
+            verify.count = 4;
+            verify.version = (uint)(Marshal.SizeOf(typeof(NvDisplayPathInfo)) | (4 << 16));
+            uint verifyCount = 4;
+            uint verifyViewMode = 0;
+            int verifyStatus = getView(handle, ref verify, ref verifyCount, ref verifyViewMode);
+            if (verifyStatus != 0)
+                throw new Exception("Scaling was submitted, but read-back failed with status " + verifyStatus + ".");
+
+            int verifyTarget = target;
+            if (verifyTarget >= verifyCount) verifyTarget = 0;
+            int actualScaling = verify.path[verifyTarget].scaling;
+            if (actualScaling != 2)
+                throw new Exception("NVIDIA accepted the scaling request but read-back mode is " + actualScaling + ", not Force GPU - Full Screen (2).");
+
+            report = "GPU scaling set and verified: Force GPU - Full Screen (mode 2). Previous mode was " +
+                oldScaling + ". Target path index " + target + ".";
+            return true;
+        } catch (Exception ex) {
+            report = "GPU full-screen scaling failed: " + ex.Message;
+            return false;
+        } finally {
+            if (initialized && unload != null) { try { unload(); } catch {} }
+        }
+    }
+}
+"@
+        Write-Log "NVIDIA NVAPI helper loaded."
+    }
+} catch {
+    Write-Log "NVIDIA NVAPI helper could not compile/load: $($_.Exception.Message)" "ERROR"
 }
 
 function Apply-NvidiaGamingSettings {
     Write-Log "NVIDIA gaming-settings apply started."
-    Write-Log "Attempting Windows display 1: native target 1920x1080 at 360 Hz."
-    try {
-        $displayReport = ""
-        $displayOk = [FabDisplayNative]::TrySetDisplay1To1080p360([ref]$displayReport)
-        if ($displayOk) {
-            Write-Log $displayReport
-        } else {
-            Write-Log $displayReport "WARN"
+
+    Write-Log "Attempting Windows display 1: 1920x1080 at 360 Hz."
+    if ("FabDisplayNative" -as [type]) {
+        try {
+            $displayReport = ""
+            $displayOk = [FabDisplayNative]::TrySetDisplay1To1080p360([ref]$displayReport)
+            if ($displayOk) {
+                Write-Log $displayReport
+            } else {
+                Write-Log $displayReport "WARN"
+            }
+        } catch {
+            Write-Log "Display resolution/refresh attempt failed: $($_.Exception.Message)" "ERROR"
         }
-    } catch {
-        Write-Log "Display resolution/refresh attempt failed: $($_.Exception.Message)" "ERROR"
+    } else {
+        Write-Log "Display resolution/refresh was not attempted because the Windows display helper is unavailable." "ERROR"
     }
 
-    # These options are driver-managed NVIDIA Control Panel settings. Do not edit
-    # undocumented NVIDIA registry keys or claim success without the NVIDIA driver API.
-    Write-Log "Manual NVIDIA Control Panel items still required: Image Settings with Preview -> Use my preference emphasizing Performance."
-    Write-Log "Manual NVIDIA Control Panel item still required: Configure Surround, PhysX -> select the NVIDIA GPU (not CPU)."
-    Write-Log "Manual NVIDIA Control Panel item still required: Adjust desktop color settings -> Digital Vibrance 75%."
-    Write-Log "Manual NVIDIA Control Panel items still required: Adjust desktop size and position -> Full-screen, Perform scaling on GPU, enable override scaling mode set by games/programs."
-    Write-Log "Manual NVIDIA Control Panel item still required: Set up G-SYNC -> disable G-SYNC for display 1."
-    Write-Log "Opening NVIDIA Control Panel. The manual items above have NOT been changed automatically." "WARN"
-    Open-NvidiaControlPanel
-    [System.Windows.Forms.MessageBox]::Show(
-        "The script attempted to set display 1 to 1920x1080 at 360 Hz (check LIVE LOGS for the result).`n`nThis BAT does not automatically change the five NVIDIA-driver options listed in LIVE LOGS; the NVIDIA Control Panel is open for those settings.",
-        "NVIDIA Settings",
-        [System.Windows.Forms.MessageBoxButtons]::OK,
-        [System.Windows.Forms.MessageBoxIcon]::Information
-    ) | Out-Null
-}
+    if ("FabNvApi" -as [type]) {
+        try {
+            $vibranceReport = ""
+            $vibranceOk = [FabNvApi]::TrySetDigitalVibrance75([ref]$vibranceReport)
+            if ($vibranceOk) {
+                Write-Log $vibranceReport
+            } else {
+                Write-Log $vibranceReport "ERROR"
+            }
+        } catch {
+            Write-Log "Digital Vibrance call failed unexpectedly: $($_.Exception.Message)" "ERROR"
+        }
 
+        try {
+            $scalingReport = ""
+            $scalingOk = [FabNvApi]::TrySetGpuFullscreenScaling([ref]$scalingReport)
+            if ($scalingOk) {
+                Write-Log $scalingReport
+            } else {
+                Write-Log $scalingReport "ERROR"
+            }
+        } catch {
+            Write-Log "GPU full-screen scaling call failed unexpectedly: $($_.Exception.Message)" "ERROR"
+        }
+    } else {
+        Write-Log "NVIDIA NVAPI helper is unavailable; Digital Vibrance and GPU scaling were not changed." "ERROR"
+    }
+
+    Write-Log "Still manual: Image Settings with Preview -> Use my preference emphasizing Performance."
+    Write-Log "Still manual: Configure Surround, PhysX -> select the NVIDIA GPU."
+    Write-Log "Still manual: Adjust desktop size and position -> enable override scaling mode set by games and programs."
+    Write-Log "Still manual: Set up G-SYNC -> disable G-SYNC for display 1."
+    Write-Log "Opening NVIDIA Control Panel. Stage-one settings have individual success/failure logs." "INFO"
+    Open-NvidiaControlPanel
+}
 
 function Open-GHub {
     Launch-App -Name "Logitech G HUB" -Paths @(
@@ -625,6 +842,11 @@ $script:LogBox.WordWrap = $false
 $script:LogBox.BackColor = [System.Drawing.Color]::FromArgb(12,15,20)
 $script:LogBox.ForeColor = [System.Drawing.Color]::FromArgb(190,220,190)
 $script:LogBox.Font = New-Object System.Drawing.Font("Consolas",9)
+try {
+    $script:LogBox.Text = Get-Content -LiteralPath $script:LogPath -Raw -ErrorAction Stop
+    $script:LogBox.SelectionStart = $script:LogBox.TextLength
+    $script:LogBox.ScrollToCaret()
+} catch {}
 $form.Controls.Add($script:LogBox)
 Write-Log "Launcher ready. Log file: $script:LogPath"
 
