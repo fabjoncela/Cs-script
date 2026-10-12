@@ -117,6 +117,7 @@ public static class FabMouseNative {
 }
 
 function Apply-FabMode {
+    param([switch]$SkipPointerOptions)
     $mousePath = "HKCU:\Control Panel\Mouse"
     Write-Log "FabMode started."
 
@@ -227,7 +228,7 @@ public static class FabMouseNotify {
         Write-Log "FabMode registry verification passed." "INFO"
         if ($apiVerified) {
             Write-Log "FabMode applied and verified live pointer speed 10 (6/11)." "INFO"
-            Open-MousePointerOptions
+            if (-not $SkipPointerOptions) { Open-MousePointerOptions }
         } else {
             [System.Windows.Forms.MessageBox]::Show(
                 "FabMode saved the registry values, but live pointer speed 10 could not be confirmed. Check LIVE LOGS for SPI_SETMOUSESPEED and SPI_GETMOUSESPEED results.",
@@ -1196,6 +1197,41 @@ function Open-GHub {
 # the button request a URL the first time on each PC.
 $script:AtCfgDownloadUrl = ""
 
+# Built-in at.cfg from the uploaded file. Makes this BAT portable and usable
+# offline without needing a second file or a configuration download URL.
+# An at.cfg beside this BAT can override the bundled copy.
+$script:EmbeddedAtCfgBase64 = @"
+Ly8gPT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PQ0KLy8gQ1MyIEFVVE9FWEVDDQovLyA9PT09PT09PT09
+PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09DQplY2hvICJGYWIgTW9kZSINCg0KLy8gLS0tLS0tLS0tLSBDT05TT0xFIC0t
+LS0tLS0tLS0NCmJpbmQgImAiICJ0b2dnbGVjb25zb2xlIg0KDQoNCi8vIC0tLS0tLS0tLS0gTU9VU0UgLyBNT1ZFTUVOVCAtLS0t
+LS0tLS0tDQpiaW5kICJNV0hFRUxVUCIgIitqdW1wIg0KYmluZCAiTVdIRUVMRE9XTiIgIitqdW1wIg0KYmluZCAiU1BBQ0UiICIr
+anVtcCINCg0Kc2Vuc2l0aXZpdHkgIjEuMiINCnpvb21fc2Vuc2l0aXZpdHlfcmF0aW8gIjEuMCINCg0KDQovLyAtLS0tLS0tLS0t
+IFJBREFSIC8gSFVEIC0tLS0tLS0tLS0NCmJpbmQgIkFMVCIgInRvZ2dsZSBjbF9yYWRhcl9zY2FsZSAwLjI1IDAuOCINCmNsX2h1
+ZF9yYWRhcl9zY2FsZSAiMS4zMCINCg0KDQovLyAtLS0tLS0tLS0tIFdFQVBPTlMgLS0tLS0tLS0tLQ0KYmluZCAiUiIgIityZWxv
+YWQiDQpiaW5kICJYIiAiK2xvb2thdHdlYXBvbiINCg0KYmluZCAiVCIgInNsb3Q2IiAgICAgICAgLy8gSEUgZ3JlbmFkZQ0KYmlu
+ZCAiRiIgInNsb3Q3IiAgICAgICAgLy8gRmxhc2hiYW5nDQpiaW5kICJDIiAic2xvdDgiICAgICAgICAvLyBTbW9rZQ0KYmluZCAi
+TiIgInNsb3QxMCIgICAgICAgLy8gTW9sb3RvdiAvIEluY2VuZGlhcnkNCg0KDQovLyAtLS0tLS0tLS0tIFZPSUNFIC0tLS0tLS0t
+LS0NCmJpbmQgIlYiICIrdm9pY2VyZWNvcmQiDQoNCg0KLy8gLS0tLS0tLS0tLSBJTkNPTUlORyBDSEFUIC0tLS0tLS0tLS0NCmJp
+bmQgIk1PVVNFNSIgInRvZ2dsZSBjbF9tdXRlX2VuZW15X3RlYW0gMSAwIg0KDQoNCi8vIC0tLS0tLS0tLS0gQ1JPU1NIQUlSIC0t
+LS0tLS0tLS0NCmNsX2Nyb3NzaGFpcl9kcmF3b3V0bGluZSB0cnVlDQpjbF9jcm9zc2hhaXJfb3V0bGluZXRoaWNrbmVzcyAwDQpj
+bF9jcm9zc2hhaXJfcmVjb2lsIGZhbHNlDQpjbF9jcm9zc2hhaXJfc25pcGVyX3dpZHRoIDANCmNsX2Nyb3NzaGFpcl90IGZhbHNl
+DQoNCmNsX2Nyb3NzaGFpcmFscGhhIDIwMA0KY2xfY3Jvc3NoYWlyY29sb3IgNQ0KY2xfY3Jvc3NoYWlyY29sb3JfYiAwDQpjbF9j
+cm9zc2hhaXJjb2xvcl9nIDI1NQ0KY2xfY3Jvc3NoYWlyY29sb3JfciAwDQoNCmNsX2Nyb3NzaGFpcmRvdCBmYWxzZQ0KY2xfY3Jv
+c3NoYWlyZ2FwIC0zLjcNCmNsX2Nyb3NzaGFpcmdhcF91c2V3ZWFwb252YWx1ZSBmYWxzZQ0KY2xfY3Jvc3NoYWlyc2l6ZSAyDQpj
+bF9jcm9zc2hhaXJzdHlsZSA0DQpjbF9jcm9zc2hhaXJ0aGlja25lc3MgMQ0KY2xfY3Jvc3NoYWlydXNlYWxwaGEgdHJ1ZQ0KDQoN
+Ci8vIC0tLS0tLS0tLS0gUEVSRk9STUFOQ0UgLS0tLS0tLS0tLQ0KZnBzX21heCAiNDAwIg0KDQoNCnJfbG93X2xhdGVuY3kgIjIi
+DQoNCnJfcGxheWVyX3Zpc2liaWxpdHlfbW9kZSAiMSINCg0KDQovLyA9PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09
+PT09PT09DQovLyBWSURFTyBTRVRUSU5HUw0KLy8gPT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PQ0KLy8N
+Ci8vIERpc3BsYXkgTW9kZTogRnVsbHNjcmVlbg0KLy8gQXNwZWN0IFJhdGlvOiA0OjMNCi8vIFJlc29sdXRpb246IDEyODB4OTYw
+DQovLyBSZWZyZXNoIFJhdGU6IDM2MCBIeg0KLy8gQnJpZ2h0bmVzczogOTMlDQovLw0KLy8gQWR2YW5jZWQgVmlkZW86DQovLw0K
+Ly8gTXVsdGlzYW1wbGluZyBBbnRpLUFsaWFzaW5nOiA4WCBNU0FBDQovLyBHbG9iYWwgU2hhZG93IFF1YWxpdHk6IExPVw0KLy8g
+RHluYW1pYyBTaGFkb3dzOiBBTEwNCi8vIE1vZGVsIC8gVGV4dHVyZSBEZXRhaWw6IE1FRElVTQ0KLy8gVGV4dHVyZSBGaWx0ZXJp
+bmc6IEJJTElORUFSDQovLyBTaGFkZXIgRGV0YWlsOiBMT1cNCi8vIFBhcnRpY2xlIERldGFpbDogTE9XDQovLyBBbWJpZW50IE9j
+Y2x1c2lvbjogRElTQUJMRUQNCi8vIEhpZ2ggRHluYW1pYyBSYW5nZTogUEVSRk9STUFOQ0UNCi8vIEZpZGVsaXR5RlggU3VwZXIg
+UmVzb2x1dGlvbjogRElTQUJMRUQNCi8vDQovLyBCb29zdCBQbGF5ZXIgQ29udHJhc3Q6IEVOQUJMRUQNCi8vIFYtU3luYzogRElT
+QUJMRUQNCi8vIE5WSURJQSBSZWZsZXg6IEVOQUJMRUQgKyBCT09TVA0KLy8gTWF4aW11bSBGUFM6IDQwMA==
+"@
+
 function Get-SteamLibraryRoots {
     $steamInstalls = New-Object 'System.Collections.Generic.List[string]'
     $libraryRoots = New-Object 'System.Collections.Generic.List[string]'
@@ -1272,6 +1308,7 @@ function Get-SteamLibraryRoots {
 }
 
 function Find-CS2ConfigFolder {
+    param([switch]$NoPrompt)
     $roots = @(Get-SteamLibraryRoots)
     Write-Log "Searching $($roots.Count) Steam library location(s) for CS2 (app 730)."
     $fallback = $null
@@ -1307,6 +1344,10 @@ function Find-CS2ConfigFolder {
         return $fallback
     }
 
+    if ($NoPrompt) {
+        Write-Log 'CS2 was not found in any discovered Steam library. Skipping config install in FabMode (no popup).' 'WARN'
+        return $null
+    }
     Write-Log 'Automatic CS2 installation detection failed; requesting the game cfg folder.' 'WARN'
     $pick = New-Object System.Windows.Forms.FolderBrowserDialog
     $pick.Description = 'Select the CS2 folder ending in game\csgo\cfg'
@@ -1325,6 +1366,14 @@ function Get-AtCfgSource {
     if (Test-Path -LiteralPath $localCfg -PathType Leaf) {
         Write-Log "Found at.cfg next to launcher: $localCfg"
         return [pscustomobject]@{ Type='File'; Value=$localCfg; RememberUrl=$false }
+    }
+
+    # Use the portable, bundled source when no explicit direct URL is configured.
+    # This avoids prompting for a file during the multi-step FabMode action.
+    if ([string]::IsNullOrWhiteSpace($script:AtCfgDownloadUrl) -and
+        -not [string]::IsNullOrWhiteSpace($script:EmbeddedAtCfgBase64)) {
+        Write-Log 'Using bundled at.cfg stored inside the launcher (offline).'
+        return [pscustomobject]@{ Type='Embedded'; Value='bundled at.cfg'; RememberUrl=$false }
     }
 
     $storedUrlFile = Join-Path $env:LOCALAPPDATA 'CafeLauncher\at_cfg_url.txt'
@@ -1358,6 +1407,7 @@ function Get-AtCfgSource {
 }
 
 function Install-AtCfg {
+    param([switch]$Silent)
     $downloaded = $null
     $staged = $null
     try {
@@ -1368,13 +1418,18 @@ function Install-AtCfg {
             return
         }
 
-        $cfgDirectory = Find-CS2ConfigFolder
+        $cfgDirectory = Find-CS2ConfigFolder -NoPrompt:$Silent
         if (-not $cfgDirectory) {
             Write-Log 'CS2 at.cfg installation cancelled; no CS2 config folder selected.' 'WARN'
             return
         }
 
-        if ($source.Type -eq 'Url') {
+        if ($source.Type -eq 'Embedded') {
+            $downloaded = Join-Path $env:TEMP ("CafeLauncher-at-{0}.cfg" -f [Guid]::NewGuid().ToString('N'))
+            [IO.File]::WriteAllBytes($downloaded, [Convert]::FromBase64String($script:EmbeddedAtCfgBase64))
+            $sourcePath = $downloaded
+            Write-Log 'Extracted bundled at.cfg to a temporary file for installation.'
+        } elseif ($source.Type -eq 'Url') {
             $downloaded = Join-Path $env:TEMP ("CafeLauncher-at-{0}.cfg" -f [Guid]::NewGuid().ToString('N'))
             Write-Log "Downloading at.cfg from $($source.Value)"
             # Windows PowerShell 5.1 uses TLS 1.2 when supported by the system.
@@ -1430,20 +1485,24 @@ function Install-AtCfg {
         }
 
         Write-Log "CS2 at.cfg installed and SHA-256 verified: $dest"
-        [System.Windows.Forms.MessageBox]::Show(
-            "at.cfg installed successfully!`n`n$dest`n`nTo load it in CS2: exec at",
-            'Cafe Launcher',
-            [System.Windows.Forms.MessageBoxButtons]::OK,
-            [System.Windows.Forms.MessageBoxIcon]::Information
-        ) | Out-Null
+        if (-not $Silent) {
+            [System.Windows.Forms.MessageBox]::Show(
+                "at.cfg installed successfully!`n`n$dest`n`nTo load it in CS2: exec at",
+                'Cafe Launcher',
+                [System.Windows.Forms.MessageBoxButtons]::OK,
+                [System.Windows.Forms.MessageBoxIcon]::Information
+            ) | Out-Null
+        }
     } catch {
         Write-Log "CS2 at.cfg installation failed: $($_.Exception.Message)" 'ERROR'
-        [System.Windows.Forms.MessageBox]::Show(
-            "Could not install at.cfg:`n$($_.Exception.Message)",
-            'Cafe Launcher',
-            [System.Windows.Forms.MessageBoxButtons]::OK,
-            [System.Windows.Forms.MessageBoxIcon]::Error
-        ) | Out-Null
+        if (-not $Silent) {
+            [System.Windows.Forms.MessageBox]::Show(
+                "Could not install at.cfg:`n$($_.Exception.Message)",
+                'Cafe Launcher',
+                [System.Windows.Forms.MessageBoxButtons]::OK,
+                [System.Windows.Forms.MessageBoxIcon]::Error
+            ) | Out-Null
+        }
     } finally {
         foreach ($temporary in @($downloaded, $staged)) {
             if ($temporary -and (Test-Path -LiteralPath $temporary -PathType Leaf)) {
@@ -1469,6 +1528,27 @@ function Launch-All {
     Open-GHub
     Write-Log "Launch All: opening Mouse Pointer Options."
     Open-MousePointerOptions
+}
+
+function Invoke-FabModeFull {
+    Write-Log 'FabMode full routine started: mouse settings, NVIDIA settings, CS2 config, Launch All.'
+
+    $steps = @(
+        @{ Name = 'Windows mouse speed/acceleration'; Action = { Apply-FabMode -SkipPointerOptions } },
+        @{ Name = 'NVIDIA settings'; Action = { Apply-NvidiaGamingSettings } },
+        @{ Name = 'Install CS2 at.cfg'; Action = { Install-AtCfg -Silent } },
+        @{ Name = 'Launch All (including Mouse Pointer Options)'; Action = { Launch-All } }
+    )
+    foreach ($step in $steps) {
+        Write-Log ("FabMode step started: " + $step.Name)
+        try {
+            & ($step.Action)
+            Write-Log ("FabMode step returned: " + $step.Name + ". Check logs for individual success or errors.")
+        } catch {
+            Write-Log ("FabMode step failed: " + $step.Name + ": " + $_.Exception.Message) 'ERROR'
+        }
+    }
+    Write-Log 'FabMode full routine finished. Review logs for individual results.'
 }
 
 # Main window
@@ -1566,7 +1646,7 @@ New-Tile "FACEIT Anti-Cheat" 2 {
 
 New-Tile "FACEIT Matchmaking" 3 { Open-FaceitMatchmaking }
 New-Tile "Spotify" 4 { Open-Spotify }
-New-Tile "FabMode" 5 { Apply-FabMode } -Primary
+New-Tile "FabMode" 5 { Invoke-FabModeFull } -Primary
 New-Tile "Mouse Pointer Options" 6 { Open-MousePointerOptions }
 New-Tile "NVIDIA Control Panel" 7 { Open-NvidiaControlPanel }
 New-Tile "Apply NVIDIA Settings" 8 { Apply-NvidiaGamingSettings } -Primary
