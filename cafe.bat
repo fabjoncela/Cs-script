@@ -1,4 +1,3 @@
-
 @echo off
 set "CAFE_SCRIPT=%~f0"
 start "" powershell.exe -NoProfile -ExecutionPolicy Bypass -STA -WindowStyle Hidden -Command "$l=Get-Content -LiteralPath $env:CAFE_SCRIPT; $i=[Array]::IndexOf($l,'# POWERSHELL_GUI'); if($i -ge 0){Invoke-Expression ($l[($i+1)..($l.Length-1)] -join [Environment]::NewLine)}"
@@ -116,31 +115,42 @@ public static class FabMouseNative {
 "@
 }
 
-function Apply-FabMode {
-    param([switch]$SkipPointerOptions)
+function Apply-ProfileMouse {
+    param(
+        [string]$ProfileName = 'FabMode',
+        [ValidateRange(1,20)][int]$PointerSpeed = 10,
+        [bool]$DisableAcceleration = $true,
+        [switch]$SkipPointerOptions
+    )
     $mousePath = "HKCU:\Control Panel\Mouse"
-    Write-Log "FabMode started."
+    if ($DisableAcceleration) {
+        $accelSetting = '0'; $threshold1 = 0; $threshold2 = 0; $acceleration = 0
+    } else {
+        $accelSetting = '1'; $threshold1 = 6; $threshold2 = 10; $acceleration = 1
+    }
+    $accelDescription = if ($DisableAcceleration) { 'disabled' } else { 'enabled' }
+    Write-Log "$ProfileName mouse settings started."
 
     try {
         # Write Windows mouse settings directly.
-        Set-ItemProperty -Path $mousePath -Name MouseSensitivity -Value "10" -ErrorAction Stop
-        Set-ItemProperty -Path $mousePath -Name MouseSpeed -Value "0" -ErrorAction Stop
-        Set-ItemProperty -Path $mousePath -Name MouseThreshold1 -Value "0" -ErrorAction Stop
-        Set-ItemProperty -Path $mousePath -Name MouseThreshold2 -Value "0" -ErrorAction Stop
-        Write-Log "Mouse registry values written (speed 10; acceleration disabled)."
+        Set-ItemProperty -Path $mousePath -Name MouseSensitivity -Value ([string]$PointerSpeed) -ErrorAction Stop
+        Set-ItemProperty -Path $mousePath -Name MouseSpeed -Value $accelSetting -ErrorAction Stop
+        Set-ItemProperty -Path $mousePath -Name MouseThreshold1 -Value ([string]$threshold1) -ErrorAction Stop
+        Set-ItemProperty -Path $mousePath -Name MouseThreshold2 -Value ([string]$threshold2) -ErrorAction Stop
+        Write-Log "Mouse registry values written (speed $PointerSpeed; acceleration $accelDescription)."
 
-        # Apply disabled acceleration to the active Windows session.
+        # Apply the requested acceleration to the active Windows session.
         # SPI_SETMOUSE expects a pointer to three integers: threshold1, threshold2, acceleration.
         $mouseData = [Runtime.InteropServices.Marshal]::AllocHGlobal(12)
         try {
-            [Runtime.InteropServices.Marshal]::WriteInt32($mouseData, 0, 0)
-            [Runtime.InteropServices.Marshal]::WriteInt32($mouseData, 4, 0)
-            [Runtime.InteropServices.Marshal]::WriteInt32($mouseData, 8, 0)
+            [Runtime.InteropServices.Marshal]::WriteInt32($mouseData, 0, $threshold1)
+            [Runtime.InteropServices.Marshal]::WriteInt32($mouseData, 4, $threshold2)
+            [Runtime.InteropServices.Marshal]::WriteInt32($mouseData, 8, $acceleration)
             $accelOk = [FabMouseNative]::SystemParametersInfo(
                 0x0004, 0, $mouseData, 0x03
             )
             if ($accelOk) {
-                Write-Log "Windows accepted SPI_SETMOUSE: acceleration disabled."
+                Write-Log "Windows accepted SPI_SETMOUSE: acceleration $accelDescription."
             } else {
                 $accelError = [Runtime.InteropServices.Marshal]::GetLastWin32Error()
                 Write-Log "SPI_SETMOUSE failed; Win32 error=$accelError. Registry acceleration values remain saved." "WARN"
@@ -153,10 +163,10 @@ function Apply-FabMode {
         # IMPORTANT: For SPI_SETMOUSESPEED, pvParam is the numeric value itself
         # encoded as an IntPtr (1-20), NOT a pointer to a buffer.
         $apiOk = [FabMouseNative]::SystemParametersInfo(
-            0x0071, 0, [IntPtr]10, 0x03
+            0x0071, 0, [IntPtr]$PointerSpeed, 0x03
         )
         if ($apiOk) {
-            Write-Log "Windows accepted SPI_SETMOUSESPEED speed 10 (6/11)."
+            Write-Log "Windows accepted SPI_SETMOUSESPEED speed $PointerSpeed."
         } else {
             $apiError = [Runtime.InteropServices.Marshal]::GetLastWin32Error()
             Write-Log "SPI_SETMOUSESPEED failed; Win32 error=$apiError. Registry values are saved, but active speed may not have changed." "ERROR"
@@ -173,7 +183,7 @@ function Apply-FabMode {
             )
             if ($speedReadOk) {
                 $actualSpeed = [Runtime.InteropServices.Marshal]::ReadInt32($readSpeedPtr)
-                Write-Log "Windows live pointer-speed read-back: $actualSpeed (requested 10)."
+                Write-Log "Windows live pointer-speed read-back: $actualSpeed (requested $PointerSpeed)."
             } else {
                 $readError = [Runtime.InteropServices.Marshal]::GetLastWin32Error()
                 Write-Log "SPI_GETMOUSESPEED read-back failed; Win32 error=$readError." "WARN"
@@ -182,9 +192,9 @@ function Apply-FabMode {
             [Runtime.InteropServices.Marshal]::FreeHGlobal($readSpeedPtr)
         }
 
-        $apiVerified = $apiOk -and $speedReadOk -and ($actualSpeed -eq 10)
-        if ($apiOk -and $speedReadOk -and ($actualSpeed -ne 10)) {
-            Write-Log "Windows accepted the set call but reports live speed $actualSpeed instead of 10." "ERROR"
+        $apiVerified = $apiOk -and $speedReadOk -and ($actualSpeed -eq $PointerSpeed)
+        if ($apiOk -and $speedReadOk -and ($actualSpeed -ne $PointerSpeed)) {
+            Write-Log "Windows accepted the set call but reports live speed $actualSpeed instead of $PointerSpeed." "ERROR"
         }
 
         # Ask Windows to reload the mouse settings. This notification is best-effort:
@@ -218,34 +228,39 @@ public static class FabMouseNotify {
 
         # Verify that the requested values are present in the current user's profile.
         $current = Get-ItemProperty -Path $mousePath -ErrorAction Stop
-        if ($current.MouseSensitivity -ne "10" -or
-            $current.MouseSpeed -ne "0" -or
-            $current.MouseThreshold1 -ne "0" -or
-            $current.MouseThreshold2 -ne "0") {
+        if ($current.MouseSensitivity -ne [string]$PointerSpeed -or
+            $current.MouseSpeed -ne $accelSetting -or
+            $current.MouseThreshold1 -ne [string]$threshold1 -or
+            $current.MouseThreshold2 -ne [string]$threshold2) {
             throw "Registry verification failed. Current values: sensitivity=$($current.MouseSensitivity), speed=$($current.MouseSpeed), threshold1=$($current.MouseThreshold1), threshold2=$($current.MouseThreshold2)."
         }
 
-        Write-Log "FabMode registry verification passed." "INFO"
+        Write-Log "$ProfileName registry verification passed." "INFO"
         if ($apiVerified) {
-            Write-Log "FabMode applied and verified live pointer speed 10 (6/11)." "INFO"
+            Write-Log "$ProfileName applied and verified live pointer speed $PointerSpeed." "INFO"
             if (-not $SkipPointerOptions) { Open-MousePointerOptions }
         } else {
             [System.Windows.Forms.MessageBox]::Show(
-                "FabMode saved the registry values, but live pointer speed 10 could not be confirmed. Check LIVE LOGS for SPI_SETMOUSESPEED and SPI_GETMOUSESPEED results.",
-                "FabMode - Apply Warning",
+                "$ProfileName saved the registry values, but live pointer speed $PointerSpeed could not be confirmed. Check LIVE LOGS for SPI_SETMOUSESPEED and SPI_GETMOUSESPEED results.",
+                "$ProfileName - Apply Warning",
                 [System.Windows.Forms.MessageBoxButtons]::OK,
                 [System.Windows.Forms.MessageBoxIcon]::Warning
             ) | Out-Null
         }
     } catch {
-        Write-Log "FabMode failed: $($_.Exception.Message)" "ERROR"
+        Write-Log "$ProfileName mouse settings failed: $($_.Exception.Message)" "ERROR"
         [System.Windows.Forms.MessageBox]::Show(
-            "FabMode error:`n$($_.Exception.Message)`n`nSee LIVE LOGS for details.",
-            "FabMode",
+            "$ProfileName mouse settings error:`n$($_.Exception.Message)`n`nSee LIVE LOGS for details.",
+            "$ProfileName",
             [System.Windows.Forms.MessageBoxButtons]::OK,
             [System.Windows.Forms.MessageBoxIcon]::Error
         ) | Out-Null
     }
+}
+
+function Apply-FabMode {
+    param([switch]$SkipPointerOptions)
+    Apply-ProfileMouse -ProfileName 'FabMode' -PointerSpeed 10 -DisableAcceleration $true -SkipPointerOptions:$SkipPointerOptions
 }
 
 function Open-NvidiaControlPanel {
@@ -1345,7 +1360,7 @@ function Find-CS2ConfigFolder {
     }
 
     if ($NoPrompt) {
-        Write-Log 'CS2 was not found in any discovered Steam library. Skipping config install in FabMode (no popup).' 'WARN'
+        Write-Log 'CS2 was not found in any discovered Steam library. Skipping config install (no popup).' 'WARN'
         return $null
     }
     Write-Log 'Automatic CS2 installation detection failed; requesting the game cfg folder.' 'WARN'
@@ -1361,23 +1376,34 @@ function Find-CS2ConfigFolder {
 }
 
 function Get-AtCfgSource {
+    param([string]$CfgName = 'at.cfg', [string]$DownloadUrl = '')
     $launcherDir = Split-Path -Parent $env:CAFE_SCRIPT
-    $localCfg = Join-Path $launcherDir 'at.cfg'
+    $localCfg = Join-Path $launcherDir $CfgName
     if (Test-Path -LiteralPath $localCfg -PathType Leaf) {
-        Write-Log "Found at.cfg next to launcher: $localCfg"
+        Write-Log "Found $CfgName next to launcher: $localCfg"
         return [pscustomobject]@{ Type='File'; Value=$localCfg; RememberUrl=$false }
     }
 
-    # Use the portable, bundled source when no explicit direct URL is configured.
-    # This avoids prompting for a file during the multi-step FabMode action.
-    if ([string]::IsNullOrWhiteSpace($script:AtCfgDownloadUrl) -and
+    # For friends, use an external at.cfg next to the BAT as their starter
+    # if a friend-specific file is not present and no custom URL was supplied.
+    if ($CfgName -ne 'at.cfg' -and [string]::IsNullOrWhiteSpace($DownloadUrl)) {
+        $fabTemplate = Join-Path $launcherDir 'at.cfg'
+        if (Test-Path -LiteralPath $fabTemplate -PathType Leaf) {
+            Write-Log "Using local at.cfg as starter contents for $CfgName."
+            return [pscustomobject]@{ Type='File'; Value=$fabTemplate; RememberUrl=$false }
+        }
+    }
+
+    # Use the portable, bundled source when no explicit URL is configured.
+    # This avoids prompting during profile application.
+    if ([string]::IsNullOrWhiteSpace($DownloadUrl) -and
         -not [string]::IsNullOrWhiteSpace($script:EmbeddedAtCfgBase64)) {
-        Write-Log 'Using bundled at.cfg stored inside the launcher (offline).'
+        Write-Log "Using bundled at.cfg as starter contents for $CfgName (offline)."
         return [pscustomobject]@{ Type='Embedded'; Value='bundled at.cfg'; RememberUrl=$false }
     }
 
-    $storedUrlFile = Join-Path $env:LOCALAPPDATA 'CafeLauncher\at_cfg_url.txt'
-    $url = $script:AtCfgDownloadUrl
+    $storedUrlFile = Join-Path $env:LOCALAPPDATA ('CafeLauncher\{0}_cfg_url.txt' -f [IO.Path]::GetFileNameWithoutExtension($CfgName))
+    $url = $DownloadUrl
     $remember = $false
     if ([string]::IsNullOrWhiteSpace($url) -and (Test-Path -LiteralPath $storedUrlFile -PathType Leaf)) {
         try { $url = (Get-Content -LiteralPath $storedUrlFile -Raw -ErrorAction Stop).Trim() } catch {}
@@ -1385,13 +1411,13 @@ function Get-AtCfgSource {
     if ([string]::IsNullOrWhiteSpace($url)) {
         Add-Type -AssemblyName Microsoft.VisualBasic
         $url = [Microsoft.VisualBasic.Interaction]::InputBox(
-            "Paste the DIRECT HTTPS download link to your at.cfg file.`n`nLeave blank to browse for a local at.cfg instead.`nThe link will be saved after a successful installation on this PC.",
-            'Install CS2 at.cfg', ''
+            "Paste the DIRECT HTTPS download link to your $CfgName file.`n`nLeave blank to browse for a local $CfgName instead.`nThe link will be saved after a successful installation on this PC.",
+            "Install CS2 $CfgName", ''
         ).Trim()
         if ([string]::IsNullOrWhiteSpace($url)) {
             $picker = New-Object System.Windows.Forms.OpenFileDialog
-            $picker.Title = 'Select the at.cfg file to install'
-            $picker.Filter = 'CS2 config (at.cfg)|at.cfg|CFG files (*.cfg)|*.cfg'
+            $picker.Title = "Select the $CfgName file to install"
+            $picker.Filter = "CS2 config ($CfgName)|$CfgName|CFG files (*.cfg)|*.cfg"
             $picker.CheckFileExists = $true
             if ($picker.ShowDialog() -ne [System.Windows.Forms.DialogResult]::OK) { return $null }
             return [pscustomobject]@{ Type='File'; Value=$picker.FileName; RememberUrl=$false }
@@ -1401,37 +1427,45 @@ function Get-AtCfgSource {
 
     $uri = $null
     if (-not [Uri]::TryCreate($url, [UriKind]::Absolute, [ref]$uri) -or $uri.Scheme -ne 'https') {
-        throw 'The config download URL must be a full HTTPS link directly to at.cfg (not a GitHub webpage).'
+        throw "The config download URL must be a full HTTPS link directly to $CfgName (not a GitHub webpage)."
     }
     return [pscustomobject]@{ Type='Url'; Value=$url; RememberUrl=$remember }
 }
 
 function Install-AtCfg {
-    param([switch]$Silent)
+    param(
+        [switch]$Silent,
+        [string]$CfgName = 'at.cfg',
+        [string]$DownloadUrl = ''
+    )
+    if ($CfgName -notmatch '^[A-Za-z0-9_-]+\.cfg$') {
+        Write-Log "Unsafe config filename rejected: $CfgName" 'ERROR'
+        return
+    }
     $downloaded = $null
     $staged = $null
     try {
-        Write-Log 'CS2 config installation started.'
-        $source = Get-AtCfgSource
+        Write-Log "CS2 config installation started: $CfgName."
+        $source = Get-AtCfgSource -CfgName $CfgName -DownloadUrl $DownloadUrl
         if (-not $source) {
-            Write-Log 'CS2 at.cfg installation cancelled; no file or URL selected.' 'WARN'
+            Write-Log "CS2 $CfgName installation cancelled; no file or URL selected." 'WARN'
             return
         }
 
         $cfgDirectory = Find-CS2ConfigFolder -NoPrompt:$Silent
         if (-not $cfgDirectory) {
-            Write-Log 'CS2 at.cfg installation cancelled; no CS2 config folder selected.' 'WARN'
+            Write-Log "CS2 $CfgName installation cancelled; no CS2 config folder selected." 'WARN'
             return
         }
 
         if ($source.Type -eq 'Embedded') {
-            $downloaded = Join-Path $env:TEMP ("CafeLauncher-at-{0}.cfg" -f [Guid]::NewGuid().ToString('N'))
+            $downloaded = Join-Path $env:TEMP ("CafeLauncher-{0}-{1}.cfg" -f [IO.Path]::GetFileNameWithoutExtension($CfgName), [Guid]::NewGuid().ToString('N'))
             [IO.File]::WriteAllBytes($downloaded, [Convert]::FromBase64String($script:EmbeddedAtCfgBase64))
             $sourcePath = $downloaded
-            Write-Log 'Extracted bundled at.cfg to a temporary file for installation.'
+            Write-Log "Extracted bundled starter config for $CfgName to a temporary file."
         } elseif ($source.Type -eq 'Url') {
-            $downloaded = Join-Path $env:TEMP ("CafeLauncher-at-{0}.cfg" -f [Guid]::NewGuid().ToString('N'))
-            Write-Log "Downloading at.cfg from $($source.Value)"
+            $downloaded = Join-Path $env:TEMP ("CafeLauncher-{0}-{1}.cfg" -f [IO.Path]::GetFileNameWithoutExtension($CfgName), [Guid]::NewGuid().ToString('N'))
+            Write-Log "Downloading $CfgName from $($source.Value)"
             # Windows PowerShell 5.1 uses TLS 1.2 when supported by the system.
             [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
             Invoke-WebRequest -Uri $source.Value -OutFile $downloaded -UseBasicParsing -TimeoutSec 30 -MaximumRedirection 5 -ErrorAction Stop
@@ -1442,28 +1476,28 @@ function Install-AtCfg {
 
         $fileInfo = Get-Item -LiteralPath $sourcePath -ErrorAction Stop
         if ($fileInfo.Length -lt 1 -or $fileInfo.Length -gt 2097152) {
-            throw 'at.cfg is empty or larger than 2 MB. Installation stopped.'
+            throw "$CfgName is empty or larger than 2 MB. Installation stopped."
         }
         $buffer = [IO.File]::ReadAllBytes($sourcePath)
         $firstBytes = [Text.Encoding]::UTF8.GetString($buffer, 0, [Math]::Min($buffer.Length, 300)).TrimStart([char[]]@([char]0xFEFF, [char]32, [char]13, [char]10, [char]9))
         if ($firstBytes -match '(?i)^(<!doctype\s+html|<html\b|\{\s*"(?:message|error)"\s*:)') {
-            throw 'The download appears to be a webpage/API error rather than at.cfg. Use a direct raw-file download URL.'
+            throw 'The download appears to be a webpage/API error rather than a .cfg file. Use a direct raw-file download URL.'
         }
         if ([Array]::IndexOf($buffer, [byte]0) -ge 0) {
             throw 'The source contains NUL bytes and does not appear to be a plain-text CFG.'
         }
 
-        $dest = Join-Path $cfgDirectory 'at.cfg'
+        $dest = Join-Path $cfgDirectory $CfgName
         if ([string]::Equals([IO.Path]::GetFullPath($sourcePath), [IO.Path]::GetFullPath($dest), [StringComparison]::OrdinalIgnoreCase)) {
-            Write-Log "at.cfg is already in the correct location: $dest"
+            Write-Log "$CfgName is already in the correct location: $dest"
         } else {
-            $staged = Join-Path $cfgDirectory ("at.cfg.cafe-{0}.tmp" -f [Guid]::NewGuid().ToString('N'))
+            $staged = Join-Path $cfgDirectory ("{0}.cafe-{1}.tmp" -f $CfgName, [Guid]::NewGuid().ToString('N'))
             Copy-Item -LiteralPath $sourcePath -Destination $staged -ErrorAction Stop
             if (Test-Path -LiteralPath $dest -PathType Leaf) {
                 $stamp = Get-Date -Format 'yyyyMMdd-HHmmss-fff'
-                $backup = Join-Path $cfgDirectory "at.cfg.backup-$stamp"
+                $backup = Join-Path $cfgDirectory ("{0}.backup-{1}" -f $CfgName, $stamp)
                 Copy-Item -LiteralPath $dest -Destination $backup -ErrorAction Stop
-                Write-Log "Backed up previous at.cfg to $backup"
+                Write-Log "Backed up previous $CfgName to $backup"
             }
             Copy-Item -LiteralPath $staged -Destination $dest -Force -ErrorAction Stop
         }
@@ -1474,30 +1508,30 @@ function Install-AtCfg {
 
         if ($source.Type -eq 'Url' -and $source.RememberUrl) {
             try {
-                $savedFile = Join-Path $env:LOCALAPPDATA 'CafeLauncher\at_cfg_url.txt'
+                $savedFile = Join-Path $env:LOCALAPPDATA ('CafeLauncher\{0}_cfg_url.txt' -f [IO.Path]::GetFileNameWithoutExtension($CfgName))
                 $savedDir = Split-Path -Parent $savedFile
                 if (-not (Test-Path -LiteralPath $savedDir)) { New-Item -ItemType Directory -Path $savedDir -Force -ErrorAction Stop | Out-Null }
                 Set-Content -LiteralPath $savedFile -Value $source.Value -Encoding UTF8 -ErrorAction Stop
                 Write-Log "Saved config download URL for later use on this PC: $savedFile"
             } catch {
-                Write-Log "Installed at.cfg, but could not save the download URL: $($_.Exception.Message)" 'WARN'
+                Write-Log "Installed $CfgName, but could not save the download URL: $($_.Exception.Message)" 'WARN'
             }
         }
 
-        Write-Log "CS2 at.cfg installed and SHA-256 verified: $dest"
+        Write-Log "CS2 $CfgName installed and SHA-256 verified: $dest"
         if (-not $Silent) {
             [System.Windows.Forms.MessageBox]::Show(
-                "at.cfg installed successfully!`n`n$dest`n`nTo load it in CS2: exec at",
+                "$CfgName installed successfully!`n`n$dest`n`nTo load it in CS2: exec $([IO.Path]::GetFileNameWithoutExtension($CfgName))",
                 'Cafe Launcher',
                 [System.Windows.Forms.MessageBoxButtons]::OK,
                 [System.Windows.Forms.MessageBoxIcon]::Information
             ) | Out-Null
         }
     } catch {
-        Write-Log "CS2 at.cfg installation failed: $($_.Exception.Message)" 'ERROR'
+        Write-Log "CS2 $CfgName installation failed: $($_.Exception.Message)" 'ERROR'
         if (-not $Silent) {
             [System.Windows.Forms.MessageBox]::Show(
-                "Could not install at.cfg:`n$($_.Exception.Message)",
+                "Could not install ${CfgName}:`n$($_.Exception.Message)",
                 'Cafe Launcher',
                 [System.Windows.Forms.MessageBoxButtons]::OK,
                 [System.Windows.Forms.MessageBoxIcon]::Error
@@ -1530,31 +1564,89 @@ function Launch-All {
     Open-MousePointerOptions
 }
 
-function Invoke-FabModeFull {
-    Write-Log 'FabMode full routine started: mouse settings, NVIDIA settings, CS2 config, Launch All.'
+# ==============================================================
+# PROFILE SETTINGS - EDIT ONLY THIS SECTION FOR FRIENDS' SETTINGS
+# ==============================================================
+# All five modes start with FabMode's existing configuration.
+# For custom CS2 settings, put arli.cfg, brile.cfg, arml.cfg or oli.cfg
+# beside this BAT.  Otherwise the embedded at.cfg is used as starter
+# content, but saved under the friend's OWN filename in the CS2 cfg folder.
+# The bundled FabMode file remains at.cfg and is not overwritten by friends.
+# You can also set an individual HTTPS CfgDownloadUrl later.
+# PointerSpeed=10 means Windows 6/11; DisableAcceleration=true disables EPP.
+# ApplyNvidia and LaunchApps can be turned off independently for each mode.
+$script:GamingProfiles = [ordered]@{
+    FabMode = @{
+        PointerSpeed = 10; DisableAcceleration = $true
+        ApplyNvidia = $true; ConfigFile = 'at.cfg'; CfgDownloadUrl = ''; LaunchApps = $true
+    }
+    ArliMode = @{
+        PointerSpeed = 10; DisableAcceleration = $true
+        ApplyNvidia = $true; ConfigFile = 'arli.cfg'; CfgDownloadUrl = ''; LaunchApps = $true
+    }
+    BrileMode = @{
+        PointerSpeed = 10; DisableAcceleration = $true
+        ApplyNvidia = $true; ConfigFile = 'brile.cfg'; CfgDownloadUrl = ''; LaunchApps = $true
+    }
+    ArmlMode = @{
+        PointerSpeed = 10; DisableAcceleration = $true
+        ApplyNvidia = $true; ConfigFile = 'arml.cfg'; CfgDownloadUrl = ''; LaunchApps = $true
+    }
+    OliMode = @{
+        PointerSpeed = 10; DisableAcceleration = $true
+        ApplyNvidia = $true; ConfigFile = 'oli.cfg'; CfgDownloadUrl = ''; LaunchApps = $true
+    }
+}
+
+function Invoke-GamingProfile {
+    param([Parameter(Mandatory=$true)][string]$ProfileName)
+    if (-not $script:GamingProfiles.Contains($ProfileName)) {
+        Write-Log "Unknown gaming profile: $ProfileName" 'ERROR'
+        return
+    }
+    $profile = $script:GamingProfiles[$ProfileName]
+    Write-Log "$ProfileName full routine started: mouse, NVIDIA, CS2 config, applications."
 
     $steps = @(
-        @{ Name = 'Windows mouse speed/acceleration'; Action = { Apply-FabMode -SkipPointerOptions } },
-        @{ Name = 'NVIDIA settings'; Action = { Apply-NvidiaGamingSettings } },
-        @{ Name = 'Install CS2 at.cfg'; Action = { Install-AtCfg -Silent } },
-        @{ Name = 'Launch All (including Mouse Pointer Options)'; Action = { Launch-All } }
+        @{ Name = 'Windows mouse speed/acceleration'; Action = {
+            Apply-ProfileMouse -ProfileName $ProfileName -PointerSpeed ([int]$profile.PointerSpeed) -DisableAcceleration ([bool]$profile.DisableAcceleration) -SkipPointerOptions
+        } }
     )
+    if ($profile.ApplyNvidia) {
+        $steps += @{ Name = 'NVIDIA settings'; Action = { Apply-NvidiaGamingSettings } }
+    }
+    $profileCfgName = [string]$profile.ConfigFile
+    if (-not [string]::IsNullOrWhiteSpace($profileCfgName)) {
+        $profileCfgUrl = [string]$profile.CfgDownloadUrl
+        if ($ProfileName -eq 'FabMode' -and [string]::IsNullOrWhiteSpace($profileCfgUrl)) {
+            $profileCfgUrl = $script:AtCfgDownloadUrl
+        }
+        $steps += @{ Name = "Install CS2 $profileCfgName"; Action = {
+            Install-AtCfg -Silent -CfgName $profileCfgName -DownloadUrl $profileCfgUrl
+        } }
+    }
+    if ($profile.LaunchApps) {
+        $steps += @{ Name = 'Launch All (including Mouse Pointer Options)'; Action = { Launch-All } }
+    }
     foreach ($step in $steps) {
-        Write-Log ("FabMode step started: " + $step.Name)
+        Write-Log ("$ProfileName step started: " + $step.Name)
         try {
             & ($step.Action)
-            Write-Log ("FabMode step returned: " + $step.Name + ". Check logs for individual success or errors.")
+            Write-Log ("$ProfileName step returned: " + $step.Name + ". Check logs for individual success or errors.")
         } catch {
-            Write-Log ("FabMode step failed: " + $step.Name + ": " + $_.Exception.Message) 'ERROR'
+            Write-Log ("$ProfileName step failed: " + $step.Name + ": " + $_.Exception.Message) 'ERROR'
         }
     }
-    Write-Log 'FabMode full routine finished. Review logs for individual results.'
+    Write-Log "$ProfileName full routine finished. Review logs for individual results."
 }
+
+# Backward-compatible entry point.
+function Invoke-FabModeFull { Invoke-GamingProfile -ProfileName 'FabMode' }
 
 # Main window
 $form = New-Object System.Windows.Forms.Form
 $form.Text = "Cafe Launcher"
-$form.Size = New-Object System.Drawing.Size(800,850)
+$form.Size = New-Object System.Drawing.Size(800,950)
 $form.StartPosition = "CenterScreen"
 $form.FormBorderStyle = "FixedSingle"
 $form.MaximizeBox = $false
@@ -1629,35 +1721,39 @@ function New-Tile {
 }
 
 New-Tile "LAUNCH ALL" 0 { Launch-All } -Primary
-
 New-Tile "Steam" 1 {
     Launch-App -Name "Steam" -Paths @(
         "${env:ProgramFiles(x86)}\Steam\steam.exe",
         "$env:ProgramFiles\Steam\steam.exe"
     )
 }
-
 New-Tile "FACEIT Anti-Cheat" 2 {
     Launch-App -Name "FACEIT Anti-Cheat" -Paths @(
         "$env:ProgramFiles\FACEIT AC\faceitclient.exe",
         "${env:ProgramFiles(x86)}\FACEIT AC\faceitclient.exe"
     )
 }
-
 New-Tile "FACEIT Matchmaking" 3 { Open-FaceitMatchmaking }
 New-Tile "Spotify" 4 { Open-Spotify }
-New-Tile "FabMode" 5 { Invoke-FabModeFull } -Primary
-New-Tile "Mouse Pointer Options" 6 { Open-MousePointerOptions }
-New-Tile "NVIDIA Control Panel" 7 { Open-NvidiaControlPanel }
-New-Tile "Apply NVIDIA Settings" 8 { Apply-NvidiaGamingSettings } -Primary
-New-Tile "Logitech G HUB" 9 { Open-GHub }
-New-Tile "Install CS2 at.cfg" 10 { Install-AtCfg } -Primary
-New-Tile "Exit" 11 { $form.Close() }
+New-Tile "Logitech G HUB" 5 { Open-GHub }
+
+# Five editable gaming profiles, all using the same shared routine.
+New-Tile "FabMode" 6 { Invoke-GamingProfile -ProfileName 'FabMode' } -Primary
+New-Tile "ArliMode" 7 { Invoke-GamingProfile -ProfileName 'ArliMode' } -Primary
+New-Tile "BrileMode" 8 { Invoke-GamingProfile -ProfileName 'BrileMode' } -Primary
+New-Tile "ArmlMode" 9 { Invoke-GamingProfile -ProfileName 'ArmlMode' } -Primary
+New-Tile "OliMode" 10 { Invoke-GamingProfile -ProfileName 'OliMode' } -Primary
+
+New-Tile "Mouse Pointer Options" 11 { Open-MousePointerOptions }
+New-Tile "NVIDIA Control Panel" 12 { Open-NvidiaControlPanel }
+New-Tile "Apply NVIDIA Settings" 13 { Apply-NvidiaGamingSettings } -Primary
+New-Tile "Install CS2 at.cfg" 14 { Install-AtCfg } -Primary
+New-Tile "Exit" 15 { $form.Close() }
 
 # Live diagnostic log panel (visible only while the launcher is open)
 $logTitle = New-Object System.Windows.Forms.Label
 $logTitle.Text = "LIVE LOGS  |  Errors and button activity"
-$logTitle.Location = New-Object System.Drawing.Point(28,565)
+$logTitle.Location = New-Object System.Drawing.Point(28,663)
 $logTitle.Size = New-Object System.Drawing.Size(500,22)
 $logTitle.Font = New-Object System.Drawing.Font("Segoe UI",9,[System.Drawing.FontStyle]::Bold)
 $logTitle.ForeColor = $WHITE
@@ -1665,7 +1761,7 @@ $form.Controls.Add($logTitle)
 
 $clearLogs = New-Object System.Windows.Forms.Button
 $clearLogs.Text = "Clear Logs"
-$clearLogs.Location = New-Object System.Drawing.Point(670,561)
+$clearLogs.Location = New-Object System.Drawing.Point(670,659)
 $clearLogs.Size = New-Object System.Drawing.Size(100,27)
 $clearLogs.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
 $clearLogs.FlatAppearance.BorderSize = 0
@@ -1679,8 +1775,8 @@ $clearLogs.Add_Click({
 $form.Controls.Add($clearLogs)
 
 $script:LogBox = New-Object System.Windows.Forms.TextBox
-$script:LogBox.Location = New-Object System.Drawing.Point(28,592)
-$script:LogBox.Size = New-Object System.Drawing.Size(742,175)
+$script:LogBox.Location = New-Object System.Drawing.Point(28,690)
+$script:LogBox.Size = New-Object System.Drawing.Size(742,168)
 $script:LogBox.Multiline = $true
 $script:LogBox.ReadOnly = $true
 $script:LogBox.ScrollBars = [System.Windows.Forms.ScrollBars]::Vertical
@@ -1699,7 +1795,7 @@ Write-Log "Launcher ready. Log file: $script:LogPath"
 # Footer
 $footer = New-Object System.Windows.Forms.Label
 $footer.Text = "GAMING CAFE  |  WINDOWS TOOLKIT  |  LOG: %TEMP%\CafeLauncher.log"
-$footer.Location = New-Object System.Drawing.Point(28,780)
+$footer.Location = New-Object System.Drawing.Point(28,878)
 $footer.Size = New-Object System.Drawing.Size(740,22)
 $footer.Font = New-Object System.Drawing.Font("Segoe UI",8)
 $footer.ForeColor = $MUTED
