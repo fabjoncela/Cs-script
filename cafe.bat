@@ -372,7 +372,7 @@ public static class FabDisplayNative {
         }
     }
 
-    public static bool TrySetDisplay1To1080p360(out string report) {
+    public static bool TrySetDisplayMode(int desiredWidth, int desiredHeight, int desiredHz, out string report) {
         const string device = @"\\.\DISPLAY1";
         DEVMODE candidate = NewMode();
         bool found = false;
@@ -381,8 +381,8 @@ public static class FabDisplayNative {
             DEVMODE dm = NewMode();
             if (!EnumDisplaySettings(device, i, ref dm)) break;
             count++;
-            if (dm.dmPelsWidth == 1920 && dm.dmPelsHeight == 1080 &&
-                dm.dmDisplayFrequency == 360 && dm.dmBitsPerPel >= 24) {
+            if (dm.dmPelsWidth == desiredWidth && dm.dmPelsHeight == desiredHeight &&
+                dm.dmDisplayFrequency == desiredHz && dm.dmBitsPerPel >= 24) {
                 candidate = dm;
                 found = true;
                 if (dm.dmBitsPerPel >= 32) break;
@@ -397,7 +397,7 @@ public static class FabDisplayNative {
                     " @" + current.dmDisplayFrequency + "Hz";
             }
             report = device + " current=" + currentText +
-                ". Windows did not advertise 1920x1080 @ 360Hz (modes checked: " +
+                ". Windows did not advertise " + desiredWidth + "x" + desiredHeight + " @" + desiredHz + "Hz (modes checked: " +
                 count + "). No display mode was changed.";
             return false;
         }
@@ -418,12 +418,16 @@ public static class FabDisplayNative {
         if (EnumDisplaySettings(device, -1, ref after)) {
             report = device + " now reports " + after.dmPelsWidth + "x" + after.dmPelsHeight +
                 " @" + after.dmDisplayFrequency + "Hz, " + after.dmBitsPerPel +
-                " bpp (requested 1920x1080 @ 360Hz).";
-            return after.dmPelsWidth == 1920 && after.dmPelsHeight == 1080 &&
-                after.dmDisplayFrequency == 360;
+                " bpp (requested " + desiredWidth + "x" + desiredHeight + " @" + desiredHz + "Hz).";
+            return after.dmPelsWidth == desiredWidth && after.dmPelsHeight == desiredHeight &&
+                after.dmDisplayFrequency == desiredHz;
         }
         report = "Windows accepted display mode, but current mode could not be read back.";
         return true;
+    }
+
+    public static bool TrySetDisplay1To1080p360(out string report) {
+        return TrySetDisplayMode(1920, 1080, 360, out report);
     }
 }
 "@
@@ -631,7 +635,8 @@ public static class FabNvApi {
         }
     }
 
-    public static bool TrySetDigitalVibrance75(out string report) {
+    public static bool TrySetDigitalVibrance(int percentage, out string report) {
+        if (percentage < 0 || percentage > 100) { report = "Invalid vibrance percentage"; return false; }
         NvApiUnload unload = null;
         bool initialized = false;
         try {
@@ -649,7 +654,7 @@ public static class FabNvApi {
             if (info.maxLevel <= info.minLevel) throw new Exception("NVIDIA returned an invalid Digital Vibrance range.");
 
             // Map UI 75% onto the exact range advertised by the driver.
-            int requested = info.minLevel + (int)Math.Round((info.maxLevel - info.minLevel) * 0.75);
+            int requested = info.minLevel + (int)Math.Round((info.maxLevel - info.minLevel) * (percentage / 100.0));
             int setStatus = setLevel(handle, 0, requested);
             if (setStatus != 0) throw new Exception("NvAPI_SetDVCLevel failed with status " + setStatus + ".");
 
@@ -660,7 +665,7 @@ public static class FabNvApi {
             if (verify.currentLevel != requested)
                 throw new Exception("NVIDIA accepted the Digital Vibrance request but reports " + verify.currentLevel + " (requested " + requested + ").");
 
-            report = "Digital Vibrance set and verified at 75%: driver level " + verify.currentLevel +
+            report = "Digital Vibrance set and verified at " + percentage + "%: driver level " + verify.currentLevel +
                 " (range " + verify.minLevel + "-" + verify.maxLevel + ") for the NVIDIA display associated with DISPLAY1.";
             return true;
         } catch (Exception ex) {
@@ -669,6 +674,10 @@ public static class FabNvApi {
         } finally {
             if (initialized && unload != null) { try { unload(); } catch {} }
         }
+    }
+
+    public static bool TrySetDigitalVibrance75(out string report) {
+        return TrySetDigitalVibrance(75, out report);
     }
 
     private static IntPtr AllocZeroed(List<IntPtr> allocations, int bytes) {
@@ -1122,13 +1131,19 @@ function Start-ColorWatch {
 }
 
 function Apply-NvidiaGamingSettings {
-    Write-Log "NVIDIA gaming-settings apply started."
+    param(
+        [ValidateRange(640,7680)][int]$Width = 1920,
+        [ValidateRange(480,4320)][int]$Height = 1080,
+        [ValidateRange(30,600)][int]$RefreshHz = 360,
+        [ValidateRange(0,100)][int]$Vibrance = 75
+    )
+    Write-Log "NVIDIA gaming-settings apply started (requested: ${Width}x${Height} @${RefreshHz}Hz, vibrance ${Vibrance}%)."
 
-    Write-Log "Attempting Windows display 1: 1920x1080 at 360 Hz."
+    Write-Log "Attempting Windows display 1: ${Width}x${Height} at $RefreshHz Hz."
     if ("FabDisplayNative" -as [type]) {
         try {
             $displayReport = ""
-            $displayOk = [FabDisplayNative]::TrySetDisplay1To1080p360([ref]$displayReport)
+            $displayOk = [FabDisplayNative]::TrySetDisplayMode($Width, $Height, $RefreshHz, [ref]$displayReport)
             if ($displayOk) {
                 Write-Log $displayReport
             } else {
@@ -1144,7 +1159,7 @@ function Apply-NvidiaGamingSettings {
     if ("FabNvApi" -as [type]) {
         try {
             $vibranceReport = ""
-            $vibranceOk = [FabNvApi]::TrySetDigitalVibrance75([ref]$vibranceReport)
+            $vibranceOk = [FabNvApi]::TrySetDigitalVibrance($Vibrance, [ref]$vibranceReport)
             if ($vibranceOk) {
                 Write-Log $vibranceReport
             } else {
@@ -1375,68 +1390,96 @@ function Find-CS2ConfigFolder {
     return $selected
 }
 
+function Assert-ConfigUrl {
+    param([string]$Url)
+    $uri = $null
+    if (-not [Uri]::TryCreate($Url, [UriKind]::Absolute, [ref]$uri) -or
+        $uri.Scheme -ne 'https' -or $Url.Length -gt 2048 -or
+        $uri.Host -ne 'raw.githubusercontent.com' -or
+        $uri.AbsolutePath -notmatch '^/[^/]+/[^/]+/[^/]+/(?:[^/]+/)*[A-Za-z0-9_-]+\.cfg$') {
+        throw 'Config URL must be a direct HTTPS raw.githubusercontent.com link ending in .cfg.'
+    }
+}
+
 function Get-AtCfgSource {
-    param([string]$CfgName = 'at.cfg', [string]$DownloadUrl = '')
+    param([string]$CfgName = 'at.cfg', [string]$DownloadUrl = '', [switch]$CloudPreferred)
     $launcherDir = Split-Path -Parent $env:CAFE_SCRIPT
     $localCfg = Join-Path $launcherDir $CfgName
+
+    # Friend profiles: always attempt their GitHub config first, even if a local copy exists.
+    if ($CloudPreferred -and -not [string]::IsNullOrWhiteSpace($DownloadUrl)) {
+        Assert-ConfigUrl $DownloadUrl
+        return [pscustomobject]@{ Type='Url'; Value=$DownloadUrl; RememberUrl=$false }
+    }
     if (Test-Path -LiteralPath $localCfg -PathType Leaf) {
         Write-Log "Found $CfgName next to launcher: $localCfg"
         return [pscustomobject]@{ Type='File'; Value=$localCfg; RememberUrl=$false }
     }
-
-    # For friends, use an external at.cfg next to the BAT as their starter
-    # if a friend-specific file is not present and no custom URL was supplied.
-    if ($CfgName -ne 'at.cfg' -and [string]::IsNullOrWhiteSpace($DownloadUrl)) {
-        $fabTemplate = Join-Path $launcherDir 'at.cfg'
-        if (Test-Path -LiteralPath $fabTemplate -PathType Leaf) {
-            Write-Log "Using local at.cfg as starter contents for $CfgName."
-            return [pscustomobject]@{ Type='File'; Value=$fabTemplate; RememberUrl=$false }
+    if ($CfgName -ne 'at.cfg') {
+        # Never silently install FabMode's at.cfg into a friend's profile.
+        $cached = Join-Path $env:LOCALAPPDATA ("CafeLauncher\cfg-cache\$CfgName")
+        if (Test-Path -LiteralPath $cached -PathType Leaf) {
+            Write-Log "Using previously cached $CfgName (cloud source not configured)." 'WARN'
+            return [pscustomobject]@{ Type='File'; Value=$cached; RememberUrl=$false }
         }
+        if (-not [string]::IsNullOrWhiteSpace($DownloadUrl)) {
+            Assert-ConfigUrl $DownloadUrl
+            return [pscustomobject]@{ Type='Url'; Value=$DownloadUrl; RememberUrl=$false }
+        }
+        Write-Log "No source available for $CfgName. Upload its GitHub CFG or put $CfgName beside the launcher." 'WARN'
+        return $null
     }
 
-    # Use the portable, bundled source when no explicit URL is configured.
-    # This avoids prompting during profile application.
     if ([string]::IsNullOrWhiteSpace($DownloadUrl) -and
         -not [string]::IsNullOrWhiteSpace($script:EmbeddedAtCfgBase64)) {
-        Write-Log "Using bundled at.cfg as starter contents for $CfgName (offline)."
+        Write-Log 'Using bundled at.cfg (FabMode offline default).'
         return [pscustomobject]@{ Type='Embedded'; Value='bundled at.cfg'; RememberUrl=$false }
     }
 
-    $storedUrlFile = Join-Path $env:LOCALAPPDATA ('CafeLauncher\{0}_cfg_url.txt' -f [IO.Path]::GetFileNameWithoutExtension($CfgName))
     $url = $DownloadUrl
     $remember = $false
-    if ([string]::IsNullOrWhiteSpace($url) -and (Test-Path -LiteralPath $storedUrlFile -PathType Leaf)) {
-        try { $url = (Get-Content -LiteralPath $storedUrlFile -Raw -ErrorAction Stop).Trim() } catch {}
+    if ([string]::IsNullOrWhiteSpace($url)) {
+        $storedUrlFile = Join-Path $env:LOCALAPPDATA 'CafeLauncher\at_cfg_url.txt'
+        if (Test-Path -LiteralPath $storedUrlFile -PathType Leaf) {
+            try { $url = (Get-Content -LiteralPath $storedUrlFile -Raw -ErrorAction Stop).Trim() } catch {}
+        }
     }
     if ([string]::IsNullOrWhiteSpace($url)) {
         Add-Type -AssemblyName Microsoft.VisualBasic
         $url = [Microsoft.VisualBasic.Interaction]::InputBox(
-            "Paste the DIRECT HTTPS download link to your $CfgName file.`n`nLeave blank to browse for a local $CfgName instead.`nThe link will be saved after a successful installation on this PC.",
-            "Install CS2 $CfgName", ''
+            "Paste a DIRECT raw.githubusercontent.com HTTPS link for at.cfg.`nLeave blank to browse for a local file.",
+            'Install CS2 at.cfg', ''
         ).Trim()
         if ([string]::IsNullOrWhiteSpace($url)) {
             $picker = New-Object System.Windows.Forms.OpenFileDialog
-            $picker.Title = "Select the $CfgName file to install"
-            $picker.Filter = "CS2 config ($CfgName)|$CfgName|CFG files (*.cfg)|*.cfg"
-            $picker.CheckFileExists = $true
+            $picker.Title = 'Select at.cfg to install'
+            $picker.Filter = 'CS2 CFG files (*.cfg)|*.cfg'
             if ($picker.ShowDialog() -ne [System.Windows.Forms.DialogResult]::OK) { return $null }
             return [pscustomobject]@{ Type='File'; Value=$picker.FileName; RememberUrl=$false }
         }
         $remember = $true
     }
-
-    $uri = $null
-    if (-not [Uri]::TryCreate($url, [UriKind]::Absolute, [ref]$uri) -or $uri.Scheme -ne 'https') {
-        throw "The config download URL must be a full HTTPS link directly to $CfgName (not a GitHub webpage)."
-    }
+    Assert-ConfigUrl $url
     return [pscustomobject]@{ Type='Url'; Value=$url; RememberUrl=$remember }
+}
+
+function Get-FriendConfigFallback {
+    param([string]$CfgName, [string]$CfgDirectory)
+    $launcherDir = Split-Path -Parent $env:CAFE_SCRIPT
+    $cache = Join-Path $env:LOCALAPPDATA ("CafeLauncher\cfg-cache\$CfgName")
+    foreach ($candidate in @($cache, (Join-Path $launcherDir $CfgName), (Join-Path $CfgDirectory $CfgName))) {
+        if (Test-Path -LiteralPath $candidate -PathType Leaf) { return $candidate }
+    }
+    return $null
 }
 
 function Install-AtCfg {
     param(
         [switch]$Silent,
         [string]$CfgName = 'at.cfg',
-        [string]$DownloadUrl = ''
+        [string]$DownloadUrl = '',
+        [switch]$CloudPreferred,
+        [string]$CS2Sensitivity = ''
     )
     if ($CfgName -notmatch '^[A-Za-z0-9_-]+\.cfg$') {
         Write-Log "Unsafe config filename rejected: $CfgName" 'ERROR'
@@ -1444,9 +1487,11 @@ function Install-AtCfg {
     }
     $downloaded = $null
     $staged = $null
+    $configured = $null
+    $cloudDownloaded = $false
     try {
         Write-Log "CS2 config installation started: $CfgName."
-        $source = Get-AtCfgSource -CfgName $CfgName -DownloadUrl $DownloadUrl
+        $source = Get-AtCfgSource -CfgName $CfgName -DownloadUrl $DownloadUrl -CloudPreferred:$CloudPreferred
         if (-not $source) {
             Write-Log "CS2 $CfgName installation cancelled; no file or URL selected." 'WARN'
             return
@@ -1468,8 +1513,20 @@ function Install-AtCfg {
             Write-Log "Downloading $CfgName from $($source.Value)"
             # Windows PowerShell 5.1 uses TLS 1.2 when supported by the system.
             [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
-            Invoke-WebRequest -Uri $source.Value -OutFile $downloaded -UseBasicParsing -TimeoutSec 30 -MaximumRedirection 5 -ErrorAction Stop
-            $sourcePath = $downloaded
+            try {
+                Invoke-WebRequest -Uri $source.Value -OutFile $downloaded -UseBasicParsing -TimeoutSec 15 -MaximumRedirection 5 -ErrorAction Stop
+                $sourcePath = $downloaded
+                $cloudDownloaded = [bool]$CloudPreferred
+            } catch {
+                if (-not $CloudPreferred) { throw }
+                Write-Log "Could not download latest ${CfgName}: $($_.Exception.Message)" 'WARN'
+                $sourcePath = Get-FriendConfigFallback -CfgName $CfgName -CfgDirectory $cfgDirectory
+                if (-not $sourcePath) {
+                    throw "GitHub download unavailable and no cached/local $CfgName exists. Skipping this config; other profile steps can continue."
+                }
+                Write-Log "Using offline fallback for ${CfgName}: $sourcePath" 'WARN'
+                $source = [pscustomobject]@{ Type='File'; Value=$sourcePath; RememberUrl=$false }
+            }
         } else {
             $sourcePath = $source.Value
         }
@@ -1487,13 +1544,37 @@ function Install-AtCfg {
             throw 'The source contains NUL bytes and does not appear to be a plain-text CFG.'
         }
 
+        # Apply optional per-profile sensitivity to a TEMP copy, never overwrite the GitHub source.
+        # Blank = use sensitivity already defined by the friend CFG.
+        if (-not [string]::IsNullOrWhiteSpace($CS2Sensitivity)) {
+            $parsedSens = 0.0
+            if (-not [double]::TryParse($CS2Sensitivity, [Globalization.NumberStyles]::Float,
+                    [Globalization.CultureInfo]::InvariantCulture, [ref]$parsedSens) -or
+                [double]::IsNaN($parsedSens) -or $parsedSens -le 0 -or $parsedSens -gt 20) {
+                throw 'CS2 sensitivity must be blank or a number greater than 0 and at most 20.'
+            }
+            $sensText = $parsedSens.ToString('0.####', [Globalization.CultureInfo]::InvariantCulture)
+            $cfgText = [IO.File]::ReadAllText($sourcePath)
+            $cfgText = [Regex]::Replace($cfgText,
+                '(?m)^[ \t]*// CafeLauncher sensitivity override[ \t]*\r?\n[ \t]*sensitivity\s+"[0-9.]+"[ \t]*\r?\n?', '')
+            $configured = Join-Path $env:TEMP ("CafeLauncher-configured-{0}.cfg" -f [Guid]::NewGuid().ToString('N'))
+            [IO.File]::WriteAllText($configured, ($cfgText.TrimEnd() + "`r`n// CafeLauncher sensitivity override`r`nsensitivity `"$sensText`"`r`n"),
+                (New-Object System.Text.UTF8Encoding($false)))
+            $sourcePath = $configured
+            Write-Log "$CfgName sensitivity override prepared: $sensText."
+        }
+
         $dest = Join-Path $cfgDirectory $CfgName
-        if ([string]::Equals([IO.Path]::GetFullPath($sourcePath), [IO.Path]::GetFullPath($dest), [StringComparison]::OrdinalIgnoreCase)) {
-            Write-Log "$CfgName is already in the correct location: $dest"
+        $expected = (Get-FileHash -LiteralPath $sourcePath -Algorithm SHA256 -ErrorAction Stop).Hash
+        $previousHash = if (Test-Path -LiteralPath $dest -PathType Leaf) {
+            (Get-FileHash -LiteralPath $dest -Algorithm SHA256 -ErrorAction Stop).Hash
+        } else { $null }
+        if ($previousHash -eq $expected) {
+            Write-Log "$CfgName already matches the latest source (no replacement/backup needed)."
         } else {
             $staged = Join-Path $cfgDirectory ("{0}.cafe-{1}.tmp" -f $CfgName, [Guid]::NewGuid().ToString('N'))
             Copy-Item -LiteralPath $sourcePath -Destination $staged -ErrorAction Stop
-            if (Test-Path -LiteralPath $dest -PathType Leaf) {
+            if ($previousHash) {
                 $stamp = Get-Date -Format 'yyyyMMdd-HHmmss-fff'
                 $backup = Join-Path $cfgDirectory ("{0}.backup-{1}" -f $CfgName, $stamp)
                 Copy-Item -LiteralPath $dest -Destination $backup -ErrorAction Stop
@@ -1501,10 +1582,19 @@ function Install-AtCfg {
             }
             Copy-Item -LiteralPath $staged -Destination $dest -Force -ErrorAction Stop
         }
-
-        $expected = (Get-FileHash -LiteralPath $sourcePath -Algorithm SHA256 -ErrorAction Stop).Hash
         $actual = (Get-FileHash -LiteralPath $dest -Algorithm SHA256 -ErrorAction Stop).Hash
         if ($expected -ne $actual) { throw 'SHA-256 verification failed: installed file does not match the source.' }
+
+        if ($cloudDownloaded -and $downloaded -and (Test-Path -LiteralPath $downloaded -PathType Leaf)) {
+            try {
+                $cacheDir = Join-Path $env:LOCALAPPDATA 'CafeLauncher\cfg-cache'
+                if (-not (Test-Path -LiteralPath $cacheDir)) { New-Item -ItemType Directory -Path $cacheDir -Force -ErrorAction Stop | Out-Null }
+                Copy-Item -LiteralPath $downloaded -Destination (Join-Path $cacheDir $CfgName) -Force -ErrorAction Stop
+                Write-Log "Latest GitHub $CfgName cached for offline use."
+            } catch {
+                Write-Log "Could not update offline CFG cache: $($_.Exception.Message)" 'WARN'
+            }
+        }
 
         if ($source.Type -eq 'Url' -and $source.RememberUrl) {
             try {
@@ -1538,7 +1628,7 @@ function Install-AtCfg {
             ) | Out-Null
         }
     } finally {
-        foreach ($temporary in @($downloaded, $staged)) {
+        foreach ($temporary in @($downloaded, $staged, $configured)) {
             if ($temporary -and (Test-Path -LiteralPath $temporary -PathType Leaf)) {
                 try { Remove-Item -LiteralPath $temporary -Force -ErrorAction Stop } catch {}
             }
@@ -1565,37 +1655,257 @@ function Launch-All {
 }
 
 # ==============================================================
-# PROFILE SETTINGS - EDIT ONLY THIS SECTION FOR FRIENDS' SETTINGS
+# PROFILE DEFAULTS - EDIT IN GUI (saved to %LOCALAPPDATA%\CafeLauncher\profiles.json)
+# The four friend configs load directly from your GitHub MAIN branch.
+# Local editor changes are per-PC. To share them, copy profiles.json to other PCs.
 # ==============================================================
-# All five modes start with FabMode's existing configuration.
-# For custom CS2 settings, put arli.cfg, brile.cfg, arml.cfg or oli.cfg
-# beside this BAT.  Otherwise the embedded at.cfg is used as starter
-# content, but saved under the friend's OWN filename in the CS2 cfg folder.
-# The bundled FabMode file remains at.cfg and is not overwritten by friends.
-# You can also set an individual HTTPS CfgDownloadUrl later.
-# PointerSpeed=10 means Windows 6/11; DisableAcceleration=true disables EPP.
-# ApplyNvidia and LaunchApps can be turned off independently for each mode.
 $script:GamingProfiles = [ordered]@{
     FabMode = @{
-        PointerSpeed = 10; DisableAcceleration = $true
-        ApplyNvidia = $true; ConfigFile = 'at.cfg'; CfgDownloadUrl = ''; LaunchApps = $true
+        PointerSpeed=10; DisableAcceleration=$true; ApplyNvidia=$true
+        Width=1920; Height=1080; RefreshHz=360; Vibrance=75
+        CS2Sensitivity=''; ConfigFile='at.cfg'; CfgDownloadUrl=''; LaunchApps=$true
     }
     ArliMode = @{
-        PointerSpeed = 10; DisableAcceleration = $true
-        ApplyNvidia = $true; ConfigFile = 'arli.cfg'; CfgDownloadUrl = ''; LaunchApps = $true
+        PointerSpeed=10; DisableAcceleration=$true; ApplyNvidia=$true
+        Width=1920; Height=1080; RefreshHz=360; Vibrance=75
+        CS2Sensitivity=''; ConfigFile='arli.cfg'; CfgDownloadUrl='https://raw.githubusercontent.com/fabjoncela/Cs-script/main/arli.cfg'; LaunchApps=$true
     }
     BrileMode = @{
-        PointerSpeed = 10; DisableAcceleration = $true
-        ApplyNvidia = $true; ConfigFile = 'brile.cfg'; CfgDownloadUrl = ''; LaunchApps = $true
+        PointerSpeed=10; DisableAcceleration=$true; ApplyNvidia=$true
+        Width=1920; Height=1080; RefreshHz=360; Vibrance=75
+        CS2Sensitivity=''; ConfigFile='brile.cfg'; CfgDownloadUrl='https://raw.githubusercontent.com/fabjoncela/Cs-script/main/brile.cfg'; LaunchApps=$true
     }
     ArmlMode = @{
-        PointerSpeed = 10; DisableAcceleration = $true
-        ApplyNvidia = $true; ConfigFile = 'arml.cfg'; CfgDownloadUrl = ''; LaunchApps = $true
+        PointerSpeed=10; DisableAcceleration=$true; ApplyNvidia=$true
+        Width=1920; Height=1080; RefreshHz=360; Vibrance=75
+        CS2Sensitivity=''; ConfigFile='arml.cfg'; CfgDownloadUrl='https://raw.githubusercontent.com/fabjoncela/Cs-script/main/arml.cfg'; LaunchApps=$true
     }
     OliMode = @{
-        PointerSpeed = 10; DisableAcceleration = $true
-        ApplyNvidia = $true; ConfigFile = 'oli.cfg'; CfgDownloadUrl = ''; LaunchApps = $true
+        PointerSpeed=10; DisableAcceleration=$true; ApplyNvidia=$true
+        Width=1920; Height=1080; RefreshHz=360; Vibrance=75
+        CS2Sensitivity=''; ConfigFile='oli.cfg'; CfgDownloadUrl='https://raw.githubusercontent.com/fabjoncela/Cs-script/main/oli.cfg'; LaunchApps=$true
     }
+}
+$script:ProfileSettingsPath = Join-Path $env:LOCALAPPDATA 'CafeLauncher\profiles.json'
+
+function Load-ProfileSettings {
+    if (-not (Test-Path -LiteralPath $script:ProfileSettingsPath -PathType Leaf)) { return }
+    try {
+        $settings = Get-Content -LiteralPath $script:ProfileSettingsPath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+        foreach ($name in @($script:GamingProfiles.Keys)) {
+            $savedProfile = $settings.PSObject.Properties[$name]
+            if (-not $savedProfile -or -not $savedProfile.Value) { continue }
+            foreach ($setting in @('PointerSpeed','DisableAcceleration','ApplyNvidia','Width','Height','RefreshHz','Vibrance','CS2Sensitivity','CfgDownloadUrl','LaunchApps')) {
+                $saved = $savedProfile.Value.PSObject.Properties[$setting]
+                if (-not $saved) { continue }
+                $value = $saved.Value
+                try {
+                    switch ($setting) {
+                        'PointerSpeed' { $value=[int]$value; if ($value -lt 1 -or $value -gt 20) { throw 'range' } }
+                        'Width'        { $value=[int]$value; if ($value -lt 640 -or $value -gt 7680) { throw 'range' } }
+                        'Height'       { $value=[int]$value; if ($value -lt 480 -or $value -gt 4320) { throw 'range' } }
+                        'RefreshHz'    { $value=[int]$value; if ($value -lt 30 -or $value -gt 600) { throw 'range' } }
+                        'Vibrance'     { $value=[int]$value; if ($value -lt 0 -or $value -gt 100) { throw 'range' } }
+                        'CS2Sensitivity' {
+                            $value=[string]$value
+                            if ($value -and $value -notmatch '^(?:[0-9]+(?:\.[0-9]+)?)$') { throw 'invalid sensitivity' }
+                            if ($value -and ([double]::Parse($value,[Globalization.CultureInfo]::InvariantCulture) -le 0 -or [double]::Parse($value,[Globalization.CultureInfo]::InvariantCulture) -gt 20)) { throw 'range' }
+                        }
+                        'CfgDownloadUrl' { $value=[string]$value; if ($value) { Assert-ConfigUrl $value } }
+                        default {
+                            if ($setting -in @('DisableAcceleration','ApplyNvidia','LaunchApps')) {
+                                if ($value -isnot [bool]) { throw 'boolean expected' }
+                            }
+                        }
+                    }
+                    $script:GamingProfiles[$name][$setting] = $value
+                } catch { Write-Log "Ignored invalid saved $name/$setting value." 'WARN' }
+            }
+        }
+        Write-Log "Loaded profile settings from $script:ProfileSettingsPath."
+    } catch {
+        Write-Log "Profile settings JSON could not be read; using defaults: $($_.Exception.Message)" 'WARN'
+    }
+}
+
+function Save-ProfileSettings {
+    $settings = [ordered]@{}
+    foreach ($name in @($script:GamingProfiles.Keys)) {
+        $p = $script:GamingProfiles[$name]
+        $settings[$name] = [ordered]@{
+            PointerSpeed=[int]$p.PointerSpeed; DisableAcceleration=[bool]$p.DisableAcceleration
+            ApplyNvidia=[bool]$p.ApplyNvidia; Width=[int]$p.Width; Height=[int]$p.Height
+            RefreshHz=[int]$p.RefreshHz; Vibrance=[int]$p.Vibrance
+            CS2Sensitivity=[string]$p.CS2Sensitivity; CfgDownloadUrl=[string]$p.CfgDownloadUrl
+            LaunchApps=[bool]$p.LaunchApps
+        }
+    }
+    $dir = Split-Path -Parent $script:ProfileSettingsPath
+    if (-not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Path $dir -Force -ErrorAction Stop | Out-Null }
+    $tmp = Join-Path $dir ("profiles-{0}.tmp" -f [Guid]::NewGuid().ToString('N'))
+    try {
+        [IO.File]::WriteAllText($tmp, ($settings | ConvertTo-Json -Depth 5), (New-Object System.Text.UTF8Encoding($false)))
+        Move-Item -LiteralPath $tmp -Destination $script:ProfileSettingsPath -Force -ErrorAction Stop
+    } finally {
+        if (Test-Path -LiteralPath $tmp) { Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue }
+    }
+    Write-Log "Profile settings saved: $script:ProfileSettingsPath"
+}
+
+Load-ProfileSettings
+
+function New-EditorLabel {
+    param($Window, [string]$Caption, [int]$X, [int]$Y, [int]$Width=200)
+    $label = New-Object System.Windows.Forms.Label
+    $label.Text=$Caption
+    $label.ForeColor=$script:EditorTextColor
+    $label.Location=New-Object System.Drawing.Point($X,$Y)
+    $label.Size=New-Object System.Drawing.Size($Width,23)
+    $Window.Controls.Add($label)
+    return $label
+}
+
+function New-EditorNumber {
+    param($Window, [int]$X, [int]$Y, [int]$Min, [int]$Max, [int]$Value, [int]$Width=180)
+    $n = New-Object System.Windows.Forms.NumericUpDown
+    $n.Location=New-Object System.Drawing.Point($X,$Y)
+    $n.Size=New-Object System.Drawing.Size($Width,28)
+    $n.Minimum=[decimal]$Min
+    $n.Maximum=[decimal]$Max
+    $n.Value=[decimal]$Value
+    $Window.Controls.Add($n)
+    return $n
+}
+
+function Show-ProfileEditor {
+    param([Parameter(Mandatory=$true)][string]$ProfileName)
+    $p = $script:GamingProfiles[$ProfileName]
+    if (-not $p) { throw "Unknown profile: $ProfileName" }
+
+    $dialog = New-Object System.Windows.Forms.Form
+    $dialog.Text = "Edit $ProfileName"
+    $dialog.ClientSize = New-Object System.Drawing.Size(590,645)
+    $dialog.StartPosition = 'CenterParent'
+    $dialog.FormBorderStyle = 'FixedDialog'
+    $dialog.MaximizeBox = $false
+    $dialog.MinimizeBox = $false
+    $dialog.ShowInTaskbar = $false
+    $dialog.BackColor = $PANEL
+    $dialog.ForeColor = $WHITE
+    $dialog.Font = New-Object System.Drawing.Font('Segoe UI',10)
+    $script:EditorTextColor = $WHITE
+
+    New-EditorLabel $dialog 'Windows pointer speed (1-20)' 20 18 260 | Out-Null
+    $pointer = New-EditorNumber $dialog 20 42 1 20 ([int]$p.PointerSpeed) 245
+    New-EditorLabel $dialog 'NVIDIA Digital Vibrance (%)' 305 18 260 | Out-Null
+    $vibrance = New-EditorNumber $dialog 305 42 0 100 ([int]$p.Vibrance) 245
+
+    $accel = New-Object System.Windows.Forms.CheckBox
+    $accel.Text='Enable Windows mouse acceleration (EPP)'
+    $accel.Checked = -not [bool]$p.DisableAcceleration
+    $accel.Location=New-Object System.Drawing.Point(20,83)
+    $accel.Size=New-Object System.Drawing.Size(500,27)
+    $dialog.Controls.Add($accel)
+
+    New-EditorLabel $dialog 'Resolution width' 20 122 210 | Out-Null
+    New-EditorLabel $dialog 'Resolution height' 205 122 210 | Out-Null
+    New-EditorLabel $dialog 'Refresh rate (Hz)' 390 122 190 | Out-Null
+    $width = New-EditorNumber $dialog 20 147 640 7680 ([int]$p.Width) 165
+    $height = New-EditorNumber $dialog 205 147 480 4320 ([int]$p.Height) 165
+    $hz = New-EditorNumber $dialog 390 147 30 600 ([int]$p.RefreshHz) 160
+
+    New-EditorLabel $dialog 'CS2 sensitivity (blank = value from .cfg)' 20 196 530 | Out-Null
+    $sens = New-Object System.Windows.Forms.TextBox
+    $sens.Text=[string]$p.CS2Sensitivity
+    $sens.Location=New-Object System.Drawing.Point(20,222)
+    $sens.Size=New-Object System.Drawing.Size(530,29)
+    $dialog.Controls.Add($sens)
+
+    New-EditorLabel $dialog 'CS2 config filename (fixed for each profile)' 20 276 530 | Out-Null
+    $cfgFile = New-Object System.Windows.Forms.TextBox
+    $cfgFile.Text=[string]$p.ConfigFile
+    $cfgFile.ReadOnly=$true
+    $cfgFile.Location=New-Object System.Drawing.Point(20,300)
+    $cfgFile.Size=New-Object System.Drawing.Size(530,29)
+    $dialog.Controls.Add($cfgFile)
+
+    New-EditorLabel $dialog 'Direct GitHub RAW URL (blank = local file only)' 20 355 540 | Out-Null
+    $url = New-Object System.Windows.Forms.TextBox
+    $url.Text=[string]$p.CfgDownloadUrl
+    $url.Location=New-Object System.Drawing.Point(20,380)
+    $url.Size=New-Object System.Drawing.Size(530,28)
+    $dialog.Controls.Add($url)
+
+    $nv = New-Object System.Windows.Forms.CheckBox
+    $nv.Text='Apply NVIDIA settings (including resolution + vibrance)'
+    $nv.Checked=[bool]$p.ApplyNvidia
+    $nv.Location=New-Object System.Drawing.Point(20,430)
+    $nv.Size=New-Object System.Drawing.Size(550,26)
+    $dialog.Controls.Add($nv)
+
+    $apps = New-Object System.Windows.Forms.CheckBox
+    $apps.Text='Launch Steam, FACEIT, Spotify, G HUB, Mouse Options'
+    $apps.Checked=[bool]$p.LaunchApps
+    $apps.Location=New-Object System.Drawing.Point(20,461)
+    $apps.Size=New-Object System.Drawing.Size(550,26)
+    $dialog.Controls.Add($apps)
+
+    $tip = New-EditorLabel $dialog 'Saving here changes THIS Windows PC only; GitHub .cfg files update separately.' 20 507 550
+    $tip.ForeColor=$MUTED
+    $tip.Font=New-Object System.Drawing.Font('Segoe UI',8)
+    $tip.Size=New-Object System.Drawing.Size(550,37)
+
+    $save = New-Object System.Windows.Forms.Button
+    $save.Text='Save Profile'
+    $save.Location=New-Object System.Drawing.Point(290,568)
+    $save.Size=New-Object System.Drawing.Size(130,36)
+    $save.BackColor=$BLUE
+    $save.ForeColor=$WHITE
+    $save.FlatStyle='Flat'
+    $dialog.Controls.Add($save)
+
+    $cancel = New-Object System.Windows.Forms.Button
+    $cancel.Text='Cancel'
+    $cancel.Location=New-Object System.Drawing.Point(430,568)
+    $cancel.Size=New-Object System.Drawing.Size(120,36)
+    $cancel.DialogResult=[System.Windows.Forms.DialogResult]::Cancel
+    $dialog.Controls.Add($cancel)
+    $dialog.CancelButton=$cancel
+
+    $save.Add_Click({
+        try {
+            $sensValue=$sens.Text.Trim()
+            if ($sensValue) {
+                $number=0.0
+                if (-not [double]::TryParse($sensValue,[Globalization.NumberStyles]::Float,[Globalization.CultureInfo]::InvariantCulture,[ref]$number) -or
+                    [double]::IsNaN($number) -or $number -le 0 -or $number -gt 20) {
+                    throw 'Sensitivity must be blank or between 0 and 20, using a decimal point (e.g. 1.2).'
+                }
+                $sensValue=$number.ToString('0.####',[Globalization.CultureInfo]::InvariantCulture)
+            }
+            $cfgUrl=$url.Text.Trim()
+            if ($cfgUrl) { Assert-ConfigUrl $cfgUrl }
+            $p.PointerSpeed=[int]$pointer.Value
+            $p.DisableAcceleration= -not $accel.Checked
+            $p.Width=[int]$width.Value
+            $p.Height=[int]$height.Value
+            $p.RefreshHz=[int]$hz.Value
+            $p.Vibrance=[int]$vibrance.Value
+            $p.ApplyNvidia=$nv.Checked
+            $p.LaunchApps=$apps.Checked
+            $p.CS2Sensitivity=$sensValue
+            $p.CfgDownloadUrl=$cfgUrl
+            Save-ProfileSettings
+            Write-Log "$ProfileName edited: pointer=$($p.PointerSpeed), acceleration enabled=$(-not $p.DisableAcceleration), display=$($p.Width)x$($p.Height)@$($p.RefreshHz), vibrance=$($p.Vibrance)%, sensitivity=$sensValue."
+            $dialog.DialogResult=[System.Windows.Forms.DialogResult]::OK
+            $dialog.Close()
+        } catch {
+            [System.Windows.Forms.MessageBox]::Show("Could not save ${ProfileName}:`n$($_.Exception.Message)", 'Profile Editor', 'OK', 'Error') | Out-Null
+        }
+    }.GetNewClosure())
+
+    [void]$dialog.ShowDialog($form)
+    $dialog.Dispose()
 }
 
 function Invoke-GamingProfile {
@@ -1613,7 +1923,7 @@ function Invoke-GamingProfile {
         } }
     )
     if ($profile.ApplyNvidia) {
-        $steps += @{ Name = 'NVIDIA settings'; Action = { Apply-NvidiaGamingSettings } }
+        $steps += @{ Name = 'NVIDIA settings'; Action = { Apply-NvidiaGamingSettings -Width ([int]$profile.Width) -Height ([int]$profile.Height) -RefreshHz ([int]$profile.RefreshHz) -Vibrance ([int]$profile.Vibrance) } }
     }
     $profileCfgName = [string]$profile.ConfigFile
     if (-not [string]::IsNullOrWhiteSpace($profileCfgName)) {
@@ -1622,7 +1932,7 @@ function Invoke-GamingProfile {
             $profileCfgUrl = $script:AtCfgDownloadUrl
         }
         $steps += @{ Name = "Install CS2 $profileCfgName"; Action = {
-            Install-AtCfg -Silent -CfgName $profileCfgName -DownloadUrl $profileCfgUrl
+            Install-AtCfg -Silent -CfgName $profileCfgName -DownloadUrl $profileCfgUrl -CloudPreferred:($ProfileName -ne 'FabMode') -CS2Sensitivity ([string]$profile.CS2Sensitivity)
         } }
     }
     if ($profile.LaunchApps) {
@@ -1682,7 +1992,8 @@ function New-Tile {
         [string]$Text,
         [int]$Index,
         [scriptblock]$Action,
-        [switch]$Primary
+        [switch]$Primary,
+        [string]$EditProfile = ''
     )
 
     $col = $Index % 3
@@ -1693,7 +2004,11 @@ function New-Tile {
     $button = New-Object System.Windows.Forms.Button
     $button.Text = $Text
     $button.Location = New-Object System.Drawing.Point($x,$y)
-    $button.Size = New-Object System.Drawing.Size(235,70)
+    if ($EditProfile) {
+        $button.Size = New-Object System.Drawing.Size(235,46)
+    } else {
+        $button.Size = New-Object System.Drawing.Size(235,70)
+    }
     $button.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
     $button.FlatAppearance.BorderSize = 0
     if ($Primary) {
@@ -1718,6 +2033,25 @@ function New-Tile {
         }
     }.GetNewClosure())
     $form.Controls.Add($button)
+    if ($EditProfile) {
+        $edit = New-Object System.Windows.Forms.Button
+        $edit.Text = "Edit $EditProfile settings"
+        $edit.Location = [System.Drawing.Point]::new($x, ($y + 48))
+        $edit.Size = New-Object System.Drawing.Size(235,22)
+        $edit.Font = New-Object System.Drawing.Font('Segoe UI',8)
+        $edit.FlatStyle = 'Flat'
+        $edit.FlatAppearance.BorderSize = 0
+        $edit.BackColor = [System.Drawing.Color]::FromArgb(58,67,83)
+        $edit.ForeColor = $WHITE
+        $edit.Cursor = [System.Windows.Forms.Cursors]::Hand
+        $selectedProfile = $EditProfile
+        $edit.Add_Click({
+            Write-Log "Clicked: Edit $selectedProfile settings"
+            try { Show-ProfileEditor -ProfileName $selectedProfile }
+            catch { Write-Log "Profile editor failed: $($_.Exception.Message)" 'ERROR' }
+        }.GetNewClosure())
+        $form.Controls.Add($edit)
+    }
 }
 
 New-Tile "LAUNCH ALL" 0 { Launch-All } -Primary
@@ -1738,11 +2072,11 @@ New-Tile "Spotify" 4 { Open-Spotify }
 New-Tile "Logitech G HUB" 5 { Open-GHub }
 
 # Five editable gaming profiles, all using the same shared routine.
-New-Tile "FabMode" 6 { Invoke-GamingProfile -ProfileName 'FabMode' } -Primary
-New-Tile "ArliMode" 7 { Invoke-GamingProfile -ProfileName 'ArliMode' } -Primary
-New-Tile "BrileMode" 8 { Invoke-GamingProfile -ProfileName 'BrileMode' } -Primary
-New-Tile "ArmlMode" 9 { Invoke-GamingProfile -ProfileName 'ArmlMode' } -Primary
-New-Tile "OliMode" 10 { Invoke-GamingProfile -ProfileName 'OliMode' } -Primary
+New-Tile "FabMode" 6 { Invoke-GamingProfile -ProfileName 'FabMode' } -Primary -EditProfile 'FabMode'
+New-Tile "ArliMode" 7 { Invoke-GamingProfile -ProfileName 'ArliMode' } -Primary -EditProfile 'ArliMode'
+New-Tile "BrileMode" 8 { Invoke-GamingProfile -ProfileName 'BrileMode' } -Primary -EditProfile 'BrileMode'
+New-Tile "ArmlMode" 9 { Invoke-GamingProfile -ProfileName 'ArmlMode' } -Primary -EditProfile 'ArmlMode'
+New-Tile "OliMode" 10 { Invoke-GamingProfile -ProfileName 'OliMode' } -Primary -EditProfile 'OliMode'
 
 New-Tile "Mouse Pointer Options" 11 { Open-MousePointerOptions }
 New-Tile "NVIDIA Control Panel" 12 { Open-NvidiaControlPanel }
