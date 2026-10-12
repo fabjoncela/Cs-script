@@ -421,6 +421,7 @@ try {
     if (-not ("FabNvApi" -as [type])) {
         Add-Type -ErrorAction Stop @"
 using System;
+using System.Collections.Generic;
 using System.Runtime.InteropServices;
 
 public static class FabNvApi {
@@ -443,6 +444,62 @@ public static class FabNvApi {
     private delegate int NvApiGetViewEx(IntPtr handle, ref NvDisplayPathInfo pathInfo, ref uint pathCount, ref uint viewMode);
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     private delegate int NvApiSetViewEx(IntPtr handle, ref NvDisplayPathInfo pathInfo, uint viewMode);
+
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    private delegate int NvApiDispGetDisplayConfig(ref uint pathCount, IntPtr pathInfo);
+
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    private delegate int NvApiDispSetDisplayConfig(uint pathCount, IntPtr pathInfo, uint flags);
+
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    private delegate int NvApiDispGetDisplayIdByDisplayName(
+        [MarshalAs(UnmanagedType.LPStr)] string displayName, out uint displayId);
+
+    [StructLayout(LayoutKind.Sequential, Pack = 8)]
+    private struct NvDisplayConfigPathInfoV2 {
+        public uint version;
+        public uint sourceId;
+        public uint targetInfoCount;
+        public IntPtr targetInfo;
+        public IntPtr sourceModeInfo;
+        public uint adapterFlags;
+        public IntPtr osAdapterId;
+    }
+
+    [StructLayout(LayoutKind.Sequential, Pack = 8)]
+    private struct NvDisplayConfigTargetInfoV2 {
+        public uint displayId;
+        public IntPtr details;
+        public uint targetId;
+    }
+
+    [StructLayout(LayoutKind.Sequential, Pack = 8)]
+    private struct NvDisplayConfigSourceModeInfoV1 {
+        public uint width;
+        public uint height;
+        public uint colorDepth;
+        public int colorFormat;
+        public int positionX;
+        public int positionY;
+        public int spanningOrientation;
+        public uint flags;
+    }
+
+    // NV_DISPLAYCONFIG_PATH_ADVANCED_TARGET_INFO_V1 is 128 bytes:
+    // its 32-byte header is followed by the 96-byte NV_TIMING structure.
+    [StructLayout(LayoutKind.Sequential, Pack = 8)]
+    private struct NvDisplayConfigAdvancedTargetInfoV1 {
+        public uint version;
+        public int rotation;
+        public int scaling;
+        public uint refreshRate1K;
+        public uint flags;
+        public int connector;
+        public int tvFormat;
+        public int timingOverride;
+        [MarshalAs(UnmanagedType.ByValArray, SizeConst = 96)]
+        public byte[] timing;
+    }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
     private struct DvcInfo {
@@ -511,6 +568,38 @@ public static class FabNvApi {
         if (status != 0) throw new Exception("NvAPI_Initialize failed with status " + status + ".");
     }
 
+    public static bool TryReadDigitalVibrance(out int currentLevel, out int minLevel, out int maxLevel, out string report) {
+        NvApiUnload unload = null;
+        bool initialized = false;
+        currentLevel = -1;
+        minLevel = -1;
+        maxLevel = -1;
+        try {
+            Initialize(out unload);
+            initialized = true;
+
+            IntPtr handle = GetDisplayHandle();
+            NvApiGetDvcInfo getInfo = Resolve<NvApiGetDvcInfo>(0x4085DE45);
+            DvcInfo info = new DvcInfo();
+            info.version = (uint)(Marshal.SizeOf(typeof(DvcInfo)) | 0x10000);
+            int status = getInfo(handle, 0, ref info);
+            if (status != 0)
+                throw new Exception("NvAPI_GetDVCInfo failed with status " + status + ".");
+
+            currentLevel = info.currentLevel;
+            minLevel = info.minLevel;
+            maxLevel = info.maxLevel;
+            report = "NVIDIA reports Digital Vibrance driver level " + currentLevel +
+                " (range " + minLevel + "-" + maxLevel + ").";
+            return true;
+        } catch (Exception ex) {
+            report = ex.Message;
+            return false;
+        } finally {
+            if (initialized && unload != null) { try { unload(); } catch {} }
+        }
+    }
+
     public static bool TrySetDigitalVibrance75(out string report) {
         NvApiUnload unload = null;
         bool initialized = false;
@@ -551,71 +640,202 @@ public static class FabNvApi {
         }
     }
 
+    private static IntPtr AllocZeroed(List<IntPtr> allocations, int bytes) {
+        IntPtr p = Marshal.AllocHGlobal(bytes);
+        byte[] zero = new byte[bytes];
+        Marshal.Copy(zero, 0, p, bytes);
+        allocations.Add(p);
+        return p;
+    }
+
+    private static string ScalingStatus(int status) {
+        if (status == -159) return "NVAPI_ADVANCED_DISPLAY_TOPOLOGY_REQUIRED";
+        if (status == -158) return "NVAPI_SET_NOT_ALLOWED";
+        if (status == -9) return "NVAPI_INCOMPATIBLE_STRUCT_VERSION";
+        if (status == -5) return "NVAPI_INVALID_ARGUMENT";
+        if (status == -104) return "NVAPI_NOT_SUPPORTED";
+        if (status == -175) return "NVAPI_ACCESS_DENIED";
+        return "NVAPI status " + status;
+    }
+
     public static bool TrySetGpuFullscreenScaling(out string report) {
         NvApiUnload unload = null;
         bool initialized = false;
+        IntPtr pathArray = IntPtr.Zero;
+        List<IntPtr> allocations = new List<IntPtr>();
+
         try {
             Initialize(out unload);
             initialized = true;
 
-            IntPtr handle = GetDisplayHandle();
-            NvApiGetViewEx getView = Resolve<NvApiGetViewEx>(0xDBBC0AF4);
-            NvApiSetViewEx setView = Resolve<NvApiSetViewEx>(0x06B89E68);
+            NvApiDispGetDisplayConfig getConfig =
+                Resolve<NvApiDispGetDisplayConfig>(0x11ABCCF8);
+            NvApiDispSetDisplayConfig setConfig =
+                Resolve<NvApiDispSetDisplayConfig>(0x5D8CF8DE);
+            NvApiDispGetDisplayIdByDisplayName getDisplayId =
+                Resolve<NvApiDispGetDisplayIdByDisplayName>(0xAE457190);
 
-            NvDisplayPathInfo info = new NvDisplayPathInfo();
-            info.path = new NvDisplayPath[4];
-            info.count = 4;
-            info.version = (uint)(Marshal.SizeOf(typeof(NvDisplayPathInfo)) | (4 << 16));
-            uint pathCount = 4;
-            uint viewMode = 0;
-            int getStatus = getView(handle, ref info, ref pathCount, ref viewMode);
-            if (getStatus != 0) throw new Exception("NvAPI_GetViewEx failed with status " + getStatus + ".");
-            if (pathCount < 1 || pathCount > 4)
-                throw new Exception("NVIDIA returned an unexpected display path count: " + pathCount + ".");
-            if (info.path == null || info.path.Length < 4)
-                throw new Exception("NVIDIA returned an invalid display-path array.");
+            uint pathCount = 0;
+            int status = getConfig(ref pathCount, IntPtr.Zero);
+            if (status != 0)
+                throw new Exception("NvAPI_DISP_GetDisplayConfig count query failed: " + ScalingStatus(status) + ".");
+            if (pathCount < 1 || pathCount > 64)
+                throw new Exception("Unexpected display configuration path count: " + pathCount + ".");
 
-            int target = -1;
+            int pathSize = Marshal.SizeOf(typeof(NvDisplayConfigPathInfoV2));
+            int targetSize = Marshal.SizeOf(typeof(NvDisplayConfigTargetInfoV2));
+            int sourceModeSize = Marshal.SizeOf(typeof(NvDisplayConfigSourceModeInfoV1));
+            int advancedSize = Marshal.SizeOf(typeof(NvDisplayConfigAdvancedTargetInfoV1));
+            if (advancedSize != 128)
+                throw new Exception("Internal NVAPI advanced-target structure size mismatch (" + advancedSize + " bytes; expected 128).");
+
+            pathArray = AllocZeroed(allocations, checked((int)pathCount * pathSize));
+            uint pathVersion = (uint)(pathSize | (2 << 16));
             for (int i = 0; i < pathCount; i++) {
-                if ((info.path[i].trailingBits & 1u) != 0) { target = i; break; } // bGDIPrimary
+                NvDisplayConfigPathInfoV2 entry = new NvDisplayConfigPathInfoV2();
+                entry.version = pathVersion;
+                Marshal.StructureToPtr(entry, IntPtr.Add(pathArray, i * pathSize), false);
             }
-            if (target < 0) {
-                for (int i = 0; i < pathCount; i++) {
-                    if ((info.path[i].primaryBits & 1u) != 0) { target = i; break; } // bPrimary
+
+            uint fetchedCount = pathCount;
+            status = getConfig(ref fetchedCount, pathArray);
+            if (status != 0)
+                throw new Exception("NvAPI_DISP_GetDisplayConfig path query failed: " + ScalingStatus(status) + ".");
+            if (fetchedCount != pathCount)
+                throw new Exception("Display topology changed during query. Please click Apply NVIDIA Settings again.");
+
+            // Allocate target arrays, source mode records, and advanced target details,
+            // following NVIDIA's documented three-pass GetDisplayConfig pattern.
+            for (int i = 0; i < pathCount; i++) {
+                IntPtr pPath = IntPtr.Add(pathArray, i * pathSize);
+                NvDisplayConfigPathInfoV2 entry =
+                    (NvDisplayConfigPathInfoV2)Marshal.PtrToStructure(pPath, typeof(NvDisplayConfigPathInfoV2));
+
+                if (entry.targetInfoCount < 1 || entry.targetInfoCount > 32)
+                    throw new Exception("Unexpected target count for display path " + i + ": " + entry.targetInfoCount + ".");
+
+                entry.sourceModeInfo = AllocZeroed(allocations, sourceModeSize);
+                entry.targetInfo = AllocZeroed(allocations, checked((int)entry.targetInfoCount * targetSize));
+
+                for (int j = 0; j < entry.targetInfoCount; j++) {
+                    IntPtr pTarget = IntPtr.Add(entry.targetInfo, j * targetSize);
+                    IntPtr details = AllocZeroed(allocations, advancedSize);
+                    Marshal.WriteInt32(details, 0, (int)(advancedSize | (1 << 16)));
+
+                    NvDisplayConfigTargetInfoV2 target = new NvDisplayConfigTargetInfoV2();
+                    target.details = details;
+                    Marshal.StructureToPtr(target, pTarget, false);
+                }
+
+                Marshal.StructureToPtr(entry, pPath, false);
+            }
+
+            fetchedCount = pathCount;
+            status = getConfig(ref fetchedCount, pathArray);
+            if (status != 0)
+                throw new Exception("NvAPI_DISP_GetDisplayConfig full query failed: " + ScalingStatus(status) + ".");
+            if (fetchedCount != pathCount)
+                throw new Exception("Display topology changed while reading settings.");
+
+            // Resolve Windows DISPLAY1 to NVIDIA's display ID where possible.
+            uint desiredDisplayId = 0;
+            int displayNameStatus = getDisplayId(@"\\.\DISPLAY1", out desiredDisplayId);
+            bool exactNameResolved = displayNameStatus == 0 && desiredDisplayId != 0;
+            int targetPath = -1;
+            int targetIndex = -1;
+
+            if (exactNameResolved) {
+                for (int i = 0; i < pathCount && targetPath < 0; i++) {
+                    NvDisplayConfigPathInfoV2 entry =
+                        (NvDisplayConfigPathInfoV2)Marshal.PtrToStructure(
+                            IntPtr.Add(pathArray, i * pathSize), typeof(NvDisplayConfigPathInfoV2));
+                    for (int j = 0; j < entry.targetInfoCount; j++) {
+                        NvDisplayConfigTargetInfoV2 target =
+                            (NvDisplayConfigTargetInfoV2)Marshal.PtrToStructure(
+                                IntPtr.Add(entry.targetInfo, j * targetSize), typeof(NvDisplayConfigTargetInfoV2));
+                        if (target.displayId == desiredDisplayId) {
+                            targetPath = i;
+                            targetIndex = j;
+                            break;
+                        }
+                    }
                 }
             }
-            if (target < 0) target = 0;
 
-            int oldScaling = info.path[target].scaling;
-            info.path[target].scaling = 2; // NV_SCALING_GPU_SCALING_TO_NATIVE = Force GPU - Full Screen
-            info.count = pathCount;
-            int setStatus = setView(handle, ref info, viewMode);
-            if (setStatus != 0)
-                throw new Exception("NvAPI_SetViewEx failed with status " + setStatus + ".");
+            // If driver naming could not be mapped, select the NVIDIA target on
+            // the Windows GDI-primary path rather than blindly changing every monitor.
+            if (targetPath < 0) {
+                for (int i = 0; i < pathCount && targetPath < 0; i++) {
+                    NvDisplayConfigPathInfoV2 entry =
+                        (NvDisplayConfigPathInfoV2)Marshal.PtrToStructure(
+                            IntPtr.Add(pathArray, i * pathSize), typeof(NvDisplayConfigPathInfoV2));
+                    if (entry.sourceModeInfo != IntPtr.Zero) {
+                        NvDisplayConfigSourceModeInfoV1 source =
+                            (NvDisplayConfigSourceModeInfoV1)Marshal.PtrToStructure(
+                                entry.sourceModeInfo, typeof(NvDisplayConfigSourceModeInfoV1));
+                        if ((source.flags & 1u) != 0 && entry.targetInfoCount > 0) {
+                            targetPath = i;
+                            targetIndex = 0;
+                        }
+                    }
+                }
+            }
+            if (targetPath < 0)
+                throw new Exception("Could not identify DISPLAY1 or the Windows primary display in NVIDIA's display configuration; no scaling change was made.");
 
-            NvDisplayPathInfo verify = new NvDisplayPathInfo();
-            verify.path = new NvDisplayPath[4];
-            verify.count = 4;
-            verify.version = (uint)(Marshal.SizeOf(typeof(NvDisplayPathInfo)) | (4 << 16));
-            uint verifyCount = 4;
-            uint verifyViewMode = 0;
-            int verifyStatus = getView(handle, ref verify, ref verifyCount, ref verifyViewMode);
-            if (verifyStatus != 0)
-                throw new Exception("Scaling was submitted, but read-back failed with status " + verifyStatus + ".");
+            IntPtr selectedPathPtr = IntPtr.Add(pathArray, targetPath * pathSize);
+            NvDisplayConfigPathInfoV2 selectedPath =
+                (NvDisplayConfigPathInfoV2)Marshal.PtrToStructure(selectedPathPtr, typeof(NvDisplayConfigPathInfoV2));
+            IntPtr selectedTargetPtr = IntPtr.Add(selectedPath.targetInfo, targetIndex * targetSize);
+            NvDisplayConfigTargetInfoV2 selectedTarget =
+                (NvDisplayConfigTargetInfoV2)Marshal.PtrToStructure(selectedTargetPtr, typeof(NvDisplayConfigTargetInfoV2));
 
-            int verifyTarget = target;
-            if (verifyTarget >= verifyCount) verifyTarget = 0;
-            int actualScaling = verify.path[verifyTarget].scaling;
+            if (selectedTarget.details == IntPtr.Zero)
+                throw new Exception("NVIDIA did not return advanced settings for the selected display.");
+
+            int oldScaling = Marshal.ReadInt32(selectedTarget.details, 8);
+            Marshal.WriteInt32(selectedTarget.details, 8, 2); // NV_SCALING_GPU_SCALING_TO_NATIVE = Force GPU - Full Screen
+
+            // Validate the updated current topology first. This is a dry run and
+            // should not change display settings if NVIDIA rejects the configuration.
+            status = setConfig(pathCount, pathArray, 0x00000001); // NV_DISPLAYCONFIG_VALIDATE_ONLY
+            if (status != 0)
+                throw new Exception("NVIDIA rejected the scaling configuration during validation: " + ScalingStatus(status) + ".");
+
+            // Apply the unchanged current topology with only this target's scaling
+            // changed; request persistence so the setting can survive sign-in/reboot.
+            status = setConfig(pathCount, pathArray, 0x00000002); // NV_DISPLAYCONFIG_SAVE_TO_PERSISTENCE
+            if (status != 0)
+                throw new Exception("NvAPI_DISP_SetDisplayConfig apply failed: " + ScalingStatus(status) + ".");
+
+            // Query into the same allocated path structures to verify what driver reports.
+            fetchedCount = pathCount;
+            status = getConfig(ref fetchedCount, pathArray);
+            if (status != 0)
+                throw new Exception("Scaling was submitted, but verification read failed: " + ScalingStatus(status) + ".");
+
+            selectedPath =
+                (NvDisplayConfigPathInfoV2)Marshal.PtrToStructure(selectedPathPtr, typeof(NvDisplayConfigPathInfoV2));
+            selectedTargetPtr = IntPtr.Add(selectedPath.targetInfo, targetIndex * targetSize);
+            selectedTarget =
+                (NvDisplayConfigTargetInfoV2)Marshal.PtrToStructure(selectedTargetPtr, typeof(NvDisplayConfigTargetInfoV2));
+            int actualScaling = Marshal.ReadInt32(selectedTarget.details, 8);
+
             if (actualScaling != 2)
-                throw new Exception("NVIDIA accepted the scaling request but read-back mode is " + actualScaling + ", not Force GPU - Full Screen (2).");
+                throw new Exception("NVIDIA did not retain Force GPU - Full Screen. Driver reports scaling mode " + actualScaling + " (previous " + oldScaling + ").");
 
-            report = "GPU scaling set and verified: Force GPU - Full Screen (mode 2). Previous mode was " +
-                oldScaling + ". Target path index " + target + ".";
+            report = "GPU scaling set and verified using NvAPI_DISP_SetDisplayConfig: Force GPU - Full Screen (mode 2). Previous mode " +
+                oldScaling + "; selected path " + targetPath + ", target " + targetIndex +
+                (exactNameResolved ? ", matched DISPLAY1 by display ID." : ", matched Windows GDI-primary display because DISPLAY1 name could not be mapped.");
             return true;
         } catch (Exception ex) {
             report = "GPU full-screen scaling failed: " + ex.Message;
             return false;
         } finally {
+            // Release all nested arrays/details before the top-level array.
+            for (int i = allocations.Count - 1; i >= 0; i--) {
+                try { Marshal.FreeHGlobal(allocations[i]); } catch {}
+            }
             if (initialized && unload != null) { try { unload(); } catch {} }
         }
     }
@@ -625,6 +845,74 @@ public static class FabNvApi {
     }
 } catch {
     Write-Log "NVIDIA NVAPI helper could not compile/load: $($_.Exception.Message)" "ERROR"
+}
+
+$script:ColorWatchTimer = $null
+$script:ColorWatchLastLevel = $null
+$script:ColorWatchLastStatusLog = Get-Date
+
+function Start-ColorWatch {
+    if (-not ("FabNvApi" -as [type])) {
+        Write-Log "Color Watch could not start because NVAPI helper is unavailable." "ERROR"
+        return
+    }
+    if ($script:ColorWatchTimer) {
+        if (-not $script:ColorWatchTimer.Enabled) {
+            $script:ColorWatchTimer.Start()
+            Write-Log "Color Watch resumed."
+        } else {
+            Write-Log "Color Watch is already running."
+        }
+        return
+    }
+
+    $script:ColorWatchTimer = New-Object System.Windows.Forms.Timer
+    $script:ColorWatchTimer.Interval = 10000
+    $script:ColorWatchTimer.Add_Tick({
+        try {
+            $level = -1
+            $minLevel = -1
+            $maxLevel = -1
+            $readReport = ""
+            $readOk = [FabNvApi]::TryReadDigitalVibrance(
+                [ref]$level, [ref]$minLevel, [ref]$maxLevel, [ref]$readReport
+            )
+            if (-not $readOk) {
+                Write-Log "Color Watch read failed: $readReport" "WARN"
+                return
+            }
+
+            $target = $minLevel + [int][Math]::Round(($maxLevel - $minLevel) * 0.75)
+            if ($null -eq $script:ColorWatchLastLevel) {
+                Write-Log "Color Watch started: current Digital Vibrance=$level; target for 75%=$target (range $minLevel-$maxLevel)."
+            } elseif ($level -ne $script:ColorWatchLastLevel) {
+                Write-Log "Color Watch detected Digital Vibrance changed from $($script:ColorWatchLastLevel) to $level." "WARN"
+            }
+            $script:ColorWatchLastLevel = $level
+
+            if ($level -ne $target) {
+                Write-Log "Color Watch detected Digital Vibrance is no longer 75%; attempting to restore it." "WARN"
+                $setReport = ""
+                $setOk = [FabNvApi]::TrySetDigitalVibrance75([ref]$setReport)
+                if ($setOk) {
+                    Write-Log "Color Watch restored Digital Vibrance: $setReport" "WARN"
+                    $script:ColorWatchLastLevel = $target
+                } else {
+                    Write-Log "Color Watch could not restore Digital Vibrance: $setReport" "ERROR"
+                }
+            } else {
+                $now = Get-Date
+                if (($now - $script:ColorWatchLastStatusLog).TotalSeconds -ge 60) {
+                    Write-Log "Color Watch: Digital Vibrance remains at driver level $level (75%). If the screen still looks washed out, another color pipeline/display setting is responsible."
+                    $script:ColorWatchLastStatusLog = $now
+                }
+            }
+        } catch {
+            Write-Log "Color Watch error: $($_.Exception.Message)" "ERROR"
+        }
+    })
+    $script:ColorWatchTimer.Start()
+    Write-Log "Color Watch enabled: checks NVIDIA Digital Vibrance every 10 seconds and restores 75% only if the driver reports a different level. Active while this launcher is open."
 }
 
 function Apply-NvidiaGamingSettings {
@@ -659,6 +947,8 @@ function Apply-NvidiaGamingSettings {
         } catch {
             Write-Log "Digital Vibrance call failed unexpectedly: $($_.Exception.Message)" "ERROR"
         }
+
+        Start-ColorWatch
 
         try {
             $scalingReport = ""
@@ -859,4 +1149,10 @@ $footer.Font = New-Object System.Drawing.Font("Segoe UI",8)
 $footer.ForeColor = $MUTED
 $form.Controls.Add($footer)
 
+$form.Add_FormClosed({
+    if ($script:ColorWatchTimer) {
+        try { $script:ColorWatchTimer.Stop(); $script:ColorWatchTimer.Dispose() } catch {}
+        Write-Log "Color Watch stopped because the launcher closed."
+    }
+})
 [void]$form.ShowDialog()
