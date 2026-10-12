@@ -455,6 +455,21 @@ public static class FabNvApi {
     private delegate int NvApiDispGetDisplayIdByDisplayName(
         [MarshalAs(UnmanagedType.LPStr)] string displayName, out uint displayId);
 
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    private delegate int NvApiDrsCreateSession(out IntPtr session);
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    private delegate int NvApiDrsDestroySession(IntPtr session);
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    private delegate int NvApiDrsLoadSettings(IntPtr session);
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    private delegate int NvApiDrsSaveSettings(IntPtr session);
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    private delegate int NvApiDrsGetCurrentGlobalProfile(IntPtr session, out IntPtr profile);
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    private delegate int NvApiDrsGetSetting(IntPtr session, IntPtr profile, uint settingId, IntPtr setting);
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    private delegate int NvApiDrsSetSetting(IntPtr session, IntPtr profile, IntPtr setting);
+
     [StructLayout(LayoutKind.Sequential, Pack = 8)]
     private struct NvDisplayConfigPathInfoV2 {
         public uint version;
@@ -656,6 +671,181 @@ public static class FabNvApi {
         if (status == -104) return "NVAPI_NOT_SUPPORTED";
         if (status == -175) return "NVAPI_ACCESS_DENIED";
         return "NVAPI status " + status;
+    }
+
+    // NVDRS_SETTING_V1 from nvapi.h:
+    // header(4) + Unicode name(2048 UTF-16 = 4096) + five DWORD fields(20)
+    // + two NVDRS_BINARY_SETTING unions(4+4096 bytes each).
+    // The original draft used the wrong size and current-value offset.
+    private const int DrsSettingSize = 12320;
+    private const int DrsSettingIdOffset = 4100;
+    private const int DrsSettingTypeOffset = 4104;
+    private const int DrsSettingCurrentValueOffset = 8220;
+
+    private static IntPtr NewDrsSetting(uint id, uint? value) {
+        IntPtr p = Marshal.AllocHGlobal(DrsSettingSize);
+        Marshal.Copy(new byte[DrsSettingSize], 0, p, DrsSettingSize);
+        Marshal.WriteInt32(p, 0, DrsSettingSize | (1 << 16));
+        Marshal.WriteInt32(p, DrsSettingIdOffset, unchecked((int)id));
+        Marshal.WriteInt32(p, DrsSettingTypeOffset, 0); // NVDRS_DWORD_TYPE
+        if (value.HasValue) {
+            Marshal.WriteInt32(p, DrsSettingCurrentValueOffset, unchecked((int)value.Value));
+        }
+        return p;
+    }
+
+    public static bool TryApplyPerformanceProfile(out string report) {
+        NvApiUnload unload = null;
+        NvApiDrsDestroySession destroySession = null;
+        IntPtr session = IntPtr.Zero;
+        IntPtr profile = IntPtr.Zero;
+        bool initialized = false;
+        List<string> messages = new List<string>();
+
+        // Performance slider equivalent: NVIDIA's official slider table lists
+        // Texture filtering = Quality, AA/AF = application-controlled, VSync =
+        // force off, Trilinear + Anisotropic optimizations = On.
+        // G-SYNC request: disable globally through driver profile. This does
+        // NOT guarantee that the Set up G-SYNC checkbox is visually unchecked.
+        uint[] ids = new uint[] {
+            0x00CE2691, // QUALITY_ENHANCEMENTS_ID
+            0x107EFC5B, // AA_MODE_SELECTOR_ID
+            0x10D2BB16, // ANISO_MODE_SELECTOR_ID
+            0x00A879CF, // VSYNCMODE_ID
+            0x00E73211, // PS_TEXFILTER_ANISO_OPTS2_ID
+            0x0084CD70, // PS_TEXFILTER_BILINEAR_IN_ANISO_ID
+            0x002ECAF2, // PS_TEXFILTER_DISABLE_TRILIN_SLOPE_ID
+            0x1194F158, // VRR_MODE_ID: disabled
+            0x1094F1F7, // VRRREQUESTSTATE_ID: disabled
+            0x10A879CF, // VRR_APP_OVERRIDE_ID: force off
+            0x10A879AC  // VRR_APP_OVERRIDE_REQUEST_STATE_ID: force off
+        };
+        uint[] values = new uint[] {
+            0x00000000, // QUALITY_ENHANCEMENTS_QUALITY - NVIDIA slider table
+            0x00000000, // AA_MODE_SELECTOR_APP_CONTROL
+            0x00000000, // ANISO_MODE_SELECTOR_APP
+            0x08416747, // VSYNCMODE_FORCEOFF
+            0x00000001, // PS_TEXFILTER_ANISO_OPTS2_ON
+            0x00000001, // PS_TEXFILTER_BILINEAR_IN_ANISO_ON
+            0x00000000, // leave disable-trilinear-slope OFF
+            0x00000000, // VRR_MODE_DISABLED
+            0x00000000, // VRRREQUESTSTATE_DISABLED
+            0x00000001, // VRR_APP_OVERRIDE_FORCE_OFF
+            0x00000001  // VRR_APP_OVERRIDE_REQUEST_STATE_FORCE_OFF
+        };
+        string[] names = new string[] {
+            "Texture filtering quality = Quality (NVIDIA Performance slider table)",
+            "Antialiasing = application controlled",
+            "Anisotropic filtering = application controlled",
+            "Vertical sync = force off",
+            "Anisotropic sample optimization = on",
+            "Anisotropic filter optimization = on",
+            "Trilinear optimization related driver flag = off",
+            "G-SYNC global mode = off",
+            "G-SYNC global requested state = disabled",
+            "G-SYNC application override = force off",
+            "G-SYNC application requested state = force off"
+        };
+
+        try {
+            Initialize(out unload);
+            initialized = true;
+            NvApiDrsCreateSession create = Resolve<NvApiDrsCreateSession>(0x0694D52E);
+            destroySession = Resolve<NvApiDrsDestroySession>(0xDAD9CFF8);
+            NvApiDrsLoadSettings load = Resolve<NvApiDrsLoadSettings>(0x375DBD6B);
+            NvApiDrsSaveSettings save = Resolve<NvApiDrsSaveSettings>(0xFCBC7E14);
+            NvApiDrsGetCurrentGlobalProfile global = Resolve<NvApiDrsGetCurrentGlobalProfile>(0x617BFF9F);
+            NvApiDrsGetSetting get = Resolve<NvApiDrsGetSetting>(0x73BF8338);
+            NvApiDrsSetSetting set = Resolve<NvApiDrsSetSetting>(0x577DD202);
+
+            int result = create(out session);
+            if (result != 0 || session == IntPtr.Zero) throw new Exception("DRS_CreateSession status=" + result);
+            result = load(session);
+            if (result != 0) throw new Exception("DRS_LoadSettings status=" + result);
+            result = global(session, out profile);
+            if (result != 0 || profile == IntPtr.Zero) throw new Exception("DRS_GetCurrentGlobalProfile status=" + result);
+
+            bool[] accepted = new bool[ids.Length];
+            for (int i = 0; i < ids.Length; i++) {
+                IntPtr p = IntPtr.Zero;
+                try {
+                    p = NewDrsSetting(ids[i], null);
+                    int getResult = get(session, profile, ids[i], p);
+                    string previous = getResult == 0
+                        ? "0x" + unchecked((uint)Marshal.ReadInt32(p, DrsSettingCurrentValueOffset)).ToString("X8")
+                        : "not found (status " + getResult + ")";
+                    Marshal.FreeHGlobal(p);
+                    p = NewDrsSetting(ids[i], values[i]);
+                    int setResult = set(session, profile, p);
+                    if (setResult == 0) {
+                        accepted[i] = true;
+                        messages.Add("INFO: Submitted " + names[i] + "; previous=" + previous + ".");
+                    } else {
+                        messages.Add("WARN: Driver rejected " + names[i] + "; status=" + setResult + ".");
+                    }
+                } catch (Exception e) {
+                    messages.Add("ERROR: " + names[i] + ": " + e.Message);
+                } finally {
+                    if (p != IntPtr.Zero) Marshal.FreeHGlobal(p);
+                }
+            }
+
+            bool any = false;
+            for (int i=0; i<accepted.Length; i++) if (accepted[i]) any = true;
+            if (!any) throw new Exception("NVIDIA driver accepted none of the performance/G-SYNC settings.");
+
+            result = save(session);
+            if (result != 0) throw new Exception("DRS_SaveSettings failed with status=" + result);
+            messages.Add("INFO: NVIDIA global profile saved. Re-loading to verify persisted values.");
+
+            result = load(session);
+            if (result != 0) throw new Exception("DRS_LoadSettings read-back status=" + result);
+            result = global(session, out profile);
+            if (result != 0 || profile == IntPtr.Zero) throw new Exception("DRS_GetCurrentGlobalProfile read-back status=" + result);
+
+            int verifiedCount = 0;
+            for (int i=0; i<ids.Length; i++) {
+                if (!accepted[i]) continue;
+                IntPtr p = IntPtr.Zero;
+                try {
+                    p = NewDrsSetting(ids[i], null);
+                    int rc = get(session, profile, ids[i], p);
+                    if (rc != 0) {
+                        messages.Add("WARN: Read-back unavailable for " + names[i] + "; status=" + rc);
+                    } else {
+                        uint actual = unchecked((uint)Marshal.ReadInt32(p, DrsSettingCurrentValueOffset));
+                        if (actual == values[i]) {
+                            verifiedCount++;
+                            messages.Add("INFO: Verified " + names[i] + ".");
+                        } else {
+                            messages.Add("ERROR: " + names[i] + " read-back mismatch (0x" + actual.ToString("X8") + ").");
+                        }
+                    }
+                } catch (Exception e) {
+                    messages.Add("ERROR: Read-back " + names[i] + ": " + e.Message);
+                } finally {
+                    if (p != IntPtr.Zero) Marshal.FreeHGlobal(p);
+                }
+            }
+
+            bool allOk = verifiedCount == ids.Length;
+            messages.Insert(0, "INFO: DRS global 3D + G-SYNC-off settings verified " +
+                verifiedCount + "/" + ids.Length + ".");
+            if (!allOk) messages.Add("WARN: Not every global driver setting was verified; inspect NVIDIA Control Panel.");
+            report = String.Join("\n", messages.ToArray());
+            return allOk;
+        } catch (Exception e) {
+            messages.Add("ERROR: DRS apply failed: " + e.Message);
+            report = String.Join("\n", messages.ToArray());
+            return false;
+        } finally {
+            if (session != IntPtr.Zero && destroySession != null) {
+                try { destroySession(session); } catch {}
+            }
+            if (initialized && unload != null) {
+                try { unload(); } catch {}
+            }
+        }
     }
 
     public static bool TrySetGpuFullscreenScaling(out string report) {
@@ -948,7 +1138,28 @@ function Apply-NvidiaGamingSettings {
             Write-Log "Digital Vibrance call failed unexpectedly: $($_.Exception.Message)" "ERROR"
         }
 
-        Start-ColorWatch
+        # Start-ColorWatch  # Temporarily disabled: no 10-second Digital Vibrance polling or automatic restore.
+
+        try {
+            $performanceReport = ""
+            $performanceOk = [FabNvApi]::TryApplyPerformanceProfile([ref]$performanceReport)
+            foreach ($performanceLine in ($performanceReport -split "\r?\n")) {
+                if (-not [string]::IsNullOrWhiteSpace($performanceLine)) {
+                    if ($performanceLine.StartsWith("ERROR:")) {
+                        Write-Log $performanceLine.Substring(6).Trim() "ERROR"
+                    } elseif ($performanceLine.StartsWith("WARN:")) {
+                        Write-Log $performanceLine.Substring(5).Trim() "WARN"
+                    } else {
+                        Write-Log $performanceLine.Substring(5).Trim()
+                    }
+                }
+            }
+            if (-not $performanceOk) {
+                Write-Log "Some NVIDIA Performance/G-SYNC-off driver profile settings were not verified. See DRS lines." "WARN"
+            }
+        } catch {
+            Write-Log "NVIDIA 3D Performance DRS call failed unexpectedly: $($_.Exception.Message)" "ERROR"
+        }
 
         try {
             $scalingReport = ""
@@ -962,14 +1173,14 @@ function Apply-NvidiaGamingSettings {
             Write-Log "GPU full-screen scaling call failed unexpectedly: $($_.Exception.Message)" "ERROR"
         }
     } else {
-        Write-Log "NVIDIA NVAPI helper is unavailable; Digital Vibrance and GPU scaling were not changed." "ERROR"
+        Write-Log "NVIDIA NVAPI helper is unavailable; Digital Vibrance, driver profile, G-SYNC profile and scaling were not changed." "ERROR"
     }
 
-    Write-Log "Still manual: Image Settings with Preview -> Use my preference emphasizing Performance."
+    Write-Log "NVIDIA Performance-equivalent values were requested through the global driver profile; select the actual preview slider manually if the radio control must also show Performance."
     Write-Log "Still manual: Configure Surround, PhysX -> select the NVIDIA GPU."
     Write-Log "Still manual: Adjust desktop size and position -> enable override scaling mode set by games and programs."
-    Write-Log "Still manual: Set up G-SYNC -> disable G-SYNC for display 1."
-    Write-Log "Opening NVIDIA Control Panel. Stage-one settings have individual success/failure logs." "INFO"
+    Write-Log "G-SYNC-off driver profile values were requested globally; confirm Set up G-SYNC checkbox is OFF on display 1 (this GUI checkbox itself was not toggled)."
+    Write-Log "Opening NVIDIA Control Panel. Check the scaling override checkbox and PhysX GPU choice manually." "INFO"
     Open-NvidiaControlPanel
 }
 
@@ -978,6 +1189,268 @@ function Open-GHub {
         "$env:ProgramFiles\LGHUB\lghub.exe",
         "$env:ProgramFiles\LGHUB\lghub_system_tray.exe"
     )
+}
+
+# Optional: place a direct HTTPS URL here to make the at.cfg button fully
+# one-click on every PC. Alternatively, keep at.cfg next to this BAT, or let
+# the button request a URL the first time on each PC.
+$script:AtCfgDownloadUrl = ""
+
+function Get-SteamLibraryRoots {
+    $steamInstalls = New-Object 'System.Collections.Generic.List[string]'
+    $libraryRoots = New-Object 'System.Collections.Generic.List[string]'
+    $seenSteam = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::OrdinalIgnoreCase)
+    $seenLibrary = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::OrdinalIgnoreCase)
+
+    $registryKeys = @(
+        'HKCU:\Software\Valve\Steam',
+        'HKLM:\SOFTWARE\WOW6432Node\Valve\Steam',
+        'HKLM:\SOFTWARE\Valve\Steam'
+    )
+    $guessSteam = @(
+        "${env:ProgramFiles(x86)}\Steam",
+        "$env:ProgramFiles\Steam",
+        "${env:LOCALAPPDATA}\Steam",
+        "${env:SystemDrive}\Steam"
+    )
+    foreach ($key in $registryKeys) {
+        try {
+            $props = Get-ItemProperty -LiteralPath $key -ErrorAction Stop
+            foreach ($name in @('SteamPath', 'InstallPath', 'SteamExe')) {
+                $value = $props.$name
+                if (-not [string]::IsNullOrWhiteSpace($value)) {
+                    if ($name -eq 'SteamExe') { $value = Split-Path -Parent $value }
+                    $guessSteam += $value
+                }
+            }
+        } catch {}
+    }
+
+    try {
+        $steamProcesses = Get-Process -Name 'steam' -ErrorAction SilentlyContinue
+        foreach ($steamProcess in $steamProcesses) {
+            if ($steamProcess.Path) { $guessSteam += (Split-Path -Parent $steamProcess.Path) }
+        }
+    } catch {}
+
+    foreach ($drive in (Get-PSDrive -PSProvider FileSystem -ErrorAction SilentlyContinue)) {
+        foreach ($folderName in @('SteamLibrary', 'Steam', 'Games\SteamLibrary', 'Games\Steam')) {
+            $guessSteam += (Join-Path $drive.Root $folderName)
+        }
+    }
+
+    foreach ($steamRoot in $guessSteam) {
+        if ([string]::IsNullOrWhiteSpace($steamRoot)) { continue }
+        $steamRoot = $steamRoot.Replace('/', '\').TrimEnd('\')
+        if ((Test-Path -LiteralPath $steamRoot -PathType Container) -and $seenSteam.Add($steamRoot)) {
+            $steamInstalls.Add($steamRoot)
+        }
+    }
+
+    foreach ($steamRoot in $steamInstalls) {
+        if ($seenLibrary.Add($steamRoot)) { $libraryRoots.Add($steamRoot) }
+        $vdf = Join-Path $steamRoot 'steamapps\libraryfolders.vdf'
+        if (-not (Test-Path -LiteralPath $vdf -PathType Leaf)) { continue }
+        try {
+            $raw = Get-Content -LiteralPath $vdf -Raw -ErrorAction Stop
+            # New format: "path" "D:\\SteamLibrary". Old: "1" "D:\\SteamLibrary".
+            $matches = [regex]::Matches($raw, '(?m)^\s*"(?:path|\d+)"\s+"([^"\r\n]+)"')
+            foreach ($match in $matches) {
+                $root = $match.Groups[1].Value.Replace('\\', '\').Replace('/', '\').TrimEnd('\')
+                if ($root -match '^[A-Za-z]:\\' -and
+                    (Test-Path -LiteralPath $root -PathType Container) -and
+                    $seenLibrary.Add($root)) {
+                    $libraryRoots.Add($root)
+                }
+            }
+        } catch {
+            Write-Log "Could not read Steam library file $vdf`: $($_.Exception.Message)" "WARN"
+        }
+    }
+
+    return $libraryRoots.ToArray()
+}
+
+function Find-CS2ConfigFolder {
+    $roots = @(Get-SteamLibraryRoots)
+    Write-Log "Searching $($roots.Count) Steam library location(s) for CS2 (app 730)."
+    $fallback = $null
+
+    foreach ($root in $roots) {
+        $steamApps = Join-Path $root 'steamapps'
+        $manifestPath = Join-Path $steamApps 'appmanifest_730.acf'
+        $gameNames = New-Object 'System.Collections.Generic.List[string]'
+        if (Test-Path -LiteralPath $manifestPath -PathType Leaf) {
+            try {
+                $manifestText = Get-Content -LiteralPath $manifestPath -Raw -ErrorAction Stop
+                $nameMatch = [regex]::Match($manifestText, '(?m)^\s*"installdir"\s+"([^"\r\n]+)"')
+                if ($nameMatch.Success) { $gameNames.Add($nameMatch.Groups[1].Value) }
+            } catch {
+                Write-Log "Could not read CS2 manifest at $manifestPath`: $($_.Exception.Message)" "WARN"
+            }
+        }
+        $gameNames.Add('Counter-Strike Global Offensive')
+        foreach ($gameName in ($gameNames | Select-Object -Unique)) {
+            $candidate = Join-Path $steamApps ("common\{0}\game\csgo\cfg" -f $gameName)
+            if (Test-Path -LiteralPath $candidate -PathType Container) {
+                if (Test-Path -LiteralPath $manifestPath -PathType Leaf) {
+                    Write-Log "Found installed CS2 config folder: $candidate"
+                    return $candidate
+                }
+                if (-not $fallback) { $fallback = $candidate }
+            }
+        }
+    }
+
+    if ($fallback) {
+        Write-Log "Found CS2 config folder without appmanifest_730.acf: $fallback" "WARN"
+        return $fallback
+    }
+
+    Write-Log 'Automatic CS2 installation detection failed; requesting the game cfg folder.' 'WARN'
+    $pick = New-Object System.Windows.Forms.FolderBrowserDialog
+    $pick.Description = 'Select the CS2 folder ending in game\csgo\cfg'
+    $pick.ShowNewFolderButton = $false
+    if ($pick.ShowDialog() -ne [System.Windows.Forms.DialogResult]::OK) { return $null }
+    $selected = $pick.SelectedPath.TrimEnd('\')
+    if ($selected -notmatch '(?i)\\game\\csgo\\cfg$') {
+        throw "Selected path is not the CS2 game\\csgo\\cfg folder: $selected"
+    }
+    return $selected
+}
+
+function Get-AtCfgSource {
+    $launcherDir = Split-Path -Parent $env:CAFE_SCRIPT
+    $localCfg = Join-Path $launcherDir 'at.cfg'
+    if (Test-Path -LiteralPath $localCfg -PathType Leaf) {
+        Write-Log "Found at.cfg next to launcher: $localCfg"
+        return [pscustomobject]@{ Type='File'; Value=$localCfg; RememberUrl=$false }
+    }
+
+    $storedUrlFile = Join-Path $env:LOCALAPPDATA 'CafeLauncher\at_cfg_url.txt'
+    $url = $script:AtCfgDownloadUrl
+    $remember = $false
+    if ([string]::IsNullOrWhiteSpace($url) -and (Test-Path -LiteralPath $storedUrlFile -PathType Leaf)) {
+        try { $url = (Get-Content -LiteralPath $storedUrlFile -Raw -ErrorAction Stop).Trim() } catch {}
+    }
+    if ([string]::IsNullOrWhiteSpace($url)) {
+        Add-Type -AssemblyName Microsoft.VisualBasic
+        $url = [Microsoft.VisualBasic.Interaction]::InputBox(
+            "Paste the DIRECT HTTPS download link to your at.cfg file.`n`nLeave blank to browse for a local at.cfg instead.`nThe link will be saved after a successful installation on this PC.",
+            'Install CS2 at.cfg', ''
+        ).Trim()
+        if ([string]::IsNullOrWhiteSpace($url)) {
+            $picker = New-Object System.Windows.Forms.OpenFileDialog
+            $picker.Title = 'Select the at.cfg file to install'
+            $picker.Filter = 'CS2 config (at.cfg)|at.cfg|CFG files (*.cfg)|*.cfg'
+            $picker.CheckFileExists = $true
+            if ($picker.ShowDialog() -ne [System.Windows.Forms.DialogResult]::OK) { return $null }
+            return [pscustomobject]@{ Type='File'; Value=$picker.FileName; RememberUrl=$false }
+        }
+        $remember = $true
+    }
+
+    $uri = $null
+    if (-not [Uri]::TryCreate($url, [UriKind]::Absolute, [ref]$uri) -or $uri.Scheme -ne 'https') {
+        throw 'The config download URL must be a full HTTPS link directly to at.cfg (not a GitHub webpage).'
+    }
+    return [pscustomobject]@{ Type='Url'; Value=$url; RememberUrl=$remember }
+}
+
+function Install-AtCfg {
+    $downloaded = $null
+    $staged = $null
+    try {
+        Write-Log 'CS2 config installation started.'
+        $source = Get-AtCfgSource
+        if (-not $source) {
+            Write-Log 'CS2 at.cfg installation cancelled; no file or URL selected.' 'WARN'
+            return
+        }
+
+        $cfgDirectory = Find-CS2ConfigFolder
+        if (-not $cfgDirectory) {
+            Write-Log 'CS2 at.cfg installation cancelled; no CS2 config folder selected.' 'WARN'
+            return
+        }
+
+        if ($source.Type -eq 'Url') {
+            $downloaded = Join-Path $env:TEMP ("CafeLauncher-at-{0}.cfg" -f [Guid]::NewGuid().ToString('N'))
+            Write-Log "Downloading at.cfg from $($source.Value)"
+            # Windows PowerShell 5.1 uses TLS 1.2 when supported by the system.
+            [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+            Invoke-WebRequest -Uri $source.Value -OutFile $downloaded -UseBasicParsing -TimeoutSec 30 -MaximumRedirection 5 -ErrorAction Stop
+            $sourcePath = $downloaded
+        } else {
+            $sourcePath = $source.Value
+        }
+
+        $fileInfo = Get-Item -LiteralPath $sourcePath -ErrorAction Stop
+        if ($fileInfo.Length -lt 1 -or $fileInfo.Length -gt 2097152) {
+            throw 'at.cfg is empty or larger than 2 MB. Installation stopped.'
+        }
+        $buffer = [IO.File]::ReadAllBytes($sourcePath)
+        $firstBytes = [Text.Encoding]::UTF8.GetString($buffer, 0, [Math]::Min($buffer.Length, 300)).TrimStart([char[]]@([char]0xFEFF, [char]32, [char]13, [char]10, [char]9))
+        if ($firstBytes -match '(?i)^(<!doctype\s+html|<html\b|\{\s*"(?:message|error)"\s*:)') {
+            throw 'The download appears to be a webpage/API error rather than at.cfg. Use a direct raw-file download URL.'
+        }
+        if ([Array]::IndexOf($buffer, [byte]0) -ge 0) {
+            throw 'The source contains NUL bytes and does not appear to be a plain-text CFG.'
+        }
+
+        $dest = Join-Path $cfgDirectory 'at.cfg'
+        if ([string]::Equals([IO.Path]::GetFullPath($sourcePath), [IO.Path]::GetFullPath($dest), [StringComparison]::OrdinalIgnoreCase)) {
+            Write-Log "at.cfg is already in the correct location: $dest"
+        } else {
+            $staged = Join-Path $cfgDirectory ("at.cfg.cafe-{0}.tmp" -f [Guid]::NewGuid().ToString('N'))
+            Copy-Item -LiteralPath $sourcePath -Destination $staged -ErrorAction Stop
+            if (Test-Path -LiteralPath $dest -PathType Leaf) {
+                $stamp = Get-Date -Format 'yyyyMMdd-HHmmss-fff'
+                $backup = Join-Path $cfgDirectory "at.cfg.backup-$stamp"
+                Copy-Item -LiteralPath $dest -Destination $backup -ErrorAction Stop
+                Write-Log "Backed up previous at.cfg to $backup"
+            }
+            Copy-Item -LiteralPath $staged -Destination $dest -Force -ErrorAction Stop
+        }
+
+        $expected = (Get-FileHash -LiteralPath $sourcePath -Algorithm SHA256 -ErrorAction Stop).Hash
+        $actual = (Get-FileHash -LiteralPath $dest -Algorithm SHA256 -ErrorAction Stop).Hash
+        if ($expected -ne $actual) { throw 'SHA-256 verification failed: installed file does not match the source.' }
+
+        if ($source.Type -eq 'Url' -and $source.RememberUrl) {
+            try {
+                $savedFile = Join-Path $env:LOCALAPPDATA 'CafeLauncher\at_cfg_url.txt'
+                $savedDir = Split-Path -Parent $savedFile
+                if (-not (Test-Path -LiteralPath $savedDir)) { New-Item -ItemType Directory -Path $savedDir -Force -ErrorAction Stop | Out-Null }
+                Set-Content -LiteralPath $savedFile -Value $source.Value -Encoding UTF8 -ErrorAction Stop
+                Write-Log "Saved config download URL for later use on this PC: $savedFile"
+            } catch {
+                Write-Log "Installed at.cfg, but could not save the download URL: $($_.Exception.Message)" 'WARN'
+            }
+        }
+
+        Write-Log "CS2 at.cfg installed and SHA-256 verified: $dest"
+        [System.Windows.Forms.MessageBox]::Show(
+            "at.cfg installed successfully!`n`n$dest`n`nTo load it in CS2: exec at",
+            'Cafe Launcher',
+            [System.Windows.Forms.MessageBoxButtons]::OK,
+            [System.Windows.Forms.MessageBoxIcon]::Information
+        ) | Out-Null
+    } catch {
+        Write-Log "CS2 at.cfg installation failed: $($_.Exception.Message)" 'ERROR'
+        [System.Windows.Forms.MessageBox]::Show(
+            "Could not install at.cfg:`n$($_.Exception.Message)",
+            'Cafe Launcher',
+            [System.Windows.Forms.MessageBoxButtons]::OK,
+            [System.Windows.Forms.MessageBoxIcon]::Error
+        ) | Out-Null
+    } finally {
+        foreach ($temporary in @($downloaded, $staged)) {
+            if ($temporary -and (Test-Path -LiteralPath $temporary -PathType Leaf)) {
+                try { Remove-Item -LiteralPath $temporary -Force -ErrorAction Stop } catch {}
+            }
+        }
+    }
 }
 
 function Launch-All {
@@ -994,6 +1467,8 @@ function Launch-All {
     Open-FaceitMatchmaking
     Open-Spotify
     Open-GHub
+    Write-Log "Launch All: opening Mouse Pointer Options."
+    Open-MousePointerOptions
 }
 
 # Main window
@@ -1096,7 +1571,8 @@ New-Tile "Mouse Pointer Options" 6 { Open-MousePointerOptions }
 New-Tile "NVIDIA Control Panel" 7 { Open-NvidiaControlPanel }
 New-Tile "Apply NVIDIA Settings" 8 { Apply-NvidiaGamingSettings } -Primary
 New-Tile "Logitech G HUB" 9 { Open-GHub }
-New-Tile "Exit" 10 { $form.Close() }
+New-Tile "Install CS2 at.cfg" 10 { Install-AtCfg } -Primary
+New-Tile "Exit" 11 { $form.Close() }
 
 # Live diagnostic log panel (visible only while the launcher is open)
 $logTitle = New-Object System.Windows.Forms.Label
