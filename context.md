@@ -1,6 +1,6 @@
 # CafeLauncher — Technical Context
 
-Maintainer / coding-assistant reference for [CafeLauncher](./README.md). This document reflects the `main` implementation of `cafe.bat` at **2026.10.13.8**. Read the actual source before editing; code is the ultimate source of truth.
+Maintainer / coding-assistant reference for [CafeLauncher](./README.md). This document reflects the `main` implementation of `cafe.bat` at **2026.10.13.9**. Read the actual source before editing; code is the ultimate source of truth.
 
 ## Repository structure
 
@@ -64,10 +64,7 @@ Click FabMode / ArliMode / BrileMode / ArmlMode / OliMode
          Windows display modes + NVAPI global settings + scaling
   -> Install-AtCfg(<fixed profile>.cfg, cloud URL, optional sensitivity)
        download -> validate -> offline fallback -> compare -> backup/copy -> verify
-  -> if CFG installed successfully:
-       Set-CS2SteamLaunchOptions(<fixed profile>.cfg)
-       locate active Steam account -> safely update game 730 LaunchOptions
-       (ask to restart Steam if required; preserve other game flags)
+  -> no persistent Steam Launch Options write and no CS2 launch
   -> if LaunchApps:
        Launch-All (Steam, FACEIT AC, FACEIT website, Spotify, G HUB,
                    Windows Mouse Pointer Options)
@@ -76,7 +73,7 @@ Click FabMode / ArliMode / BrileMode / ArmlMode / OliMode
 
 `Invoke-GamingProfile` loops over named action scriptblocks and catches/logs exceptions per step. A log saying **"full routine finished"** means the sequence returned, **not** that every NVIDIA/Steam/config task succeeded. Individual functions can also internally log errors and return without throwing.
 
-**No automatic CS2 game launch, and no verification that Steam/FACEIT sign-in or anti-cheat is ready** in this version. Steam loads the CFG on game startup when `+exec <profile>.cfg` was set successfully. If Steam settings could not be changed, the developer-console fallback `exec oli` still works.
+**Normal profile Apply does not launch CS2 or edit saved Steam launch options.** The independent **Play + Exec** button downloads/installs that profile CFG and requests a one-time `steam.exe -applaunch 730 +exec <profile>.cfg` game launch. Steam/FACEIT readiness is not checked. If CS2 is running, the button explains the developer-console fallback `exec oli`.
 
 ## Preferences and precedence
 
@@ -131,13 +128,21 @@ Do not remove either regression check when refactoring. Syntax validation alone 
 
 **Save & Sync uploads only `profiles/<ProfileName>.json`.** To modify binds/crosshair/content in `arli.cfg` etc., push that CFG separately through Git or GitHub. Public read requires no login.
 
-## Steam CS2 launch options
+## CS2 Play + Exec without persistent Steam changes
 
-The `Set-CS2SteamLaunchOptions` helper runs only after `Install-AtCfg` returns a successful installation status. Steam launch options are *per local Steam account*, stored in `Steam/userdata/<Steam3-account-id>/config/localconfig.vdf` under `UserLocalConfigStore/Software/Valve/Steam/apps/730/LaunchOptions`. The launcher obtains the active account ID from the current-user Steam `ActiveProcess/ActiveUser` registry value, or uses the single-account fallback. It **refuses to guess** when multiple accounts are present without a reliable active match.
+In release 2026.10.13.9, the old `Set-CS2SteamLaunchOptions`, `Update-CS2LaunchOptionsVdfText`, and `Get-ActiveCS2SteamConfigPath` functions were **removed**. Applying a profile (or using **Install CS2 fab.cfg**) never writes `Steam/userdata/<account-id>/config/localconfig.vdf` or restarts Steam.
 
-`Update-CS2LaunchOptionsVdfText` parses quoted tokens and braces, replaces a previous `+exec` launch argument, retains unrelated launch flags and other game sections, and can add the CS2 `LaunchOptions` field or game-730 section when the containing Steam apps section exists. A separate dry-run regression test validates this against in-memory VDF fixtures.
+`New-Tile` creates a smaller main Apply button and an adjacent green **Play + Exec** button for each of the five profiles, with the original editor button beneath them. The Play callback captures `$selectedProfile` with `.GetNewClosure()` and calls `Start-CS2WithProfileCfg`.
 
-Steam caches/re-saves this file: if it is running and an edit is required, a WinForms Yes/No dialog requests permission to perform Steam's normal `-shutdown` and restart. If CS2 is running, the account is ambiguous, Steam refuses to close, or the user declines, it logs the manual `+exec <filename>.cfg` option instead. When writing, a timestamped `.cafe-backup-*` copy is saved beside `localconfig.vdf`; the edited file is read back for verification. Steam is restarted when previously running and consented to shutdown. This is a local Steam preference and does not sync to GitHub, and it does not launch CS2 by itself.
+**Play + Exec execution flow:**
+
+1. If CS2 is already running, do not try to inject launch arguments into the game. Show the manual developer-console command `exec <profile>.cfg` or ask the user to relaunch CS2.
+2. `Refresh-ProfileFromGitHub` (unless unsynced local edits), install the latest selected CFG with `Install-AtCfg -Silent`, including optional local-only sensitivity override.
+3. If installation fails, do not start the game.
+4. Use `Get-SteamExecutable` and `Get-CS2SteamLaunchArguments` (validated CFG filename) to call `Start-Process -FilePath <steam.exe> -ArgumentList @('-applaunch','730','+exec','<profile>.cfg')`.
+5. Log that this is a **one-time game launch request**. It does not persist a new launch option and does not apply mouse/NVIDIA settings; those belong to the original profile Apply button.
+
+**Migration warning:** Some PCs still have `+exec old.cfg` in saved Steam launch options from older CafeLauncher versions. This release deliberately does not alter that field; users should remove obsolete saved `+exec` flags once in Steam → CS2 → Properties → General → Launch Options to prevent duplicate/conflicting CFG execution.
 
 ## Windows, NVIDIA and PC detection
 
@@ -172,10 +177,10 @@ powershell.exe -NoProfile -File .\tools\Test-ProfileSave.ps1
 powershell.exe -NoProfile -File .\tools\Test-SteamLaunchOptions.ps1
 ```
 
-- [CI workflow](./.github/workflows/cafe-syntax.yml) runs tests for relevant changes on push to `main` and on pull requests. The syntax test checks CRLF, marker, release metadata, parser, and invalid-variable self-test; the save test checks captured callback state and JSON round-tripping.
+- [CI workflow](./.github/workflows/cafe-syntax.yml) runs tests for relevant changes on push to `main` and on pull requests. The syntax test checks CRLF, marker, release metadata, parser, and invalid-variable self-test; the save test checks captured callback state and JSON round-tripping; the Steam test uses mocked launches to ensure the correct one-time +exec for each profile and no persistent VDF writer.
 - For a new launcher release: preserve the `# POWERSHELL_GUI` header contract; keep BAT CRLF; bump `CAFE_RELEASE`; run both tests; check GitHub Actions; do an authorized live Windows smoke test (GUI launch, local save, optional token sync on your own PC, CFG install, mouse/display/NVIDIA); then distribute.
 - CI tests are not proof of runtime GPU, FACEIT, login, game launch, network, WinForms, or administrator behavior. Required CI enforcement needs branch protection/rules configured separately.
 
 ## Boundaries and future work
 
-Not yet implemented: automatic CS2 game startup, readiness gating for Steam/FACEIT AC, automatic Github CFG *writeback*, fully controlling NVIDIA's remaining manual GUI options, preserving Deep Freeze local changes, or guaranteed warning-free execution of downloaded BAT files. Keep existing five profiles, offline fallbacks, optional app launch, explicit update consent, no token persistence, and recoverable backups when evolving the code.
+Not yet implemented: automatic CS2 startup when pressing the original Apply button, readiness gating for Steam/FACEIT AC, automatic Github CFG *writeback*, fully controlling NVIDIA's remaining manual GUI options, preserving Deep Freeze local changes, or guaranteed warning-free execution of downloaded BAT files. Keep existing five profiles, offline fallbacks, optional app launch, explicit update consent, no token persistence, and recoverable backups when evolving the code.
