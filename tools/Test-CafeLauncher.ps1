@@ -56,6 +56,28 @@ if (@($parseErrors).Count -gt 0) {
     throw ('PowerShell syntax check failed: {0} error(s). First error at cafe.bat line {1}, column {2}: {3}; text: {4}' -f @($parseErrors).Count, ($marker + 1 + $parseErrors[0].Extent.StartLineNumber), $parseErrors[0].Extent.StartColumnNumber, $parseErrors[0].Message, $parseErrors[0].Extent.Text)
 }
 
+# Regression: legacy main-menu shortcut tiles must remain commented out, but
+# profile workflows and their underlying functions stay available.
+foreach($tile in @('Apply NVIDIA Settings','Install CS2 fab.cfg')){
+    $escaped=[regex]::Escape($tile)
+    if($psSource -notmatch ('(?m)^# New-Tile "'+$escaped+'" \d+')){
+        throw ('Legacy main-menu tile must be commented out: '+$tile)
+    }
+    if($psSource -match ('(?m)^[ \t]*New-Tile "'+$escaped+'" \d+')){
+        throw ('Legacy main-menu tile was inadvertently re-enabled: '+$tile)
+    }
+}
+if($psSource -notmatch '(?m)^#\s+\[void\]\(Install-AtCfg.*-CfgName ''fab\.cfg''' -or
+   $psSource -notmatch '(?m)^# \} -Primary'){
+    throw 'All lines of the former Install CS2 fab.cfg shortcut must be commented out.'
+}
+if($psSource -notmatch 'function Apply-NvidiaGamingSettings' -or
+   $psSource -notmatch 'function Install-AtCfg' -or
+   $psSource -notmatch 'Install-AtCfg -Silent -CfgName \$profileCfgName' -or
+   $psSource -notmatch 'Apply-NvidiaGamingSettings -Width'){
+    throw 'Profile-level NVIDIA and CS2 CFG functions must remain accessible.'
+}
+
 # Sanity check: this test must reject the precise interpolation bug that broke
 # the October 13 launcher: "$name:" without braces around the variable name.
 $badExample = 'throw "Cannot save $name: exporter returned nothing"'

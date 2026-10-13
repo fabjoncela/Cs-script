@@ -4,7 +4,7 @@ start "" powershell.exe -NoProfile -ExecutionPolicy Bypass -STA -WindowStyle Hid
 exit /b
 
 # POWERSHELL_GUI
-# CAFE_RELEASE=2026.10.13.19
+# CAFE_RELEASE=2026.10.13.20
 
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
@@ -3149,10 +3149,12 @@ New-Tile "OliMode" 10 { Invoke-GamingProfile -ProfileName 'OliMode' } -Primary -
 
 New-Tile "Mouse Pointer Options" 11 { Open-MousePointerOptions }
 New-Tile "NVIDIA Control Panel" 12 { Open-NvidiaControlPanel }
-New-Tile "Apply NVIDIA Settings" 13 { Apply-NvidiaGamingSettings } -Primary
-New-Tile "Install CS2 fab.cfg" 14 {
-    [void](Install-AtCfg -CfgName 'fab.cfg' -DownloadUrl $script:FabCfgCloudUrl -CloudPreferred)
-} -Primary
+# Legacy FabMode-only shortcuts are disabled. Keep these definitions for possible
+# re-enable later; regular profiles can still apply NVIDIA settings and install CFGs.
+# New-Tile "Apply NVIDIA Settings" 13 { Apply-NvidiaGamingSettings } -Primary
+# New-Tile "Install CS2 fab.cfg" 14 {
+#     [void](Install-AtCfg -CfgName 'fab.cfg' -DownloadUrl $script:FabCfgCloudUrl -CloudPreferred)
+# } -Primary
 New-Tile "Detect PC" 15 { Show-PCDiagnostics }
 New-Tile "Check for Updates" 16 { Check-CafeLauncherUpdates -Manual }
 New-Tile "Exit" 17 { $form.Close() }

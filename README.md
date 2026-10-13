@@ -92,6 +92,8 @@ On the next ArliMode run with internet access, CafeLauncher fetches the latest p
 
 ## Additional features
 
+**Main-menu cleanup (v2026.10.13.20):** The legacy **Apply NVIDIA Settings** and **Install CS2 fab.cfg** shortcut buttons are commented out and hidden. Their code is retained. Profile buttons still run their configured NVIDIA actions (when enabled) and install the matching CS2 CFG; **NVIDIA Control Panel**, **Apply Graphics**, and **Play + Exec** are unchanged.
+
 - **Display fallback:** if exact width/height/Hz is not advertised, choose the highest advertised Hz at the preferred resolution; otherwise consider the current resolution. The launcher tests the candidate and logs whether it applied.
 - **NVIDIA:** request Digital Vibrance, driver performance/G-SYNC-related values, and GPU full-screen scaling. PhysX GPU selection, scaling override checkbox, and confirmation of NVIDIA GUI state may still need manual action.
 - **Detected apps:** Steam and libraries, CS2 (app 730) CFG folder, FACEIT AC, G HUB, Chrome, NVIDIA Control Panel, GPUs, monitor modes, mouse settings.
