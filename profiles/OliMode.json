@@ -1,14 +1,15 @@
 {
-    "SchemaVersion":  1,
-    "ProfileName":  "OliMode",
-    "PointerSpeed":  10,
-    "DisableAcceleration":  true,
-    "ApplyNvidia":  true,
-    "Width":  1920,
-    "Height":  1080,
-    "RefreshHz":  300,
-    "Vibrance":  75,
-    "CS2Sensitivity":  "",
-    "CfgDownloadUrl":  "https://raw.githubusercontent.com/fabjoncela/Cs-script/main/oli.cfg",
-    "LaunchApps":  true
+  "SchemaVersion": 1,
+  "ProfileName": "OliMode",
+  "PointerSpeed": 10,
+  "DisableAcceleration": true,
+  "ApplyNvidia": true,
+  "Width": 1920,
+  "Height": 1080,
+  "RefreshHz": 300,
+  "Vibrance": 75,
+  "CS2Sensitivity": "",
+  "CfgDownloadUrl": "https://raw.githubusercontent.com/fabjoncela/Cs-script/main/oli.cfg",
+  "LaunchApps": true,
+  "LogitechDPI": 800
 }
