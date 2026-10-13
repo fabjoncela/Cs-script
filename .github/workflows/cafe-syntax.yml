@@ -10,6 +10,7 @@ on:
       - 'tools/Test-Graphics.ps1'
       - 'tools/Test-NvidiaCompatibility.ps1'
       - 'tools/Test-SuperlightDevice.ps1'
+      - 'tools/Test-StepResults.ps1'
       - 'tools/Test-LogitechDPI.ps1'
       - 'graphics/**'
       - '.github/workflows/cafe-syntax.yml'
@@ -23,6 +24,7 @@ on:
       - 'tools/Test-Graphics.ps1'
       - 'tools/Test-NvidiaCompatibility.ps1'
       - 'tools/Test-SuperlightDevice.ps1'
+      - 'tools/Test-StepResults.ps1'
       - 'graphics/**'
       - '.github/workflows/cafe-syntax.yml'
   workflow_dispatch:
@@ -66,3 +68,7 @@ jobs:
         shell: powershell
         run: |
           & "$env:GITHUB_WORKSPACE\tools\Test-SuperlightDevice.ps1"
+      - name: Test step status tracker and async results
+        shell: powershell
+        run: |
+          & "$env:GITHUB_WORKSPACE\tools\Test-StepResults.ps1"

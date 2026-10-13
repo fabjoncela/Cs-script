@@ -1,0 +1,43 @@
+Set-StrictMode -Version Latest
+$ErrorActionPreference='Stop'
+$lines=[IO.File]::ReadAllLines((Join-Path (Split-Path -Parent $PSScriptRoot) 'cafe.bat'))
+$index=[Array]::IndexOf($lines,'# POWERSHELL_GUI')
+$body=[string]::Join([Environment]::NewLine,[string[]]$lines[($index+1)..($lines.Length-1)])
+$t=$null;$errors=$null
+$ast=[Management.Automation.Language.Parser]::ParseInput($body,[ref]$t,[ref]$errors)
+if(@($errors).Count){throw ('Syntax error: '+$errors[0].Message)}
+$functions=@{}
+foreach($f in $ast.FindAll({param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst]},$true)){$functions[$f.Name]=$f.Extent.Text}
+foreach($n in @('Set-StepResult','Start-StepScope','Complete-StepScope','Write-RunSummary','Invoke-GamingProfile','Invoke-GraphicsOnly')){
+    if(-not $functions.ContainsKey($n)){throw ('Missing '+$n)}
+}
+$script:StepResults=New-Object 'System.Collections.Generic.List[object]'
+$script:StepScope=$null
+$script:StepScopeError=$false
+$script:StepScopeWarning=$false
+$script:messages=@()
+function Write-Log {param([string]$Message,[string]$Level='INFO')
+    $script:messages+=("[$Level] "+$Message)
+    if($script:StepScope -and $Level -eq 'ERROR'){$script:StepScopeError=$true}
+    if($script:StepScope -and $Level -eq 'WARN'){$script:StepScopeWarning=$true}
+}
+foreach($n in @('Set-StepResult','Start-StepScope','Complete-StepScope','Write-RunSummary')){Invoke-Expression $functions[$n]}
+Start-StepScope -Run FabMode -Step Mouse
+Complete-StepScope
+Start-StepScope -Run FabMode -Step NVIDIA
+Write-Log 'unsupported mode' WARN
+Complete-StepScope
+Start-StepScope -Run FabMode -Step Config
+Write-Log 'file write failed' ERROR
+Complete-StepScope
+Set-StepResult -Run FabMode -Step DPI -Status PENDING
+Set-StepResult -Run FabMode -Step DPI -Status SUCCESS
+Write-RunSummary -Run FabMode
+$statuses=@{}
+foreach($entry in $script:StepResults){$statuses[$entry.Step]=$entry.Status}
+if($statuses.Mouse -ne 'SUCCESS' -or $statuses.NVIDIA -ne 'SKIPPED' -or $statuses.Config -ne 'FAILED' -or $statuses.DPI -ne 'SUCCESS'){throw 'Incorrect status'}
+if($script:StepResults.Count -ne 4){throw 'Pending result not replaced'}
+if(($script:messages -join ' ') -notmatch '1 FAILED'){throw 'Summary missing failure'}
+if($functions['Invoke-GamingProfile'] -notmatch 'Start-StepScope' -or $functions['Invoke-GamingProfile'] -notmatch 'PENDING'){throw 'Profile not instrumented'}
+if($functions['Invoke-GraphicsOnly'] -notmatch 'Complete-StepScope'){throw 'Graphics not instrumented'}
+Write-Host 'PASS: status tracking, errors, skips, summary, pending resolution, profile and graphics instrumentation.'
