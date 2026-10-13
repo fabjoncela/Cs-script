@@ -1,6 +1,6 @@
 # CafeLauncher — Technical Context
 
-Maintainer / coding-assistant reference for [CafeLauncher](./README.md). This document reflects the `main` implementation of `cafe.bat` at **2026.10.13.9**. Read the actual source before editing; code is the ultimate source of truth.
+Maintainer / coding-assistant reference for [CafeLauncher](./README.md). This document reflects the `main` implementation of `cafe.bat` at **2026.10.13.10**. Read the actual source before editing; code is the ultimate source of truth.
 
 ## Repository structure
 
@@ -144,6 +144,24 @@ In release 2026.10.13.9, the old `Set-CS2SteamLaunchOptions`, `Update-CS2LaunchO
 
 **Migration warning:** Some PCs still have `+exec old.cfg` in saved Steam launch options from older CafeLauncher versions. This release deliberately does not alter that field; users should remove obsolete saved `+exec` flags once in Steam → CS2 → Properties → General → Launch Options to prevent duplicate/conflicting CFG execution.
 
+## Independent CS2 graphics architecture
+
+The GUI's `New-Tile` creates an independent third `Apply Graphics` button beside each mode and `Play + Exec`. It calls `Invoke-GraphicsOnly -ModeName <name>`. No invocation exists in `Invoke-GamingProfile`, `Start-CS2WithProfileCfg`, `Launch-All`, the existing profile editor, or startup. Selecting a mode never changes CS2 video graphics.
+
+Each mode has a **separate** public `graphics/<ModeName>.json` with `SchemaVersion=1`, matching `ProfileName` and a `Settings` object. `null` = preserve that video setting. Initial Width/Height/RefreshHz/Fullscreen/AspectRatioMode values are null because different PCs have different display capabilities and no per-player graphics preferences were specified. These graphics files are not `profiles/<ModeName>.json` and are not affected by Save & Sync.
+
+`graphics/ApplyGraphics.ps1` implements video-file editing separately from `cafe.bat`. `Invoke-GraphicsOnly` downloads the module only on click, checks its exact Git blob SHA and PowerShell parse result, caches it at `%LOCALAPPDATA%\CafeLauncher\graphics-module.ps1`, checks the cached hash again, then dot-sources it. When editing this module, **update the pinned module Git blob SHA in cafe.bat** and bump the BAT release marker. Hash pinning is not a digital signature.
+
+The graphics-only module:
+1. Fetches `graphics/<ModeName>.json` from GitHub (or validated offline cache), validating the schema and an allowlist of numeric graphics properties.
+2. Reads the active Steam account ID from `HKCU:\Software\Valve\Steam\ActiveProcess\ActiveUser`, resolves the Steam executable dynamically, and targets only `<SteamRoot>\userdata\<ActiveUser>\730\local\cfg\cs2_video.txt`. Missing paths or account ID abort without writes.
+3. Refuses to edit while `cs2.exe` is running, including a second check immediately before replacement.
+4. Verifies a recognizable `"video.cfg"` file and updates **only existing recognized key/value lines** while preserving encoding/BOM, line endings, unrelated fields, and hardware-specific `VendorID` / `DeviceID` / monitor keys.
+5. Handles resolution and refresh as an optional pair via read-only `FabDisplayNative.IsAdvertisedMode`. Unsupported modes are skipped while compatible advanced options may still be applied. Optional NVIDIA Reflex is skipped on systems without a detected NVIDIA GPU.
+6. Backs up the original video file to `%LOCALAPPDATA%\CafeLauncher\graphics-backups\<ActiveUser>`, stages a replacement, atomically replaces the target where Windows allows, verifies the result, and attempts recovery using the backup on errors.
+
+`tools/Test-Graphics.ps1` exercises graphics VDF changes against in-memory fixtures (including known hardware-specific fields), validates the five independent JSON presets, checks enum/range validation, and ensures the normal profile code does not call graphics. CI validates these on Windows PowerShell 5.1; a final end-to-end test on a Windows PC with Steam + CS2 remains necessary.
+
 ## Windows, NVIDIA and PC detection
 
 - Mouse: `Apply-ProfileMouse` writes `HKCU:\Control Panel\Mouse` values and requests live pointer speed/acceleration via Win32 `SystemParametersInfo`. It logs API and registry verification.
@@ -175,6 +193,7 @@ In release 2026.10.13.9, the old `Set-CS2SteamLaunchOptions`, `Update-CS2LaunchO
 powershell.exe -NoProfile -File .\tools\Test-CafeLauncher.ps1
 powershell.exe -NoProfile -File .\tools\Test-ProfileSave.ps1
 powershell.exe -NoProfile -File .\tools\Test-SteamLaunchOptions.ps1
+powershell.exe -NoProfile -File .\tools\Test-Graphics.ps1
 ```
 
 - [CI workflow](./.github/workflows/cafe-syntax.yml) runs tests for relevant changes on push to `main` and on pull requests. The syntax test checks CRLF, marker, release metadata, parser, and invalid-variable self-test; the save test checks captured callback state and JSON round-tripping; the Steam test uses mocked launches to ensure the correct one-time +exec for each profile and no persistent VDF writer.

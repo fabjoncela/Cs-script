@@ -7,6 +7,8 @@ on:
       - 'tools/Test-CafeLauncher.ps1'
       - 'tools/Test-ProfileSave.ps1'
       - 'tools/Test-SteamLaunchOptions.ps1'
+      - 'tools/Test-Graphics.ps1'
+      - 'graphics/**'
       - '.github/workflows/cafe-syntax.yml'
   push:
     branches: [main]
@@ -15,6 +17,8 @@ on:
       - 'tools/Test-CafeLauncher.ps1'
       - 'tools/Test-ProfileSave.ps1'
       - 'tools/Test-SteamLaunchOptions.ps1'
+      - 'tools/Test-Graphics.ps1'
+      - 'graphics/**'
       - '.github/workflows/cafe-syntax.yml'
   workflow_dispatch:
 
@@ -41,3 +45,7 @@ jobs:
         shell: powershell
         run: |
           & "$env:GITHUB_WORKSPACE\tools\Test-SteamLaunchOptions.ps1"
+      - name: Test standalone CS2 graphics presets and editor
+        shell: powershell
+        run: |
+          & "$env:GITHUB_WORKSPACE\tools\Test-Graphics.ps1"

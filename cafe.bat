@@ -4,7 +4,7 @@ start "" powershell.exe -NoProfile -ExecutionPolicy Bypass -STA -WindowStyle Hid
 exit /b
 
 # POWERSHELL_GUI
-# CAFE_RELEASE=2026.10.13.9
+# CAFE_RELEASE=2026.10.13.10
 
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
@@ -374,6 +374,20 @@ public static class FabDisplayNative {
             case -6: return "DISP_CHANGE_BADDUALVIEW";
             default: return "code " + code;
         }
+    }
+
+    // Read-only validation; does not change Windows display settings.
+    public static bool IsAdvertisedMode(int w, int h, int hz) {
+        const string device = @"\\.\DISPLAY1";
+        if(w < 640 || h < 480 || hz < 0) return false;
+        for(int i=0;i<4096;i++){
+            DEVMODE dm=NewMode();
+            if(!EnumDisplaySettings(device,i,ref dm)) break;
+            if(dm.dmBitsPerPel < 24 || (dm.dmDisplayFlags & 2) != 0) continue;
+            if(dm.dmPelsWidth == w && dm.dmPelsHeight == h &&
+               (hz == 0 || dm.dmDisplayFrequency == hz)) return true;
+        }
+        return false;
     }
 
     // List of driver-advertised modes for the main Windows display (DISPLAY1).
@@ -2560,6 +2574,37 @@ function Start-CS2WithProfileCfg {
     Write-Log "$ProfileName requested CS2 launch via Steam: -applaunch 730 +exec $cfgName. Persistent Steam launch options unchanged."
 }
 
+# Independent CS2 graphics module; loaded ONLY when Apply Graphics is clicked.
+# Strict hash pin prevents executing unreviewed modified remote module code.
+function Invoke-GraphicsOnly {
+    param([Parameter(Mandatory=$true)][string]$ModeName)
+    $expected='1a9b183b01aaf2758cbe14400e51f0835143a7c8'
+    $source='https://raw.githubusercontent.com/fabjoncela/Cs-script/main/graphics/ApplyGraphics.ps1'
+    $cache=Join-Path $env:LOCALAPPDATA 'CafeLauncher\graphics-module.ps1'
+    $parent=Split-Path -Parent $cache
+    if(-not (Test-Path -LiteralPath $parent)){[void](New-Item -Path $parent -ItemType Directory -Force)}
+    $temp=Join-Path $env:TEMP ('CafeLauncher-graphics-module-'+[guid]::NewGuid().ToString('N')+'.ps1')
+    try{
+        [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+        Invoke-WebRequest -Uri $source -OutFile $temp -UseBasicParsing -TimeoutSec 12 -ErrorAction Stop
+        $bytes=[IO.File]::ReadAllBytes($temp)
+        if((Get-GitBlobSha -Bytes $bytes) -ne $expected){throw 'Cloud graphics module SHA does not match the reviewed launcher version.'}
+        $lines=[IO.File]::ReadAllLines($temp)
+        $tokens=$null;$errors=$null
+        [void][System.Management.Automation.Language.Parser]::ParseFile($temp,[ref]$tokens,[ref]$errors)
+        if(@($errors).Count){throw 'Downloaded graphics module has invalid PowerShell syntax.'}
+        Copy-Item -LiteralPath $temp -Destination $cache -Force -ErrorAction Stop
+    }catch{
+        Write-Log ('Could not download graphics module: '+$_.Exception.Message) 'WARN'
+    }finally{Remove-Item -LiteralPath $temp -Force -ErrorAction SilentlyContinue}
+    if(-not (Test-Path -LiteralPath $cache -PathType Leaf)){throw 'Graphics module unavailable. Connect to GitHub and retry.'}
+    if((Get-GitBlobSha -Bytes ([IO.File]::ReadAllBytes($cache))) -ne $expected){
+        throw 'Cached graphics module failed signature/hash validation. Graphics not applied.'
+    }
+    . $cache
+    Apply-CS2ModeGraphics -ModeName $ModeName
+}
+
 # Backward-compatible entry point.
 function Invoke-FabModeFull { Invoke-GamingProfile -ProfileName 'FabMode' }
 
@@ -2616,7 +2661,7 @@ function New-Tile {
     $button.Location = New-Object System.Drawing.Point($x,$y)
     if ($EditProfile) {
         # Split the profile tile into Apply and Play + Exec buttons.
-        $button.Size = New-Object System.Drawing.Size(136,46)
+        $button.Size = New-Object System.Drawing.Size(88,46)
     } else {
         $button.Size = New-Object System.Drawing.Size(235,70)
     }
@@ -2628,7 +2673,7 @@ function New-Tile {
         $button.BackColor = $PANEL
     }
     $button.ForeColor = $WHITE
-    $button.Font = New-Object System.Drawing.Font("Segoe UI",10,[System.Drawing.FontStyle]::Bold)
+    $button.Font = New-Object System.Drawing.Font("Segoe UI",$(if($EditProfile){9}else{10}),[System.Drawing.FontStyle]::Bold)
     $button.Cursor = [System.Windows.Forms.Cursors]::Hand
     $actionToRun = $Action
     $button.Add_Click({
@@ -2648,8 +2693,8 @@ function New-Tile {
         $selectedProfile = $EditProfile
         $play = New-Object System.Windows.Forms.Button
         $play.Text = 'Play + Exec'
-        $play.Location = New-Object System.Drawing.Point(($x + 141), $y)
-        $play.Size = New-Object System.Drawing.Size(94,46)
+        $play.Location = New-Object System.Drawing.Point(($x + 92), $y)
+        $play.Size = New-Object System.Drawing.Size(70,46)
         $play.FlatStyle = 'Flat'
         $play.FlatAppearance.BorderSize = 0
         $play.BackColor = [System.Drawing.Color]::FromArgb(38,132,102)
@@ -2668,6 +2713,29 @@ function New-Tile {
             }
         }.GetNewClosure())
         $form.Controls.Add($play)
+
+        # Independent third button: no graphics writes from the main mode,
+        # Play + Exec, Launch All, or background startup routines.
+        $graphics = New-Object System.Windows.Forms.Button
+        $graphics.Text = 'Apply Graphics'
+        $graphics.Location = New-Object System.Drawing.Point(($x + 166), $y)
+        $graphics.Size = New-Object System.Drawing.Size(69,46)
+        $graphics.FlatStyle = 'Flat'
+        $graphics.FlatAppearance.BorderSize = 0
+        $graphics.BackColor = [System.Drawing.Color]::FromArgb(77,72,125)
+        $graphics.ForeColor = $WHITE
+        $graphics.Font = New-Object System.Drawing.Font('Segoe UI',7,[System.Drawing.FontStyle]::Bold)
+        $graphics.Cursor = [System.Windows.Forms.Cursors]::Hand
+        $graphics.Add_Click({
+            try { Invoke-GraphicsOnly -ModeName $selectedProfile }
+            catch {
+                Write-Log ('Graphics button failed for '+$selectedProfile+': '+$_.Exception.Message) 'ERROR'
+                [void][System.Windows.Forms.MessageBox]::Show(
+                    ('Unable to apply '+$selectedProfile+' graphics: '+$_.Exception.Message),
+                    'CS2 Graphics','OK','Warning')
+            }
+        }.GetNewClosure())
+        $form.Controls.Add($graphics)
 
         $edit = New-Object System.Windows.Forms.Button
         $edit.Text = "Edit $EditProfile settings"
