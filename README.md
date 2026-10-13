@@ -141,3 +141,7 @@ Unsupported driver functions are handled independently: the launcher skips an un
 
 For live DPI, CafeLauncher runs `logihub.exe --json list`, selects the detected `pro_x_wireless_mouse` (PRO X SUPERLIGHT 1) or `pro_x_2_wireless_mouse` (PRO X SUPERLIGHT 2), and passes that device's specific `--device` index to both `dpi set` and `dpi get`. If no supported mouse is detected or more than one supported mouse is connected, CafeLauncher logs a warning/error and does not change DPI. This prevents silently changing the wrong player's mouse. The same device-targeting guard has been added to the dormant onboard implementation, but the onboard GUI button remains commented out.
 
+
+## Powered-off Superlight receiver handling (v2026.10.13.16)
+
+CafeLauncher uses better-logihub's HID++ discovery status instead of treating a plugged-in receiver as proof that a mouse is on. Its `--json list` reports responsive mice with status `connected` and unavailable paired mice as `unreachable: ...`. Only `connected` PRO X SUPERLIGHT 1/2 mice are eligible for DPI actions. For example, with Superlight 1 turned off and its receiver left inserted, an active Superlight 2 can be selected and set to its saved DPI. If no supported mouse responds, or two supported mice respond, live DPI is skipped with a logged reason. Discovery and command execution may still race if the mouse powers off after probing; such failures are logged. Onboard UI remains disabled.
