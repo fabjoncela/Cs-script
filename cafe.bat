@@ -1715,6 +1715,4128 @@ function Start-DetectedSteam {
     } else { Write-Log 'Steam executable not found.' 'WARN' }
 }
 
+
+# Manipulate only the active Steam account's CS2 LaunchOptions; no other games.
+function Update-CS2LaunchOptionsVdfText {
+    param([string]$Content,[string]$CfgName)
+    if ($CfgName -notmatch '^[a-zA-Z0-9_-]+\.cfg
+    $lines = New-Object 'System.Collections.Generic.List[string]'
+    $lines.Add("Machine: $env:COMPUTERNAME")
+    try {
+        $gpus = @(Get-CimInstance -ClassName Win32_VideoController -ErrorAction Stop |
+            Where-Object { $_.Name } | Select-Object -ExpandProperty Name)
+        $lines.Add('Graphics: ' + ($(if ($gpus.Count) { $gpus -join '; ' } else { 'Unavailable' })))
+    } catch { $lines.Add('Graphics: Could not query GPU details') }
+    try {
+        if ('FabDisplayNative' -as [type]) {
+            $lines.Add([FabDisplayNative]::GetDisplayModesReport())
+        } else { $lines.Add('Display modes: driver helper unavailable') }
+        foreach ($screen in [System.Windows.Forms.Screen]::AllScreens) {
+            $lines.Add("Monitor $($screen.DeviceName): $($screen.Bounds.Width)x$($screen.Bounds.Height), primary=$($screen.Primary)")
+        }
+    } catch { $lines.Add('Display inventory could not be read') }
+    try {
+        $ptr = [Runtime.InteropServices.Marshal]::AllocHGlobal(4)
+        try {
+            $ok = [FabMouseNative]::SystemParametersInfo(0x0070,0,$ptr,0)
+            if ($ok) { $lines.Add('Active Windows pointer speed: ' + [Runtime.InteropServices.Marshal]::ReadInt32($ptr)) }
+            else { $lines.Add('Pointer speed API read failed') }
+        } finally { [Runtime.InteropServices.Marshal]::FreeHGlobal($ptr) }
+        $m = Get-ItemProperty -Path 'HKCU:\Control Panel\Mouse' -ErrorAction Stop
+        $lines.Add("Mouse registry: speed=$($m.MouseSensitivity), acceleration=$($m.MouseSpeed), thresholds=$($m.MouseThreshold1)/$($m.MouseThreshold2)")
+    } catch { $lines.Add('Mouse settings could not be read') }
+    $steam = Get-SteamExecutable
+    $lines.Add('Steam: ' + $(if ($steam) { $steam } else { 'not detected' }))
+    $roots = @(Get-SteamLibraryRoots)
+    $lines.Add('Steam libraries: ' + $(if ($roots.Count) { $roots -join '; ' } else { 'not detected' }))
+    $cs2 = Find-CS2ConfigFolder -NoPrompt
+    $lines.Add('CS2 config: ' + $(if ($cs2) { $cs2 } else { 'not detected' }))
+    $faceit = Find-App -Paths @("$env:ProgramFiles\FACEIT AC\faceitclient.exe", "${env:ProgramFiles(x86)}\FACEIT AC\faceitclient.exe")
+    $lines.Add('FACEIT AC: ' + $(if ($faceit) { $faceit } else { 'not detected' }))
+    $ghub = Find-App -Paths @("$env:ProgramFiles\LGHUB\lghub.exe", "$env:ProgramFiles\LGHUB\lghub_system_tray.exe")
+    $lines.Add('Logitech G HUB: ' + $(if ($ghub) { $ghub } else { 'not detected' }))
+    $chrome = Get-ChromePath
+    $lines.Add('Chrome: ' + $(if ($chrome) { $chrome } else { 'not detected' }))
+    try {
+        $nvPanel = Find-App -Paths @("$env:ProgramFiles\NVIDIA Corporation\Control Panel Client\nvcplui.exe", "${env:ProgramFiles(x86)}\NVIDIA Corporation\Control Panel Client\nvcplui.exe")
+        if (-not $nvPanel) {
+            $storeApp = Get-StartApps -ErrorAction Stop | Where-Object { $_.Name -match '^NVIDIA Control Panel$' } | Select-Object -First 1
+            if ($storeApp) { $nvPanel='Installed Store app' }
+        }
+        $lines.Add('NVIDIA Control Panel: ' + $(if ($nvPanel) { $nvPanel } else { 'not detected' }))
+    } catch { $lines.Add('NVIDIA Control Panel: not detected') }
+    return ($lines -join [Environment]::NewLine)
+}
+
+function Show-PCDiagnostics {
+    Write-Log 'PC detection started.'
+    try {
+        $summary = Get-PCDiagnostics
+        foreach ($line in ($summary -split '\r?\n')) { if ($line) { Write-Log ('PC: ' + $line) } }
+        $formDialog = New-Object System.Windows.Forms.Form
+        $formDialog.Text='PC Detection - CafeLauncher'
+        $formDialog.ClientSize=[System.Drawing.Size]::new(755,445)
+        $formDialog.StartPosition='CenterParent'
+        $formDialog.BackColor=$BG
+        $formDialog.ForeColor=$WHITE
+        $formDialog.Font=New-Object System.Drawing.Font('Consolas',10)
+        $reportBox = New-Object System.Windows.Forms.TextBox
+        $reportBox.Location=[System.Drawing.Point]::new(12,12)
+        $reportBox.Size=[System.Drawing.Size]::new(731,385)
+        $reportBox.Multiline=$true
+        $reportBox.ReadOnly=$true
+        $reportBox.ScrollBars='Both'
+        $reportBox.WordWrap=$false
+        $reportBox.BackColor=$PANEL
+        $reportBox.ForeColor=$WHITE
+        $reportBox.Text=$summary
+        $formDialog.Controls.Add($reportBox)
+        $close = New-Object System.Windows.Forms.Button
+        $close.Text='Close'
+        $close.Location=[System.Drawing.Point]::new(633,404)
+        $close.Size=[System.Drawing.Size]::new(110,30)
+        $close.Add_Click({ $formDialog.Close() })
+        $formDialog.Controls.Add($close)
+        [void]$formDialog.ShowDialog($form)
+        $formDialog.Dispose()
+    } catch { Write-Log "PC detection failed: $($_.Exception.Message)" 'ERROR' }
+}
+
+# ============================================================== 
+# Public GitHub updater: no token needed, never auto-runs new code.
+# Compares local content to the main-branch Git blob SHA, verifies download.
+# ============================================================== 
+function Get-GitBlobSha {
+    param([byte[]]$Bytes)
+    $head=[Text.Encoding]::ASCII.GetBytes('blob ' + $Bytes.Length + [char]0)
+    $blob=New-Object byte[] ($head.Length + $Bytes.Length)
+    [Array]::Copy($head,0,$blob,0,$head.Length)
+    [Array]::Copy($Bytes,0,$blob,$head.Length,$Bytes.Length)
+    $sha=[Security.Cryptography.SHA1]::Create()
+    try { return ([BitConverter]::ToString($sha.ComputeHash($blob))).Replace('-','').ToLowerInvariant() }
+    finally { $sha.Dispose() }
+}
+
+function Test-LauncherIsCurrent {
+    param([string]$CurrentPath,[string]$RemoteBlobSha)
+    if (-not (Test-Path -LiteralPath $CurrentPath -PathType Leaf)) { return $false }
+    $bytes=[IO.File]::ReadAllBytes($CurrentPath)
+    if ((Get-GitBlobSha -Bytes $bytes) -eq $RemoteBlobSha) { return $true }
+    # Chrome/Drive may preserve CRLF even when GitHub stores LF. Ignore just
+    # line-ending differences and an optional final newline for comparison.
+    $normalized=[Text.Encoding]::UTF8.GetString($bytes).Replace("`r`n","`n")
+    if ((Get-GitBlobSha -Bytes ([Text.Encoding]::UTF8.GetBytes($normalized))) -eq $RemoteBlobSha) { return $true }
+    $oneNewline=$normalized.TrimEnd("`n")
+    return (Get-GitBlobSha -Bytes ([Text.Encoding]::UTF8.GetBytes($oneNewline))) -eq $RemoteBlobSha
+}
+
+function Check-CafeLauncherUpdates {
+    param([switch]$Manual)
+    $source=$env:CAFE_SCRIPT
+    if ([string]::IsNullOrWhiteSpace($source)) {
+        if ($Manual) { Write-Log 'Current BAT path not available for updater.' 'WARN' }
+        return
+    }
+    try {
+        [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+        $uri="https://api.github.com/repos/fabjoncela/Cs-script/contents/cafe.bat?ref=main"
+        $remote=Invoke-RestMethod -Uri $uri -Headers @{'User-Agent'='CafeLauncher-Updater'; 'Accept'='application/vnd.github+json'} -TimeoutSec 8 -ErrorAction Stop
+        if ($remote.path -ne 'cafe.bat' -or $remote.sha -notmatch '^[a-fA-F0-9]{40}$' -or
+            [int64]$remote.size -lt 10000 -or [int64]$remote.size -gt 1000000) { throw 'Unexpected update metadata from GitHub.' }
+        # Ignore older/unversioned GitHub builds. A new release must increment
+        # its CAFE_RELEASE marker, rather than merely have different line endings.
+        if ($remote.encoding -ne 'base64' -or [string]::IsNullOrWhiteSpace($remote.content)) {
+            throw 'GitHub did not include update version metadata.'
+        }
+        $remoteText=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String(($remote.content -replace '\s','')))
+        $pattern='(?m)^# CAFE_RELEASE=(\d{4}\.\d{1,2}\.\d{1,2}\.\d+)\s*$'
+        $remoteMatch=[regex]::Match($remoteText,$pattern)
+        $localMatch=[regex]::Match([IO.File]::ReadAllText($source),$pattern)
+        if (-not $remoteMatch.Success) {
+            Write-Log 'GitHub main has no release marker (older launcher); skipping downgrade. Upload this new cafe.bat to main first.' 'WARN'
+            if ($Manual) { [System.Windows.Forms.MessageBox]::Show('Your current local build is newer than the unversioned GitHub launcher. Upload this BAT to GitHub main to activate self-updates.', 'Update Check', 'OK', 'Information') | Out-Null }
+            return
+        }
+        $remoteRelease=[version]::Parse($remoteMatch.Groups[1].Value)
+        $localRelease=if ($localMatch.Success) { [version]::Parse($localMatch.Groups[1].Value) } else { [version]'0.0.0.0' }
+        if ($remoteRelease -le $localRelease) {
+            Write-Log "CafeLauncher local release $localRelease is current; GitHub main release is $remoteRelease."
+            if ($Manual) { [System.Windows.Forms.MessageBox]::Show("CafeLauncher is current (local $localRelease; GitHub $remoteRelease).", 'Update Check', 'OK', 'Information') | Out-Null }
+            return
+        }
+        if (Test-LauncherIsCurrent -CurrentPath $source -RemoteBlobSha $remote.sha) {
+            Write-Log 'CafeLauncher is up to date with GitHub main.'
+            if ($Manual) { [System.Windows.Forms.MessageBox]::Show('CafeLauncher is already up to date.', 'Update Check', 'OK', 'Information') | Out-Null }
+            return
+        }
+        Write-Log 'A newer/different cafe.bat is available on GitHub main.' 'INFO'
+        $reply=[System.Windows.Forms.MessageBox]::Show(
+            "GitHub has a different CafeLauncher build.`n`nDownload and replace your local BAT?`n`nYour currently open launcher will keep running. Reopen it to use the update.`n`nNo GitHub login required.",
+            'CafeLauncher Update Available',
+            [System.Windows.Forms.MessageBoxButtons]::YesNo,
+            [System.Windows.Forms.MessageBoxIcon]::Question)
+        if ($reply -ne [System.Windows.Forms.DialogResult]::Yes) { Write-Log 'User skipped CafeLauncher update.'; return }
+        $temp=Join-Path $env:TEMP ("CafeLauncher-update-{0}.bat" -f [Guid]::NewGuid().ToString('N'))
+        try {
+            Invoke-WebRequest -Uri 'https://raw.githubusercontent.com/fabjoncela/Cs-script/main/cafe.bat' -OutFile $temp -UseBasicParsing -TimeoutSec 20 -ErrorAction Stop | Out-Null
+            $bytes=[IO.File]::ReadAllBytes($temp)
+            if ($bytes.Length -ne [int64]$remote.size -or
+                (Get-GitBlobSha -Bytes $bytes) -ne $remote.sha) { throw 'Downloaded BAT failed GitHub blob hash and size verification.' }
+            $text=[Text.Encoding]::UTF8.GetString($bytes)
+            if (-not $text.StartsWith('@echo off') -or -not $text.Contains('# POWERSHELL_GUI')) { throw 'Downloaded launcher structure check failed.' }
+            # Verify that the embedded PowerShell can be PARSED before installing it.
+            # In earlier releases, a correct GitHub hash was incorrectly treated as proof
+            # that the replacement could launch. A hash does not verify syntax.
+            $downloadLines=[IO.File]::ReadAllLines($temp)
+            $marker=[Array]::IndexOf($downloadLines,'# POWERSHELL_GUI')
+            if ($marker -lt 0 -or $marker -ge ($downloadLines.Length - 1)) { throw 'Update has no valid PowerShell section.' }
+            $downloadScript=($downloadLines[($marker+1)..($downloadLines.Length-1)] -join [Environment]::NewLine)
+            $parseTokens=$null
+            $parseErrors=$null
+            [void][System.Management.Automation.Language.Parser]::ParseInput($downloadScript,[ref]$parseTokens,[ref]$parseErrors)
+            if ($parseErrors.Count -gt 0) {
+                throw ('Refusing update with PowerShell syntax errors: ' + $parseErrors[0].ToString())
+            }
+            # Raw GitHub .bat content can use LF-only line endings. cmd.exe on Windows
+            # expects CRLF for reliable BAT interpretation. Verify original bytes above,
+            # then normalize the verified payload BEFORE placing it on disk.
+            $windowsText=$text.Replace("`r`n","`n").Replace("`r","`n").Replace("`n","`r`n")
+            [IO.File]::WriteAllText($temp,$windowsText,(New-Object System.Text.UTF8Encoding($false)))
+            $backupDir=Join-Path $env:LOCALAPPDATA 'CafeLauncher\backups'
+            if (-not (Test-Path -LiteralPath $backupDir)) { New-Item -ItemType Directory -Path $backupDir -Force -ErrorAction Stop | Out-Null }
+            $backup=Join-Path $backupDir ("cafe-before-update-{0}.bat" -f (Get-Date -Format 'yyyyMMdd-HHmmss'))
+            try {
+                # Stage beside the original and replace atomically when supported;
+                # this avoids leaving a partially overwritten BAT after a crash.
+                $staged=Join-Path (Split-Path -Parent $source) ('.CafeLauncher-update-' + [Guid]::NewGuid().ToString('N') + '.bat')
+                try {
+                    Copy-Item -LiteralPath $temp -Destination $staged -ErrorAction Stop
+                    try {
+                        [IO.File]::Replace($staged,$source,$backup)
+                    } catch {
+                        # File.Replace can be unavailable on network/FAT volumes.
+                        Copy-Item -LiteralPath $source -Destination $backup -ErrorAction Stop
+                        Copy-Item -LiteralPath $staged -Destination $source -Force -ErrorAction Stop
+                    }
+                } finally {
+                    Remove-Item -LiteralPath $staged -Force -ErrorAction SilentlyContinue
+                }
+                Write-Log "Update downloaded, syntax-checked, CRLF-normalized and installed at $source; backup: $backup"
+                [System.Windows.Forms.MessageBox]::Show("CafeLauncher updated successfully at:`n$source`n`nClose and reopen the BAT to use the latest version.", 'Update Installed', 'OK', 'Information') | Out-Null
+            } catch {
+                $dest=Join-Path $env:USERPROFILE 'Downloads\CafeLauncher_latest.bat'
+                Copy-Item -LiteralPath $temp -Destination $dest -Force -ErrorAction Stop
+                Write-Log "Current BAT could not be overwritten; saved verified update to $dest" 'WARN'
+                [System.Windows.Forms.MessageBox]::Show("Your original BAT could not be replaced (read-only/protected folder).`n`nA verified new copy was saved to:`n$dest`n`nOpen that copy next time.", 'Update Downloaded', 'OK', 'Warning') | Out-Null
+            }
+        } finally { Remove-Item -LiteralPath $temp -Force -ErrorAction SilentlyContinue }
+    } catch {
+        Write-Log "Update check/download failed; the existing launcher is unchanged where possible: $($_.Exception.Message)" 'WARN'
+        if ($Manual) { [System.Windows.Forms.MessageBox]::Show("Update check failed: $($_.Exception.Message)", 'Update Check', 'OK', 'Warning') | Out-Null }
+    }
+}
+
+function Launch-All {
+    Start-DetectedSteam
+
+    Launch-App -Name "FACEIT Anti-Cheat" -Paths @(
+        "$env:ProgramFiles\FACEIT AC\faceitclient.exe",
+        "${env:ProgramFiles(x86)}\FACEIT AC\faceitclient.exe"
+    )
+
+    Open-FaceitMatchmaking
+    Open-Spotify
+    Open-GHub
+    Write-Log "Launch All: opening Mouse Pointer Options."
+    Open-MousePointerOptions
+}
+
+# ==============================================================
+# PROFILE DEFAULTS - Edit in GUI, save locally or sync via GitHub
+# Cloud profile settings: profiles/<ProfileName>.json (public read).
+# CS2 .cfg files remain separately managed on GitHub.
+# Local unsynced edits ALWAYS win over downloaded cloud settings.
+# ==============================================================
+$script:GithubRepo = 'fabjoncela/Cs-script'
+$script:GithubBranch = 'main'
+$script:FabCfgCloudUrl = 'https://raw.githubusercontent.com/fabjoncela/Cs-script/main/fab.cfg'
+$script:GamingProfiles = [ordered]@{
+    FabMode = @{
+        PointerSpeed=10; DisableAcceleration=$true; ApplyNvidia=$true
+        Width=1920; Height=1080; RefreshHz=360; Vibrance=75
+        CS2Sensitivity=''; ConfigFile='fab.cfg'; CfgDownloadUrl=$script:FabCfgCloudUrl; LaunchApps=$true
+    }
+    ArliMode = @{
+        PointerSpeed=10; DisableAcceleration=$true; ApplyNvidia=$true
+        Width=1920; Height=1080; RefreshHz=360; Vibrance=75
+        CS2Sensitivity=''; ConfigFile='arli.cfg'; CfgDownloadUrl='https://raw.githubusercontent.com/fabjoncela/Cs-script/main/arli.cfg'; LaunchApps=$true
+    }
+    BrileMode = @{
+        PointerSpeed=10; DisableAcceleration=$true; ApplyNvidia=$true
+        Width=1920; Height=1080; RefreshHz=360; Vibrance=75
+        CS2Sensitivity=''; ConfigFile='brile.cfg'; CfgDownloadUrl='https://raw.githubusercontent.com/fabjoncela/Cs-script/main/brile.cfg'; LaunchApps=$true
+    }
+    ArmlMode = @{
+        PointerSpeed=10; DisableAcceleration=$true; ApplyNvidia=$true
+        Width=1920; Height=1080; RefreshHz=360; Vibrance=75
+        CS2Sensitivity=''; ConfigFile='arml.cfg'; CfgDownloadUrl='https://raw.githubusercontent.com/fabjoncela/Cs-script/main/arml.cfg'; LaunchApps=$true
+    }
+    OliMode = @{
+        PointerSpeed=10; DisableAcceleration=$true; ApplyNvidia=$true
+        Width=1920; Height=1080; RefreshHz=360; Vibrance=75
+        CS2Sensitivity=''; ConfigFile='oli.cfg'; CfgDownloadUrl='https://raw.githubusercontent.com/fabjoncela/Cs-script/main/oli.cfg'; LaunchApps=$true
+    }
+}
+$script:ProfileSettingsPath = Join-Path $env:LOCALAPPDATA 'CafeLauncher\profiles.json'
+$script:PendingSync = @{}
+foreach ($name in @($script:GamingProfiles.Keys)) { $script:PendingSync[$name] = $false }
+
+function Import-ProfileValues {
+    param([string]$ProfileName, $SavedProfile, [string]$SourceLabel = 'local')
+    if (-not $script:GamingProfiles.Contains($ProfileName) -or -not $SavedProfile) { return }
+    foreach ($setting in @('PointerSpeed','DisableAcceleration','ApplyNvidia','Width','Height','RefreshHz','Vibrance','CS2Sensitivity','CfgDownloadUrl','LaunchApps')) {
+        $saved = $SavedProfile.PSObject.Properties[$setting]
+        if (-not $saved) { continue }
+        $value = $saved.Value
+        try {
+            switch ($setting) {
+                'PointerSpeed' { $value=[int]$value; if ($value -lt 1 -or $value -gt 20) { throw 'range' } }
+                'Width'        { $value=[int]$value; if ($value -lt 640 -or $value -gt 7680) { throw 'range' } }
+                'Height'       { $value=[int]$value; if ($value -lt 480 -or $value -gt 4320) { throw 'range' } }
+                'RefreshHz'    { $value=[int]$value; if ($value -lt 30 -or $value -gt 600) { throw 'range' } }
+                'Vibrance'     { $value=[int]$value; if ($value -lt 0 -or $value -gt 100) { throw 'range' } }
+                'CS2Sensitivity' {
+                    $value=[string]$value
+                    if ($value -and $value -notmatch '^(?:[0-9]+(?:\.[0-9]+)?)$') { throw 'invalid sensitivity' }
+                    if ($value -and ([double]::Parse($value,[Globalization.CultureInfo]::InvariantCulture) -le 0 -or [double]::Parse($value,[Globalization.CultureInfo]::InvariantCulture) -gt 20)) { throw 'range' }
+                }
+                'CfgDownloadUrl' {
+                    $value = [string]$value
+                    if ($ProfileName -eq 'FabMode' -and [string]::IsNullOrWhiteSpace($value)) {
+                        $value = $script:FabCfgCloudUrl
+                        Write-Log 'Migrated old FabMode empty CFG URL to GitHub fab.cfg.'
+                    }
+                    if ($value) { Assert-ConfigUrl $value }
+                }
+                default {
+                    if ($setting -in @('DisableAcceleration','ApplyNvidia','LaunchApps')) {
+                        if ($value -isnot [bool]) { throw 'boolean expected' }
+                    }
+                }
+            }
+            $script:GamingProfiles[$ProfileName][$setting] = $value
+        } catch { Write-Log "Ignored invalid $SourceLabel $ProfileName/$setting value." 'WARN' }
+    }
+}
+
+function Load-ProfileSettings {
+    if (-not (Test-Path -LiteralPath $script:ProfileSettingsPath -PathType Leaf)) { return }
+    try {
+        $settings = Get-Content -LiteralPath $script:ProfileSettingsPath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+        foreach ($name in @($script:GamingProfiles.Keys)) {
+            $savedProfile = $settings.PSObject.Properties[$name]
+            if (-not $savedProfile -or -not $savedProfile.Value) { continue }
+            Import-ProfileValues -ProfileName $name -SavedProfile $savedProfile.Value -SourceLabel 'local'
+            $dirty = $savedProfile.Value.PSObject.Properties['SyncPending']
+            # Old versions saved ONLY locally: protect edits from being replaced by cloud defaults.
+            if ($dirty -and $dirty.Value -is [bool]) {
+                $script:PendingSync[$name] = [bool]$dirty.Value
+            } else {
+                $script:PendingSync[$name] = $true
+            }
+        }
+        Write-Log "Loaded local profile settings from $script:ProfileSettingsPath."
+    } catch {
+        Write-Log "Profile settings JSON could not be read; using defaults: $($_.Exception.Message)" 'WARN'
+    }
+}
+
+function Export-ProfileValues {
+    param([string]$ProfileName)
+    $p = $script:GamingProfiles[$ProfileName]
+    if (-not $p) { throw "Unknown profile: $ProfileName" }
+    $profileValues = [ordered]@{
+        PointerSpeed=[int]$p.PointerSpeed; DisableAcceleration=[bool]$p.DisableAcceleration
+        ApplyNvidia=[bool]$p.ApplyNvidia; Width=[int]$p.Width; Height=[int]$p.Height
+        RefreshHz=[int]$p.RefreshHz; Vibrance=[int]$p.Vibrance
+        CS2Sensitivity=[string]$p.CS2Sensitivity; CfgDownloadUrl=[string]$p.CfgDownloadUrl
+        LaunchApps=[bool]$p.LaunchApps
+    }
+    # Preserve the dictionary as ONE pipeline object on Windows PowerShell 5.1.
+    Write-Output -NoEnumerate $profileValues
+}
+
+function Save-ProfileSettings {
+    # Build a full independent snapshot before writing to disk. Do NOT index
+    # $settings[$name] immediately after assignment: in some Windows PowerShell
+    # hosts a missing/empty pipeline output caused a null-array exception here.
+    $settings = [ordered]@{}
+    foreach ($name in @($script:GamingProfiles.Keys)) {
+        $values = Export-ProfileValues -ProfileName $name
+        if ($null -eq $values -or $values -isnot [System.Collections.IDictionary]) {
+            throw "Cannot save ${name}: the profile exporter did not return a settings dictionary."
+        }
+        $snapshot = [ordered]@{}
+        foreach ($key in @($values.Keys)) { $snapshot[$key] = $values[$key] }
+        $snapshot['SyncPending'] = [bool]$script:PendingSync[$name]
+        $settings[$name] = $snapshot
+    }
+    $dir = Split-Path -Parent $script:ProfileSettingsPath
+    if (-not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Path $dir -Force -ErrorAction Stop | Out-Null }
+    $tmp = Join-Path $dir ("profiles-{0}.tmp" -f [Guid]::NewGuid().ToString('N'))
+    try {
+        [IO.File]::WriteAllText($tmp, ($settings | ConvertTo-Json -Depth 5), (New-Object System.Text.UTF8Encoding($false)))
+        Move-Item -LiteralPath $tmp -Destination $script:ProfileSettingsPath -Force -ErrorAction Stop
+    } finally {
+        if (Test-Path -LiteralPath $tmp) { Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue }
+    }
+    Write-Log "Profile settings saved locally: $script:ProfileSettingsPath"
+}
+
+Load-ProfileSettings
+
+function Refresh-ProfileFromGitHub {
+    param([Parameter(Mandatory=$true)][string]$ProfileName)
+    if (-not $script:GamingProfiles.Contains($ProfileName)) { throw "Unknown profile: $ProfileName" }
+    if ($script:PendingSync[$ProfileName]) {
+        Write-Log "$ProfileName has local edits not synced to GitHub; keeping local settings." 'INFO'
+        return
+    }
+    $url = "https://raw.githubusercontent.com/$($script:GithubRepo)/$($script:GithubBranch)/profiles/$ProfileName.json"
+    try {
+        [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+        # GitHub content is JSON data only; no code is executed from remote profiles.
+        $remote = Invoke-RestMethod -Uri $url -Method Get -Headers @{'Cache-Control'='no-cache'} -TimeoutSec 8 -ErrorAction Stop
+        if ($remote.ProfileName -ne $ProfileName -or [int]$remote.SchemaVersion -ne 1) {
+            throw "Unexpected profile JSON schema for $ProfileName."
+        }
+        Import-ProfileValues -ProfileName $ProfileName -SavedProfile $remote -SourceLabel 'GitHub'
+        try { Save-ProfileSettings } catch { Write-Log "Unable to cache cloud settings: $($_.Exception.Message)" 'WARN' }
+        Write-Log "$ProfileName settings downloaded from GitHub (no login needed)."
+    } catch {
+        Write-Log "Could not refresh $ProfileName settings from GitHub; using cached/local values. $($_.Exception.Message)" 'WARN'
+    }
+}
+
+function Get-GitHubSyncToken {
+    param($OwnerWindow)
+    $authForm = New-Object System.Windows.Forms.Form
+    $authForm.Text = 'Authorize GitHub Sync'
+    $authForm.ClientSize = New-Object System.Drawing.Size(590,286)
+    $authForm.StartPosition='CenterParent'
+    $authForm.FormBorderStyle='FixedDialog'
+    $authForm.MaximizeBox=$false
+    $authForm.MinimizeBox=$false
+    $authForm.BackColor=$PANEL
+    $authForm.ForeColor=$WHITE
+    $authForm.Font=New-Object System.Drawing.Font('Segoe UI',10)
+
+    $instructions = New-Object System.Windows.Forms.Label
+    $instructions.Text = "Paste a fine-grained GitHub access token for $($script:GithubRepo).`r`nPermissions: Contents = Read and write (only this repo).`r`nCreate a short-lived token and revoke it when finished."
+    $instructions.Location=New-Object System.Drawing.Point(20,18)
+    $instructions.Size=New-Object System.Drawing.Size(550,75)
+    $authForm.Controls.Add($instructions)
+
+    $secretBox = New-Object System.Windows.Forms.TextBox
+    $secretBox.Location=New-Object System.Drawing.Point(20,106)
+    $secretBox.Size=New-Object System.Drawing.Size(545,30)
+    $secretBox.UseSystemPasswordChar=$true
+    $authForm.Controls.Add($secretBox)
+
+    $warning = New-Object System.Windows.Forms.Label
+    $warning.Text='Never paste a GitHub token on an untrusted/shared cafe PC. Tokens are not saved by CafeLauncher.'
+    $warning.ForeColor=[System.Drawing.Color]::FromArgb(255,190,105)
+    $warning.Location=New-Object System.Drawing.Point(20,147)
+    $warning.Size=New-Object System.Drawing.Size(550,46)
+    $authForm.Controls.Add($warning)
+
+    $create = New-Object System.Windows.Forms.Button
+    $create.Text='Create a GitHub token...'
+    $create.Location=New-Object System.Drawing.Point(20,213)
+    $create.Size=New-Object System.Drawing.Size(200,36)
+    $create.Add_Click({ Start-Process 'https://github.com/settings/personal-access-tokens/new' })
+    $authForm.Controls.Add($create)
+
+    $ok=New-Object System.Windows.Forms.Button
+    $ok.Text='Authorize & Upload'
+    $ok.Location=New-Object System.Drawing.Point(267,213)
+    $ok.Size=New-Object System.Drawing.Size(162,36)
+    $ok.BackColor=$BLUE
+    $ok.ForeColor=$WHITE
+    $authForm.Controls.Add($ok)
+    $cancel=New-Object System.Windows.Forms.Button
+    $cancel.Text='Cancel'
+    $cancel.Location=New-Object System.Drawing.Point(439,213)
+    $cancel.Size=New-Object System.Drawing.Size(125,36)
+    $cancel.DialogResult=[System.Windows.Forms.DialogResult]::Cancel
+    $authForm.Controls.Add($cancel)
+    $authForm.CancelButton=$cancel
+
+    $ok.Add_Click({
+        if ($secretBox.Text.Trim().Length -lt 20) {
+            [System.Windows.Forms.MessageBox]::Show('Paste a valid GitHub token before uploading.', 'GitHub authorization', 'OK', 'Warning') | Out-Null
+            return
+        }
+        $authForm.DialogResult=[System.Windows.Forms.DialogResult]::OK
+        $authForm.Close()
+    }.GetNewClosure())
+    try {
+        $result=$authForm.ShowDialog($OwnerWindow)
+        if ($result -ne [System.Windows.Forms.DialogResult]::OK) { return $null }
+        return $secretBox.Text.Trim()
+    } finally {
+        $secretBox.Clear()
+        $authForm.Dispose()
+    }
+}
+
+function Sync-ProfileToGitHub {
+    param([Parameter(Mandatory=$true)][string]$ProfileName, [Parameter(Mandatory=$true)][string]$Token)
+    if (-not $script:GamingProfiles.Contains($ProfileName)) { throw "Unknown profile: $ProfileName" }
+    $path = "profiles/$ProfileName.json"
+    $uri = "https://api.github.com/repos/$($script:GithubRepo)/contents/$path"
+    $headers = @{
+        'Authorization'="Bearer $Token"
+        'Accept'='application/vnd.github+json'
+        'User-Agent'='CafeLauncher-ProfileSync'
+        'X-GitHub-Api-Version'='2022-11-28'
+    }
+    $existingSha = $null
+    [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+    try {
+        $current = Invoke-RestMethod -Uri ($uri + '?ref=' + $script:GithubBranch) -Method Get -Headers $headers -TimeoutSec 20 -MaximumRedirection 0 -ErrorAction Stop
+        $existingSha = [string]$current.sha
+    } catch {
+        $status = $null
+        if ($_.Exception.Response) { $status = [int]$_.Exception.Response.StatusCode }
+        if ($status -ne 404) { throw "GitHub authorization or file read failed (HTTP $status)." }
+    }
+
+    $payload = [ordered]@{ SchemaVersion=1; ProfileName=$ProfileName }
+    $values = Export-ProfileValues -ProfileName $ProfileName
+    if ($null -eq $values -or $values -isnot [System.Collections.IDictionary]) {
+        throw "Cannot sync ${ProfileName}: the profile exporter returned no valid settings."
+    }
+    foreach ($key in @($values.Keys)) { $payload[$key] = $values[$key] }
+    $json = $payload | ConvertTo-Json -Depth 5
+    $body = @{
+        message="Update $ProfileName settings from CafeLauncher"
+        content=[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($json + "`n"))
+        branch=$script:GithubBranch
+    }
+    if ($existingSha) { $body.sha = $existingSha }
+    try {
+        $result = Invoke-RestMethod -Uri $uri -Method Put -Headers $headers -ContentType 'application/json' -Body ($body | ConvertTo-Json -Depth 5 -Compress) -TimeoutSec 25 -MaximumRedirection 0 -ErrorAction Stop
+        if (-not $result.commit.sha) { throw 'GitHub did not return a successful commit.' }
+        Write-Log "$ProfileName settings synced to GitHub. Commit: $($result.commit.sha)"
+    } catch {
+        $status = $null
+        if ($_.Exception.Response) { $status = [int]$_.Exception.Response.StatusCode }
+        if ($status -eq 401 -or $status -eq 403) { throw 'GitHub refused the token. Check repository access and Contents: Read and write permission.' }
+        if ($status -eq 409 -or $status -eq 422) { throw 'GitHub rejected the update due to a changed version or validation error. Retry syncing.' }
+        throw "GitHub upload failed (HTTP $status). Your settings remain saved locally."
+    } finally {
+        $headers.Authorization = $null
+        $body.content = $null
+    }
+}
+
+function New-EditorLabel {
+    param($Window, [string]$Caption, [int]$X, [int]$Y, [int]$Width=200)
+    $label = New-Object System.Windows.Forms.Label
+    $label.Text=$Caption
+    $label.ForeColor=$script:EditorTextColor
+    $label.Location=New-Object System.Drawing.Point($X,$Y)
+    $label.Size=New-Object System.Drawing.Size($Width,23)
+    $Window.Controls.Add($label)
+    return $label
+}
+
+function New-EditorNumber {
+    param($Window, [int]$X, [int]$Y, [int]$Min, [int]$Max, [int]$Value, [int]$Width=180)
+    $n = New-Object System.Windows.Forms.NumericUpDown
+    $n.Location=New-Object System.Drawing.Point($X,$Y)
+    $n.Size=New-Object System.Drawing.Size($Width,28)
+    $n.Minimum=[decimal]$Min
+    $n.Maximum=[decimal]$Max
+    $n.Value=[decimal]$Value
+    $Window.Controls.Add($n)
+    return $n
+}
+
+function Show-ProfileEditor {
+    param([Parameter(Mandatory=$true)][string]$ProfileName)
+    Refresh-ProfileFromGitHub -ProfileName $ProfileName
+    $p = $script:GamingProfiles[$ProfileName]
+    if (-not $p) { throw "Unknown profile: $ProfileName" }
+    # GetNewClosure() creates a new dynamic module scope. The script: scope
+    # inside a captured click handler is NOT the original launcher's script:
+    # scope. Capture a reference to the real pending-sync dictionary here.
+    $pendingSyncState = $script:PendingSync
+    if ($null -eq $pendingSyncState -or $pendingSyncState -isnot [System.Collections.IDictionary]) {
+        throw 'Profile sync state is missing; cannot safely edit this profile.'
+    }
+
+    $dialog = New-Object System.Windows.Forms.Form
+    $dialog.Text = "Edit $ProfileName"
+    $dialog.ClientSize = New-Object System.Drawing.Size(590,645)
+    $dialog.StartPosition = 'CenterParent'
+    $dialog.FormBorderStyle = 'FixedDialog'
+    $dialog.MaximizeBox = $false
+    $dialog.MinimizeBox = $false
+    $dialog.ShowInTaskbar = $false
+    $dialog.BackColor = $PANEL
+    $dialog.ForeColor = $WHITE
+    $dialog.Font = New-Object System.Drawing.Font('Segoe UI',10)
+    $script:EditorTextColor = $WHITE
+
+    New-EditorLabel $dialog 'Windows pointer speed (1-20)' 20 18 260 | Out-Null
+    $pointer = New-EditorNumber $dialog 20 42 1 20 ([int]$p.PointerSpeed) 245
+    New-EditorLabel $dialog 'NVIDIA Digital Vibrance (%)' 305 18 260 | Out-Null
+    $vibrance = New-EditorNumber $dialog 305 42 0 100 ([int]$p.Vibrance) 245
+
+    $accel = New-Object System.Windows.Forms.CheckBox
+    $accel.Text='Enable Windows mouse acceleration (EPP)'
+    $accel.Checked = -not [bool]$p.DisableAcceleration
+    $accel.Location=New-Object System.Drawing.Point(20,83)
+    $accel.Size=New-Object System.Drawing.Size(500,27)
+    $dialog.Controls.Add($accel)
+
+    New-EditorLabel $dialog 'Resolution width' 20 122 210 | Out-Null
+    New-EditorLabel $dialog 'Resolution height' 205 122 210 | Out-Null
+    New-EditorLabel $dialog 'Refresh rate (Hz)' 390 122 190 | Out-Null
+    $width = New-EditorNumber $dialog 20 147 640 7680 ([int]$p.Width) 165
+    $height = New-EditorNumber $dialog 205 147 480 4320 ([int]$p.Height) 165
+    $hz = New-EditorNumber $dialog 390 147 30 600 ([int]$p.RefreshHz) 160
+
+    New-EditorLabel $dialog 'CS2 sensitivity (blank = value from .cfg)' 20 196 530 | Out-Null
+    $sens = New-Object System.Windows.Forms.TextBox
+    $sens.Text=[string]$p.CS2Sensitivity
+    $sens.Location=New-Object System.Drawing.Point(20,222)
+    $sens.Size=New-Object System.Drawing.Size(530,29)
+    $dialog.Controls.Add($sens)
+
+    New-EditorLabel $dialog 'CS2 config filename (fixed for each profile)' 20 276 530 | Out-Null
+    $cfgFile = New-Object System.Windows.Forms.TextBox
+    $cfgFile.Text=[string]$p.ConfigFile
+    $cfgFile.ReadOnly=$true
+    $cfgFile.Location=New-Object System.Drawing.Point(20,300)
+    $cfgFile.Size=New-Object System.Drawing.Size(530,29)
+    $dialog.Controls.Add($cfgFile)
+
+    New-EditorLabel $dialog 'GitHub .cfg URL (FabMode default: fab.cfg)' 20 355 540 | Out-Null
+    $url = New-Object System.Windows.Forms.TextBox
+    $url.Text=[string]$p.CfgDownloadUrl
+    $url.Location=New-Object System.Drawing.Point(20,380)
+    $url.Size=New-Object System.Drawing.Size(530,28)
+    $dialog.Controls.Add($url)
+
+    $nv = New-Object System.Windows.Forms.CheckBox
+    $nv.Text='Apply NVIDIA settings (including resolution + vibrance)'
+    $nv.Checked=[bool]$p.ApplyNvidia
+    $nv.Location=New-Object System.Drawing.Point(20,430)
+    $nv.Size=New-Object System.Drawing.Size(550,26)
+    $dialog.Controls.Add($nv)
+
+    $apps = New-Object System.Windows.Forms.CheckBox
+    $apps.Text='Launch Steam, FACEIT, Spotify, G HUB, Mouse Options'
+    $apps.Checked=[bool]$p.LaunchApps
+    $apps.Location=New-Object System.Drawing.Point(20,461)
+    $apps.Size=New-Object System.Drawing.Size(550,26)
+    $dialog.Controls.Add($apps)
+
+    $dialog.ClientSize = New-Object System.Drawing.Size(590,665)
+    $tip = New-EditorLabel $dialog 'Local edits stay on this PC. GitHub sync shares ALL profile settings; CFG binds remain separate.' 20 504 550
+    $tip.ForeColor=$MUTED
+    $tip.Font=New-Object System.Drawing.Font('Segoe UI',8)
+    $tip.Size=New-Object System.Drawing.Size(550,37)
+
+    $status = New-EditorLabel $dialog '' 20 538 550
+    $status.Font=New-Object System.Drawing.Font('Segoe UI',8,[System.Drawing.FontStyle]::Bold)
+    $status.Size=New-Object System.Drawing.Size(550,23)
+    if ($script:PendingSync[$ProfileName]) {
+        $status.Text='Unsynced local edits - cloud download will not overwrite them.'
+        $status.ForeColor=[System.Drawing.Color]::FromArgb(255,190,105)
+    } else {
+        $status.Text='GitHub settings enabled - saved locally and cached for offline use.'
+        $status.ForeColor=$MUTED
+    }
+
+    $saveLocal = New-Object System.Windows.Forms.Button
+    $saveLocal.Text='Save Locally'
+    $saveLocal.Location=New-Object System.Drawing.Point(20,585)
+    $saveLocal.Size=New-Object System.Drawing.Size(155,40)
+    $saveLocal.BackColor=$BLUE
+    $saveLocal.ForeColor=$WHITE
+    $saveLocal.FlatStyle='Flat'
+    $dialog.Controls.Add($saveLocal)
+
+    $saveSync = New-Object System.Windows.Forms.Button
+    $saveSync.Text='Save & Sync to GitHub'
+    $saveSync.Location=New-Object System.Drawing.Point(184,585)
+    $saveSync.Size=New-Object System.Drawing.Size(219,40)
+    $saveSync.BackColor=[System.Drawing.Color]::FromArgb(38,132,102)
+    $saveSync.ForeColor=$WHITE
+    $saveSync.FlatStyle='Flat'
+    $dialog.Controls.Add($saveSync)
+
+    $cancel = New-Object System.Windows.Forms.Button
+    $cancel.Text='Cancel'
+    $cancel.Location=New-Object System.Drawing.Point(413,585)
+    $cancel.Size=New-Object System.Drawing.Size(137,40)
+    $cancel.DialogResult=[System.Windows.Forms.DialogResult]::Cancel
+    $dialog.Controls.Add($cancel)
+    $dialog.CancelButton=$cancel
+
+    $saveEditorValues = {
+        $sensValue=$sens.Text.Trim()
+        if ($sensValue) {
+            $number=0.0
+            if (-not [double]::TryParse($sensValue,[Globalization.NumberStyles]::Float,[Globalization.CultureInfo]::InvariantCulture,[ref]$number) -or
+                [double]::IsNaN($number) -or $number -le 0 -or $number -gt 20) {
+                throw 'Sensitivity must be blank or between 0 and 20, using a decimal point (e.g. 1.2).'
+            }
+            $sensValue=$number.ToString('0.####',[Globalization.CultureInfo]::InvariantCulture)
+        }
+        $cfgUrl=$url.Text.Trim()
+        if ($cfgUrl) { Assert-ConfigUrl $cfgUrl }
+        $p.PointerSpeed=[int]$pointer.Value
+        $p.DisableAcceleration= -not $accel.Checked
+        $p.Width=[int]$width.Value
+        $p.Height=[int]$height.Value
+        $p.RefreshHz=[int]$hz.Value
+        $p.Vibrance=[int]$vibrance.Value
+        $p.ApplyNvidia=[bool]$nv.Checked
+        $p.LaunchApps=[bool]$apps.Checked
+        $p.CS2Sensitivity=$sensValue
+        $p.CfgDownloadUrl=$cfgUrl
+        # Use the captured shared dictionary, not script: scope in this closure.
+        $pendingSyncState[$ProfileName] = $true
+        Save-ProfileSettings
+        Write-Log "$ProfileName edited locally: pointer=$($p.PointerSpeed), acceleration enabled=$(-not $p.DisableAcceleration), display=$($p.Width)x$($p.Height)@$($p.RefreshHz), vibrance=$($p.Vibrance)%, sensitivity=$sensValue."
+    }.GetNewClosure()
+
+    $saveLocal.Add_Click({
+        try {
+            & $saveEditorValues
+            [System.Windows.Forms.MessageBox]::Show("$ProfileName saved locally. No GitHub login required.`nChanges on a Deep Freeze PC may disappear after restart.", 'Saved locally', 'OK', 'Information') | Out-Null
+            $dialog.DialogResult=[System.Windows.Forms.DialogResult]::OK
+            $dialog.Close()
+        } catch {
+            Write-Log "Save Locally failed for ${ProfileName}: $($_.Exception.Message); $($_.ScriptStackTrace)" 'ERROR'
+            [System.Windows.Forms.MessageBox]::Show("Could not save ${ProfileName}:`n$($_.Exception.Message)`n`nSee LIVE LOGS for the failing line.", 'Profile Editor', 'OK', 'Error') | Out-Null
+        }
+    }.GetNewClosure())
+
+    $saveSync.Add_Click({
+        try {
+            & $saveEditorValues
+            $token = Get-GitHubSyncToken -OwnerWindow $dialog
+            if ([string]::IsNullOrWhiteSpace($token)) {
+                $status.Text='Saved locally. GitHub sync canceled; local edits preserved.'
+                $status.ForeColor=[System.Drawing.Color]::FromArgb(255,190,105)
+                Write-Log "$ProfileName GitHub sync canceled; local changes preserved."
+                return
+            }
+            try {
+                $saveSync.Enabled=$false
+                $dialog.Cursor=[System.Windows.Forms.Cursors]::WaitCursor
+                Sync-ProfileToGitHub -ProfileName $ProfileName -Token $token
+                $pendingSyncState[$ProfileName] = $false
+                Save-ProfileSettings
+                [System.Windows.Forms.MessageBox]::Show("$ProfileName settings committed to GitHub and saved locally.`nOther PCs can now download the new settings without signing in.`nThe .cfg bindings are still maintained separately on GitHub.", 'GitHub sync complete', 'OK', 'Information') | Out-Null
+                $dialog.DialogResult=[System.Windows.Forms.DialogResult]::OK
+                $dialog.Close()
+            } finally {
+                $token = $null
+                if (-not $dialog.IsDisposed) {
+                    $saveSync.Enabled=$true
+                    $dialog.Cursor=[System.Windows.Forms.Cursors]::Default
+                }
+            }
+        } catch {
+            Write-Log "$ProfileName GitHub sync failed; local settings kept. $($_.Exception.Message); $($_.ScriptStackTrace)" 'WARN'
+            $status.Text='Cloud sync failed; settings are saved locally. Retry Save & Sync.'
+            $status.ForeColor=[System.Drawing.Color]::FromArgb(255,190,105)
+            [System.Windows.Forms.MessageBox]::Show("$ProfileName saved locally, but GitHub sync failed:`n$($_.Exception.Message)", 'GitHub sync', 'OK', 'Warning') | Out-Null
+        }
+    }.GetNewClosure())
+
+    [void]$dialog.ShowDialog($form)
+    $dialog.Dispose()
+}
+
+function Invoke-GamingProfile {
+    param([Parameter(Mandatory=$true)][string]$ProfileName)
+    if (-not $script:GamingProfiles.Contains($ProfileName)) {
+        Write-Log "Unknown gaming profile: $ProfileName" 'ERROR'
+        return
+    }
+    Refresh-ProfileFromGitHub -ProfileName $ProfileName
+    $profile = $script:GamingProfiles[$ProfileName]
+    Write-Log "$ProfileName full routine started: mouse, NVIDIA, CS2 config, applications."
+
+    $steps = @(
+        @{ Name = 'Windows mouse speed/acceleration'; Action = {
+            Apply-ProfileMouse -ProfileName $ProfileName -PointerSpeed ([int]$profile.PointerSpeed) -DisableAcceleration ([bool]$profile.DisableAcceleration) -SkipPointerOptions
+        } }
+    )
+    if ($profile.ApplyNvidia) {
+        $steps += @{ Name = 'NVIDIA settings'; Action = { Apply-NvidiaGamingSettings -Width ([int]$profile.Width) -Height ([int]$profile.Height) -RefreshHz ([int]$profile.RefreshHz) -Vibrance ([int]$profile.Vibrance) } }
+    }
+    $profileCfgName = [string]$profile.ConfigFile
+    if (-not [string]::IsNullOrWhiteSpace($profileCfgName)) {
+        $profileCfgUrl = [string]$profile.CfgDownloadUrl
+        if ($ProfileName -eq 'FabMode' -and [string]::IsNullOrWhiteSpace($profileCfgUrl)) {
+            $profileCfgUrl = $script:FabCfgCloudUrl
+        }
+        $steps += @{ Name = "Install CS2 $profileCfgName"; Action = {
+            Install-AtCfg -Silent -CfgName $profileCfgName -DownloadUrl $profileCfgUrl -CloudPreferred:([bool]$profileCfgUrl) -CS2Sensitivity ([string]$profile.CS2Sensitivity)
+        } }
+    }
+    if ($profile.LaunchApps) {
+        $steps += @{ Name = 'Launch All (including Mouse Pointer Options)'; Action = { Launch-All } }
+    }
+    foreach ($step in $steps) {
+        Write-Log ("$ProfileName step started: " + $step.Name)
+        try {
+            & ($step.Action)
+            Write-Log ("$ProfileName step returned: " + $step.Name + ". Check logs for individual success or errors.")
+        } catch {
+            Write-Log ("$ProfileName step failed: " + $step.Name + ": " + $_.Exception.Message) 'ERROR'
+        }
+    }
+    Write-Log "$ProfileName full routine finished. Review logs for individual results."
+}
+
+# Backward-compatible entry point.
+function Invoke-FabModeFull { Invoke-GamingProfile -ProfileName 'FabMode' }
+
+# Main window
+$form = New-Object System.Windows.Forms.Form
+$form.Text = "Cafe Launcher"
+$form.Size = New-Object System.Drawing.Size(800,950)
+$form.StartPosition = "CenterScreen"
+$form.FormBorderStyle = "FixedSingle"
+$form.MaximizeBox = $false
+$form.BackColor = $BG
+$form.ForeColor = $WHITE
+$form.Font = New-Object System.Drawing.Font("Segoe UI",10)
+
+# Header
+$header = New-Object System.Windows.Forms.Panel
+$header.Location = New-Object System.Drawing.Point(0,0)
+$header.Size = New-Object System.Drawing.Size(800,105)
+$header.BackColor = $PANEL
+$form.Controls.Add($header)
+
+$title = New-Object System.Windows.Forms.Label
+$title.Text = "GAMING CAFE"
+$title.Location = New-Object System.Drawing.Point(28,18)
+$title.Size = New-Object System.Drawing.Size(500,38)
+$title.Font = New-Object System.Drawing.Font("Segoe UI",21,[System.Drawing.FontStyle]::Bold)
+$title.ForeColor = $WHITE
+$header.Controls.Add($title)
+
+$subtitle = New-Object System.Windows.Forms.Label
+$subtitle.Text = "APP LAUNCHER  |  PC SETTINGS"
+$subtitle.Location = New-Object System.Drawing.Point(31,62)
+$subtitle.Size = New-Object System.Drawing.Size(500,23)
+$subtitle.Font = New-Object System.Drawing.Font("Segoe UI",9)
+$subtitle.ForeColor = $MUTED
+$header.Controls.Add($subtitle)
+
+function New-Tile {
+    param(
+        [string]$Text,
+        [int]$Index,
+        [scriptblock]$Action,
+        [switch]$Primary,
+        [string]$EditProfile = ''
+    )
+
+    $col = $Index % 3
+    $row = [Math]::Floor($Index / 3)
+    $x = 25 + ($col * 250)
+    $y = 125 + ($row * 88)
+
+    $button = New-Object System.Windows.Forms.Button
+    $button.Text = $Text
+    $button.Location = New-Object System.Drawing.Point($x,$y)
+    if ($EditProfile) {
+        $button.Size = New-Object System.Drawing.Size(235,46)
+    } else {
+        $button.Size = New-Object System.Drawing.Size(235,70)
+    }
+    $button.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
+    $button.FlatAppearance.BorderSize = 0
+    if ($Primary) {
+        $button.BackColor = $BLUE
+    } else {
+        $button.BackColor = $PANEL
+    }
+    $button.ForeColor = $WHITE
+    $button.Font = New-Object System.Drawing.Font("Segoe UI",10,[System.Drawing.FontStyle]::Bold)
+    $button.Cursor = [System.Windows.Forms.Cursors]::Hand
+    $actionToRun = $Action
+    $button.Add_Click({
+        Write-Log "Clicked: $($this.Text)"
+        try {
+            & $actionToRun
+        } catch {
+            Write-Log "Button '$($this.Text)' failed: $($_.Exception.Message)" "ERROR"
+            [System.Windows.Forms.MessageBox]::Show(
+                "$($this.Text) failed:`n$($_.Exception.Message)",
+                "Cafe Launcher"
+            )
+        }
+    }.GetNewClosure())
+    $form.Controls.Add($button)
+    if ($EditProfile) {
+        $edit = New-Object System.Windows.Forms.Button
+        $edit.Text = "Edit $EditProfile settings"
+        $edit.Location = [System.Drawing.Point]::new($x, ($y + 48))
+        $edit.Size = New-Object System.Drawing.Size(235,22)
+        $edit.Font = New-Object System.Drawing.Font('Segoe UI',8)
+        $edit.FlatStyle = 'Flat'
+        $edit.FlatAppearance.BorderSize = 0
+        $edit.BackColor = [System.Drawing.Color]::FromArgb(58,67,83)
+        $edit.ForeColor = $WHITE
+        $edit.Cursor = [System.Windows.Forms.Cursors]::Hand
+        $selectedProfile = $EditProfile
+        $edit.Add_Click({
+            Write-Log "Clicked: Edit $selectedProfile settings"
+            try { Show-ProfileEditor -ProfileName $selectedProfile }
+            catch { Write-Log "Profile editor failed: $($_.Exception.Message)" 'ERROR' }
+        }.GetNewClosure())
+        $form.Controls.Add($edit)
+    }
+}
+
+New-Tile "LAUNCH ALL" 0 { Launch-All } -Primary
+New-Tile "Steam" 1 { Start-DetectedSteam }
+New-Tile "FACEIT Anti-Cheat" 2 {
+    Launch-App -Name "FACEIT Anti-Cheat" -Paths @(
+        "$env:ProgramFiles\FACEIT AC\faceitclient.exe",
+        "${env:ProgramFiles(x86)}\FACEIT AC\faceitclient.exe"
+    )
+}
+New-Tile "FACEIT Matchmaking" 3 { Open-FaceitMatchmaking }
+New-Tile "Spotify" 4 { Open-Spotify }
+New-Tile "Logitech G HUB" 5 { Open-GHub }
+
+# Five editable gaming profiles, all using the same shared routine.
+New-Tile "FabMode" 6 { Invoke-GamingProfile -ProfileName 'FabMode' } -Primary -EditProfile 'FabMode'
+New-Tile "ArliMode" 7 { Invoke-GamingProfile -ProfileName 'ArliMode' } -Primary -EditProfile 'ArliMode'
+New-Tile "BrileMode" 8 { Invoke-GamingProfile -ProfileName 'BrileMode' } -Primary -EditProfile 'BrileMode'
+New-Tile "ArmlMode" 9 { Invoke-GamingProfile -ProfileName 'ArmlMode' } -Primary -EditProfile 'ArmlMode'
+New-Tile "OliMode" 10 { Invoke-GamingProfile -ProfileName 'OliMode' } -Primary -EditProfile 'OliMode'
+
+New-Tile "Mouse Pointer Options" 11 { Open-MousePointerOptions }
+New-Tile "NVIDIA Control Panel" 12 { Open-NvidiaControlPanel }
+New-Tile "Apply NVIDIA Settings" 13 { Apply-NvidiaGamingSettings } -Primary
+New-Tile "Install CS2 fab.cfg" 14 { Install-AtCfg -CfgName 'fab.cfg' -DownloadUrl $script:FabCfgCloudUrl -CloudPreferred } -Primary
+New-Tile "Detect PC" 15 { Show-PCDiagnostics }
+New-Tile "Check for Updates" 16 { Check-CafeLauncherUpdates -Manual }
+New-Tile "Exit" 17 { $form.Close() }
+
+# Live diagnostic log panel (visible only while the launcher is open)
+$logTitle = New-Object System.Windows.Forms.Label
+$logTitle.Text = "LIVE LOGS  |  Errors and button activity"
+$logTitle.Location = New-Object System.Drawing.Point(28,663)
+$logTitle.Size = New-Object System.Drawing.Size(500,22)
+$logTitle.Font = New-Object System.Drawing.Font("Segoe UI",9,[System.Drawing.FontStyle]::Bold)
+$logTitle.ForeColor = $WHITE
+$form.Controls.Add($logTitle)
+
+$clearLogs = New-Object System.Windows.Forms.Button
+$clearLogs.Text = "Clear Logs"
+$clearLogs.Location = New-Object System.Drawing.Point(670,659)
+$clearLogs.Size = New-Object System.Drawing.Size(100,27)
+$clearLogs.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
+$clearLogs.FlatAppearance.BorderSize = 0
+$clearLogs.BackColor = $PANEL
+$clearLogs.ForeColor = $WHITE
+$clearLogs.Add_Click({
+    if ($script:LogBox) { $script:LogBox.Clear() }
+    try { Set-Content -LiteralPath $script:LogPath -Value "" -Encoding UTF8 } catch {}
+    Write-Log "Logs cleared."
+})
+$form.Controls.Add($clearLogs)
+
+$script:LogBox = New-Object System.Windows.Forms.TextBox
+$script:LogBox.Location = New-Object System.Drawing.Point(28,690)
+$script:LogBox.Size = New-Object System.Drawing.Size(742,168)
+$script:LogBox.Multiline = $true
+$script:LogBox.ReadOnly = $true
+$script:LogBox.ScrollBars = [System.Windows.Forms.ScrollBars]::Vertical
+$script:LogBox.WordWrap = $false
+$script:LogBox.BackColor = [System.Drawing.Color]::FromArgb(12,15,20)
+$script:LogBox.ForeColor = [System.Drawing.Color]::FromArgb(190,220,190)
+$script:LogBox.Font = New-Object System.Drawing.Font("Consolas",9)
+try {
+    $script:LogBox.Text = Get-Content -LiteralPath $script:LogPath -Raw -ErrorAction Stop
+    $script:LogBox.SelectionStart = $script:LogBox.TextLength
+    $script:LogBox.ScrollToCaret()
+} catch {}
+$form.Controls.Add($script:LogBox)
+Write-Log "Launcher ready. Log file: $script:LogPath"
+
+# Footer
+$footer = New-Object System.Windows.Forms.Label
+$footer.Text = "GAMING CAFE  |  WINDOWS TOOLKIT  |  LOG: %TEMP%\CafeLauncher.log"
+$footer.Location = New-Object System.Drawing.Point(28,878)
+$footer.Size = New-Object System.Drawing.Size(740,22)
+$footer.Font = New-Object System.Drawing.Font("Segoe UI",8)
+$footer.ForeColor = $MUTED
+$form.Controls.Add($footer)
+
+$form.Add_FormClosed({
+    if ($script:ColorWatchTimer) {
+        try { $script:ColorWatchTimer.Stop(); $script:ColorWatchTimer.Dispose() } catch {}
+        Write-Log "Color Watch stopped because the launcher closed."
+    }
+})
+# On first display, automatically inventory the machine and check GitHub for
+# an update. One-shot timer lets Windows render the UI before network access.
+$startupTimer = New-Object System.Windows.Forms.Timer
+$startupTimer.Interval=350
+$startupTimer.Add_Tick({
+    $startupTimer.Stop()
+    $startupTimer.Dispose()
+    try {
+        Write-Log 'Automatic startup inventory:'
+        $summary = Get-PCDiagnostics
+        foreach ($line in ($summary -split '\r?\n')) { if ($line) { Write-Log ('PC: ' + $line) } }
+    } catch { Write-Log "Startup inventory failed: $($_.Exception.Message)" 'WARN' }
+    Check-CafeLauncherUpdates
+})
+$form.Add_Shown({ $startupTimer.Start() })
+[void]$form.ShowDialog()
+) { throw 'Invalid CS2 config filename.' }
+    $path = New-Object 'System.Collections.Generic.List[string]'
+    $pending = $null; $gameEnd = -1; $appsEnd = -1
+    $gameCount = 0; $valueToken = $null; $current = ''
+    $appsPath = 'UserLocalConfigStore/Software/Valve/Steam/apps'
+    $gamePath = $appsPath + '/730'
+    foreach ($token in [regex]::Matches($Content,'(?s)"(?:\\.|[^"\\])*"|[{}]')) {
+        $part = $token.Value
+        if ($part[0] -eq '"') {
+            $v = $part.Substring(1,$part.Length-2)
+            if ($null -eq $pending) { $pending = $v } else {
+                if (($path -join '/') -ieq $gamePath -and $pending -ieq 'LaunchOptions') {
+                    if ($valueToken) { throw 'Duplicate CS2 LaunchOptions keys; not editing.' }
+                    $valueToken = $token
+                    $current = $v.Replace('\"','"').Replace('\\','\')
+                }
+                $pending = $null
+            }
+        } elseif ($part -eq '{') {
+            if ($null -eq $pending) { throw 'Steam config has malformed section syntax.' }
+            $path.Add($pending); $pending = $null
+            if (($path -join '/') -ieq $gamePath) { $gameCount++ }
+        } else {
+            $here = $path -join '/'
+            if ($here -ieq $gamePath) { $gameEnd = $token.Index }
+            if ($here -ieq $appsPath) { $appsEnd = $token.Index }
+            if ($path.Count -eq 0) { throw 'Steam config has unmatched closing brace.' }
+            $path.RemoveAt($path.Count-1); $pending = $null
+        }
+    }
+    if ($path.Count -ne 0 -or $null -ne $pending -or $appsEnd -lt 0 -or $gameCount -gt 1) {
+        throw 'Steam config structure unsupported; no launch options edited.'
+    }
+    $retained = [regex]::Replace($current,'(?i)(^|\s)\+exec\s+(?:"[^"]+"|[^\s]+)','$1').Trim()
+    $wanted = ($retained + ' +exec ' + $CfgName).Trim()
+    $quoted = '"' + $wanted.Replace('\','\\').Replace('"','\"') + '"'
+    if ($valueToken) { return $Content.Remove($valueToken.Index,$valueToken.Length).Insert($valueToken.Index,$quoted) }
+    $eol = if ($Content.Contains(([string][char]13 + [string][char]10))) { [string][char]13 + [string][char]10 } else { [string][char]10 }
+    $closeIndex = if ($gameEnd -ge 0) { $gameEnd } else { $appsEnd }
+    $lineStart = $Content.LastIndexOf([char]10,[Math]::Max(0,$closeIndex-1)) + 1
+    $indent = $Content.Substring($lineStart,$closeIndex-$lineStart)
+    if ($indent -notmatch '^[ \t]*
+    $lines = New-Object 'System.Collections.Generic.List[string]'
+    $lines.Add("Machine: $env:COMPUTERNAME")
+    try {
+        $gpus = @(Get-CimInstance -ClassName Win32_VideoController -ErrorAction Stop |
+            Where-Object { $_.Name } | Select-Object -ExpandProperty Name)
+        $lines.Add('Graphics: ' + ($(if ($gpus.Count) { $gpus -join '; ' } else { 'Unavailable' })))
+    } catch { $lines.Add('Graphics: Could not query GPU details') }
+    try {
+        if ('FabDisplayNative' -as [type]) {
+            $lines.Add([FabDisplayNative]::GetDisplayModesReport())
+        } else { $lines.Add('Display modes: driver helper unavailable') }
+        foreach ($screen in [System.Windows.Forms.Screen]::AllScreens) {
+            $lines.Add("Monitor $($screen.DeviceName): $($screen.Bounds.Width)x$($screen.Bounds.Height), primary=$($screen.Primary)")
+        }
+    } catch { $lines.Add('Display inventory could not be read') }
+    try {
+        $ptr = [Runtime.InteropServices.Marshal]::AllocHGlobal(4)
+        try {
+            $ok = [FabMouseNative]::SystemParametersInfo(0x0070,0,$ptr,0)
+            if ($ok) { $lines.Add('Active Windows pointer speed: ' + [Runtime.InteropServices.Marshal]::ReadInt32($ptr)) }
+            else { $lines.Add('Pointer speed API read failed') }
+        } finally { [Runtime.InteropServices.Marshal]::FreeHGlobal($ptr) }
+        $m = Get-ItemProperty -Path 'HKCU:\Control Panel\Mouse' -ErrorAction Stop
+        $lines.Add("Mouse registry: speed=$($m.MouseSensitivity), acceleration=$($m.MouseSpeed), thresholds=$($m.MouseThreshold1)/$($m.MouseThreshold2)")
+    } catch { $lines.Add('Mouse settings could not be read') }
+    $steam = Get-SteamExecutable
+    $lines.Add('Steam: ' + $(if ($steam) { $steam } else { 'not detected' }))
+    $roots = @(Get-SteamLibraryRoots)
+    $lines.Add('Steam libraries: ' + $(if ($roots.Count) { $roots -join '; ' } else { 'not detected' }))
+    $cs2 = Find-CS2ConfigFolder -NoPrompt
+    $lines.Add('CS2 config: ' + $(if ($cs2) { $cs2 } else { 'not detected' }))
+    $faceit = Find-App -Paths @("$env:ProgramFiles\FACEIT AC\faceitclient.exe", "${env:ProgramFiles(x86)}\FACEIT AC\faceitclient.exe")
+    $lines.Add('FACEIT AC: ' + $(if ($faceit) { $faceit } else { 'not detected' }))
+    $ghub = Find-App -Paths @("$env:ProgramFiles\LGHUB\lghub.exe", "$env:ProgramFiles\LGHUB\lghub_system_tray.exe")
+    $lines.Add('Logitech G HUB: ' + $(if ($ghub) { $ghub } else { 'not detected' }))
+    $chrome = Get-ChromePath
+    $lines.Add('Chrome: ' + $(if ($chrome) { $chrome } else { 'not detected' }))
+    try {
+        $nvPanel = Find-App -Paths @("$env:ProgramFiles\NVIDIA Corporation\Control Panel Client\nvcplui.exe", "${env:ProgramFiles(x86)}\NVIDIA Corporation\Control Panel Client\nvcplui.exe")
+        if (-not $nvPanel) {
+            $storeApp = Get-StartApps -ErrorAction Stop | Where-Object { $_.Name -match '^NVIDIA Control Panel$' } | Select-Object -First 1
+            if ($storeApp) { $nvPanel='Installed Store app' }
+        }
+        $lines.Add('NVIDIA Control Panel: ' + $(if ($nvPanel) { $nvPanel } else { 'not detected' }))
+    } catch { $lines.Add('NVIDIA Control Panel: not detected') }
+    return ($lines -join [Environment]::NewLine)
+}
+
+function Show-PCDiagnostics {
+    Write-Log 'PC detection started.'
+    try {
+        $summary = Get-PCDiagnostics
+        foreach ($line in ($summary -split '\r?\n')) { if ($line) { Write-Log ('PC: ' + $line) } }
+        $formDialog = New-Object System.Windows.Forms.Form
+        $formDialog.Text='PC Detection - CafeLauncher'
+        $formDialog.ClientSize=[System.Drawing.Size]::new(755,445)
+        $formDialog.StartPosition='CenterParent'
+        $formDialog.BackColor=$BG
+        $formDialog.ForeColor=$WHITE
+        $formDialog.Font=New-Object System.Drawing.Font('Consolas',10)
+        $reportBox = New-Object System.Windows.Forms.TextBox
+        $reportBox.Location=[System.Drawing.Point]::new(12,12)
+        $reportBox.Size=[System.Drawing.Size]::new(731,385)
+        $reportBox.Multiline=$true
+        $reportBox.ReadOnly=$true
+        $reportBox.ScrollBars='Both'
+        $reportBox.WordWrap=$false
+        $reportBox.BackColor=$PANEL
+        $reportBox.ForeColor=$WHITE
+        $reportBox.Text=$summary
+        $formDialog.Controls.Add($reportBox)
+        $close = New-Object System.Windows.Forms.Button
+        $close.Text='Close'
+        $close.Location=[System.Drawing.Point]::new(633,404)
+        $close.Size=[System.Drawing.Size]::new(110,30)
+        $close.Add_Click({ $formDialog.Close() })
+        $formDialog.Controls.Add($close)
+        [void]$formDialog.ShowDialog($form)
+        $formDialog.Dispose()
+    } catch { Write-Log "PC detection failed: $($_.Exception.Message)" 'ERROR' }
+}
+
+# ============================================================== 
+# Public GitHub updater: no token needed, never auto-runs new code.
+# Compares local content to the main-branch Git blob SHA, verifies download.
+# ============================================================== 
+function Get-GitBlobSha {
+    param([byte[]]$Bytes)
+    $head=[Text.Encoding]::ASCII.GetBytes('blob ' + $Bytes.Length + [char]0)
+    $blob=New-Object byte[] ($head.Length + $Bytes.Length)
+    [Array]::Copy($head,0,$blob,0,$head.Length)
+    [Array]::Copy($Bytes,0,$blob,$head.Length,$Bytes.Length)
+    $sha=[Security.Cryptography.SHA1]::Create()
+    try { return ([BitConverter]::ToString($sha.ComputeHash($blob))).Replace('-','').ToLowerInvariant() }
+    finally { $sha.Dispose() }
+}
+
+function Test-LauncherIsCurrent {
+    param([string]$CurrentPath,[string]$RemoteBlobSha)
+    if (-not (Test-Path -LiteralPath $CurrentPath -PathType Leaf)) { return $false }
+    $bytes=[IO.File]::ReadAllBytes($CurrentPath)
+    if ((Get-GitBlobSha -Bytes $bytes) -eq $RemoteBlobSha) { return $true }
+    # Chrome/Drive may preserve CRLF even when GitHub stores LF. Ignore just
+    # line-ending differences and an optional final newline for comparison.
+    $normalized=[Text.Encoding]::UTF8.GetString($bytes).Replace("`r`n","`n")
+    if ((Get-GitBlobSha -Bytes ([Text.Encoding]::UTF8.GetBytes($normalized))) -eq $RemoteBlobSha) { return $true }
+    $oneNewline=$normalized.TrimEnd("`n")
+    return (Get-GitBlobSha -Bytes ([Text.Encoding]::UTF8.GetBytes($oneNewline))) -eq $RemoteBlobSha
+}
+
+function Check-CafeLauncherUpdates {
+    param([switch]$Manual)
+    $source=$env:CAFE_SCRIPT
+    if ([string]::IsNullOrWhiteSpace($source)) {
+        if ($Manual) { Write-Log 'Current BAT path not available for updater.' 'WARN' }
+        return
+    }
+    try {
+        [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+        $uri="https://api.github.com/repos/fabjoncela/Cs-script/contents/cafe.bat?ref=main"
+        $remote=Invoke-RestMethod -Uri $uri -Headers @{'User-Agent'='CafeLauncher-Updater'; 'Accept'='application/vnd.github+json'} -TimeoutSec 8 -ErrorAction Stop
+        if ($remote.path -ne 'cafe.bat' -or $remote.sha -notmatch '^[a-fA-F0-9]{40}$' -or
+            [int64]$remote.size -lt 10000 -or [int64]$remote.size -gt 1000000) { throw 'Unexpected update metadata from GitHub.' }
+        # Ignore older/unversioned GitHub builds. A new release must increment
+        # its CAFE_RELEASE marker, rather than merely have different line endings.
+        if ($remote.encoding -ne 'base64' -or [string]::IsNullOrWhiteSpace($remote.content)) {
+            throw 'GitHub did not include update version metadata.'
+        }
+        $remoteText=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String(($remote.content -replace '\s','')))
+        $pattern='(?m)^# CAFE_RELEASE=(\d{4}\.\d{1,2}\.\d{1,2}\.\d+)\s*$'
+        $remoteMatch=[regex]::Match($remoteText,$pattern)
+        $localMatch=[regex]::Match([IO.File]::ReadAllText($source),$pattern)
+        if (-not $remoteMatch.Success) {
+            Write-Log 'GitHub main has no release marker (older launcher); skipping downgrade. Upload this new cafe.bat to main first.' 'WARN'
+            if ($Manual) { [System.Windows.Forms.MessageBox]::Show('Your current local build is newer than the unversioned GitHub launcher. Upload this BAT to GitHub main to activate self-updates.', 'Update Check', 'OK', 'Information') | Out-Null }
+            return
+        }
+        $remoteRelease=[version]::Parse($remoteMatch.Groups[1].Value)
+        $localRelease=if ($localMatch.Success) { [version]::Parse($localMatch.Groups[1].Value) } else { [version]'0.0.0.0' }
+        if ($remoteRelease -le $localRelease) {
+            Write-Log "CafeLauncher local release $localRelease is current; GitHub main release is $remoteRelease."
+            if ($Manual) { [System.Windows.Forms.MessageBox]::Show("CafeLauncher is current (local $localRelease; GitHub $remoteRelease).", 'Update Check', 'OK', 'Information') | Out-Null }
+            return
+        }
+        if (Test-LauncherIsCurrent -CurrentPath $source -RemoteBlobSha $remote.sha) {
+            Write-Log 'CafeLauncher is up to date with GitHub main.'
+            if ($Manual) { [System.Windows.Forms.MessageBox]::Show('CafeLauncher is already up to date.', 'Update Check', 'OK', 'Information') | Out-Null }
+            return
+        }
+        Write-Log 'A newer/different cafe.bat is available on GitHub main.' 'INFO'
+        $reply=[System.Windows.Forms.MessageBox]::Show(
+            "GitHub has a different CafeLauncher build.`n`nDownload and replace your local BAT?`n`nYour currently open launcher will keep running. Reopen it to use the update.`n`nNo GitHub login required.",
+            'CafeLauncher Update Available',
+            [System.Windows.Forms.MessageBoxButtons]::YesNo,
+            [System.Windows.Forms.MessageBoxIcon]::Question)
+        if ($reply -ne [System.Windows.Forms.DialogResult]::Yes) { Write-Log 'User skipped CafeLauncher update.'; return }
+        $temp=Join-Path $env:TEMP ("CafeLauncher-update-{0}.bat" -f [Guid]::NewGuid().ToString('N'))
+        try {
+            Invoke-WebRequest -Uri 'https://raw.githubusercontent.com/fabjoncela/Cs-script/main/cafe.bat' -OutFile $temp -UseBasicParsing -TimeoutSec 20 -ErrorAction Stop | Out-Null
+            $bytes=[IO.File]::ReadAllBytes($temp)
+            if ($bytes.Length -ne [int64]$remote.size -or
+                (Get-GitBlobSha -Bytes $bytes) -ne $remote.sha) { throw 'Downloaded BAT failed GitHub blob hash and size verification.' }
+            $text=[Text.Encoding]::UTF8.GetString($bytes)
+            if (-not $text.StartsWith('@echo off') -or -not $text.Contains('# POWERSHELL_GUI')) { throw 'Downloaded launcher structure check failed.' }
+            # Verify that the embedded PowerShell can be PARSED before installing it.
+            # In earlier releases, a correct GitHub hash was incorrectly treated as proof
+            # that the replacement could launch. A hash does not verify syntax.
+            $downloadLines=[IO.File]::ReadAllLines($temp)
+            $marker=[Array]::IndexOf($downloadLines,'# POWERSHELL_GUI')
+            if ($marker -lt 0 -or $marker -ge ($downloadLines.Length - 1)) { throw 'Update has no valid PowerShell section.' }
+            $downloadScript=($downloadLines[($marker+1)..($downloadLines.Length-1)] -join [Environment]::NewLine)
+            $parseTokens=$null
+            $parseErrors=$null
+            [void][System.Management.Automation.Language.Parser]::ParseInput($downloadScript,[ref]$parseTokens,[ref]$parseErrors)
+            if ($parseErrors.Count -gt 0) {
+                throw ('Refusing update with PowerShell syntax errors: ' + $parseErrors[0].ToString())
+            }
+            # Raw GitHub .bat content can use LF-only line endings. cmd.exe on Windows
+            # expects CRLF for reliable BAT interpretation. Verify original bytes above,
+            # then normalize the verified payload BEFORE placing it on disk.
+            $windowsText=$text.Replace("`r`n","`n").Replace("`r","`n").Replace("`n","`r`n")
+            [IO.File]::WriteAllText($temp,$windowsText,(New-Object System.Text.UTF8Encoding($false)))
+            $backupDir=Join-Path $env:LOCALAPPDATA 'CafeLauncher\backups'
+            if (-not (Test-Path -LiteralPath $backupDir)) { New-Item -ItemType Directory -Path $backupDir -Force -ErrorAction Stop | Out-Null }
+            $backup=Join-Path $backupDir ("cafe-before-update-{0}.bat" -f (Get-Date -Format 'yyyyMMdd-HHmmss'))
+            try {
+                # Stage beside the original and replace atomically when supported;
+                # this avoids leaving a partially overwritten BAT after a crash.
+                $staged=Join-Path (Split-Path -Parent $source) ('.CafeLauncher-update-' + [Guid]::NewGuid().ToString('N') + '.bat')
+                try {
+                    Copy-Item -LiteralPath $temp -Destination $staged -ErrorAction Stop
+                    try {
+                        [IO.File]::Replace($staged,$source,$backup)
+                    } catch {
+                        # File.Replace can be unavailable on network/FAT volumes.
+                        Copy-Item -LiteralPath $source -Destination $backup -ErrorAction Stop
+                        Copy-Item -LiteralPath $staged -Destination $source -Force -ErrorAction Stop
+                    }
+                } finally {
+                    Remove-Item -LiteralPath $staged -Force -ErrorAction SilentlyContinue
+                }
+                Write-Log "Update downloaded, syntax-checked, CRLF-normalized and installed at $source; backup: $backup"
+                [System.Windows.Forms.MessageBox]::Show("CafeLauncher updated successfully at:`n$source`n`nClose and reopen the BAT to use the latest version.", 'Update Installed', 'OK', 'Information') | Out-Null
+            } catch {
+                $dest=Join-Path $env:USERPROFILE 'Downloads\CafeLauncher_latest.bat'
+                Copy-Item -LiteralPath $temp -Destination $dest -Force -ErrorAction Stop
+                Write-Log "Current BAT could not be overwritten; saved verified update to $dest" 'WARN'
+                [System.Windows.Forms.MessageBox]::Show("Your original BAT could not be replaced (read-only/protected folder).`n`nA verified new copy was saved to:`n$dest`n`nOpen that copy next time.", 'Update Downloaded', 'OK', 'Warning') | Out-Null
+            }
+        } finally { Remove-Item -LiteralPath $temp -Force -ErrorAction SilentlyContinue }
+    } catch {
+        Write-Log "Update check/download failed; the existing launcher is unchanged where possible: $($_.Exception.Message)" 'WARN'
+        if ($Manual) { [System.Windows.Forms.MessageBox]::Show("Update check failed: $($_.Exception.Message)", 'Update Check', 'OK', 'Warning') | Out-Null }
+    }
+}
+
+function Launch-All {
+    Start-DetectedSteam
+
+    Launch-App -Name "FACEIT Anti-Cheat" -Paths @(
+        "$env:ProgramFiles\FACEIT AC\faceitclient.exe",
+        "${env:ProgramFiles(x86)}\FACEIT AC\faceitclient.exe"
+    )
+
+    Open-FaceitMatchmaking
+    Open-Spotify
+    Open-GHub
+    Write-Log "Launch All: opening Mouse Pointer Options."
+    Open-MousePointerOptions
+}
+
+# ==============================================================
+# PROFILE DEFAULTS - Edit in GUI, save locally or sync via GitHub
+# Cloud profile settings: profiles/<ProfileName>.json (public read).
+# CS2 .cfg files remain separately managed on GitHub.
+# Local unsynced edits ALWAYS win over downloaded cloud settings.
+# ==============================================================
+$script:GithubRepo = 'fabjoncela/Cs-script'
+$script:GithubBranch = 'main'
+$script:FabCfgCloudUrl = 'https://raw.githubusercontent.com/fabjoncela/Cs-script/main/fab.cfg'
+$script:GamingProfiles = [ordered]@{
+    FabMode = @{
+        PointerSpeed=10; DisableAcceleration=$true; ApplyNvidia=$true
+        Width=1920; Height=1080; RefreshHz=360; Vibrance=75
+        CS2Sensitivity=''; ConfigFile='fab.cfg'; CfgDownloadUrl=$script:FabCfgCloudUrl; LaunchApps=$true
+    }
+    ArliMode = @{
+        PointerSpeed=10; DisableAcceleration=$true; ApplyNvidia=$true
+        Width=1920; Height=1080; RefreshHz=360; Vibrance=75
+        CS2Sensitivity=''; ConfigFile='arli.cfg'; CfgDownloadUrl='https://raw.githubusercontent.com/fabjoncela/Cs-script/main/arli.cfg'; LaunchApps=$true
+    }
+    BrileMode = @{
+        PointerSpeed=10; DisableAcceleration=$true; ApplyNvidia=$true
+        Width=1920; Height=1080; RefreshHz=360; Vibrance=75
+        CS2Sensitivity=''; ConfigFile='brile.cfg'; CfgDownloadUrl='https://raw.githubusercontent.com/fabjoncela/Cs-script/main/brile.cfg'; LaunchApps=$true
+    }
+    ArmlMode = @{
+        PointerSpeed=10; DisableAcceleration=$true; ApplyNvidia=$true
+        Width=1920; Height=1080; RefreshHz=360; Vibrance=75
+        CS2Sensitivity=''; ConfigFile='arml.cfg'; CfgDownloadUrl='https://raw.githubusercontent.com/fabjoncela/Cs-script/main/arml.cfg'; LaunchApps=$true
+    }
+    OliMode = @{
+        PointerSpeed=10; DisableAcceleration=$true; ApplyNvidia=$true
+        Width=1920; Height=1080; RefreshHz=360; Vibrance=75
+        CS2Sensitivity=''; ConfigFile='oli.cfg'; CfgDownloadUrl='https://raw.githubusercontent.com/fabjoncela/Cs-script/main/oli.cfg'; LaunchApps=$true
+    }
+}
+$script:ProfileSettingsPath = Join-Path $env:LOCALAPPDATA 'CafeLauncher\profiles.json'
+$script:PendingSync = @{}
+foreach ($name in @($script:GamingProfiles.Keys)) { $script:PendingSync[$name] = $false }
+
+function Import-ProfileValues {
+    param([string]$ProfileName, $SavedProfile, [string]$SourceLabel = 'local')
+    if (-not $script:GamingProfiles.Contains($ProfileName) -or -not $SavedProfile) { return }
+    foreach ($setting in @('PointerSpeed','DisableAcceleration','ApplyNvidia','Width','Height','RefreshHz','Vibrance','CS2Sensitivity','CfgDownloadUrl','LaunchApps')) {
+        $saved = $SavedProfile.PSObject.Properties[$setting]
+        if (-not $saved) { continue }
+        $value = $saved.Value
+        try {
+            switch ($setting) {
+                'PointerSpeed' { $value=[int]$value; if ($value -lt 1 -or $value -gt 20) { throw 'range' } }
+                'Width'        { $value=[int]$value; if ($value -lt 640 -or $value -gt 7680) { throw 'range' } }
+                'Height'       { $value=[int]$value; if ($value -lt 480 -or $value -gt 4320) { throw 'range' } }
+                'RefreshHz'    { $value=[int]$value; if ($value -lt 30 -or $value -gt 600) { throw 'range' } }
+                'Vibrance'     { $value=[int]$value; if ($value -lt 0 -or $value -gt 100) { throw 'range' } }
+                'CS2Sensitivity' {
+                    $value=[string]$value
+                    if ($value -and $value -notmatch '^(?:[0-9]+(?:\.[0-9]+)?)$') { throw 'invalid sensitivity' }
+                    if ($value -and ([double]::Parse($value,[Globalization.CultureInfo]::InvariantCulture) -le 0 -or [double]::Parse($value,[Globalization.CultureInfo]::InvariantCulture) -gt 20)) { throw 'range' }
+                }
+                'CfgDownloadUrl' {
+                    $value = [string]$value
+                    if ($ProfileName -eq 'FabMode' -and [string]::IsNullOrWhiteSpace($value)) {
+                        $value = $script:FabCfgCloudUrl
+                        Write-Log 'Migrated old FabMode empty CFG URL to GitHub fab.cfg.'
+                    }
+                    if ($value) { Assert-ConfigUrl $value }
+                }
+                default {
+                    if ($setting -in @('DisableAcceleration','ApplyNvidia','LaunchApps')) {
+                        if ($value -isnot [bool]) { throw 'boolean expected' }
+                    }
+                }
+            }
+            $script:GamingProfiles[$ProfileName][$setting] = $value
+        } catch { Write-Log "Ignored invalid $SourceLabel $ProfileName/$setting value." 'WARN' }
+    }
+}
+
+function Load-ProfileSettings {
+    if (-not (Test-Path -LiteralPath $script:ProfileSettingsPath -PathType Leaf)) { return }
+    try {
+        $settings = Get-Content -LiteralPath $script:ProfileSettingsPath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+        foreach ($name in @($script:GamingProfiles.Keys)) {
+            $savedProfile = $settings.PSObject.Properties[$name]
+            if (-not $savedProfile -or -not $savedProfile.Value) { continue }
+            Import-ProfileValues -ProfileName $name -SavedProfile $savedProfile.Value -SourceLabel 'local'
+            $dirty = $savedProfile.Value.PSObject.Properties['SyncPending']
+            # Old versions saved ONLY locally: protect edits from being replaced by cloud defaults.
+            if ($dirty -and $dirty.Value -is [bool]) {
+                $script:PendingSync[$name] = [bool]$dirty.Value
+            } else {
+                $script:PendingSync[$name] = $true
+            }
+        }
+        Write-Log "Loaded local profile settings from $script:ProfileSettingsPath."
+    } catch {
+        Write-Log "Profile settings JSON could not be read; using defaults: $($_.Exception.Message)" 'WARN'
+    }
+}
+
+function Export-ProfileValues {
+    param([string]$ProfileName)
+    $p = $script:GamingProfiles[$ProfileName]
+    if (-not $p) { throw "Unknown profile: $ProfileName" }
+    $profileValues = [ordered]@{
+        PointerSpeed=[int]$p.PointerSpeed; DisableAcceleration=[bool]$p.DisableAcceleration
+        ApplyNvidia=[bool]$p.ApplyNvidia; Width=[int]$p.Width; Height=[int]$p.Height
+        RefreshHz=[int]$p.RefreshHz; Vibrance=[int]$p.Vibrance
+        CS2Sensitivity=[string]$p.CS2Sensitivity; CfgDownloadUrl=[string]$p.CfgDownloadUrl
+        LaunchApps=[bool]$p.LaunchApps
+    }
+    # Preserve the dictionary as ONE pipeline object on Windows PowerShell 5.1.
+    Write-Output -NoEnumerate $profileValues
+}
+
+function Save-ProfileSettings {
+    # Build a full independent snapshot before writing to disk. Do NOT index
+    # $settings[$name] immediately after assignment: in some Windows PowerShell
+    # hosts a missing/empty pipeline output caused a null-array exception here.
+    $settings = [ordered]@{}
+    foreach ($name in @($script:GamingProfiles.Keys)) {
+        $values = Export-ProfileValues -ProfileName $name
+        if ($null -eq $values -or $values -isnot [System.Collections.IDictionary]) {
+            throw "Cannot save ${name}: the profile exporter did not return a settings dictionary."
+        }
+        $snapshot = [ordered]@{}
+        foreach ($key in @($values.Keys)) { $snapshot[$key] = $values[$key] }
+        $snapshot['SyncPending'] = [bool]$script:PendingSync[$name]
+        $settings[$name] = $snapshot
+    }
+    $dir = Split-Path -Parent $script:ProfileSettingsPath
+    if (-not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Path $dir -Force -ErrorAction Stop | Out-Null }
+    $tmp = Join-Path $dir ("profiles-{0}.tmp" -f [Guid]::NewGuid().ToString('N'))
+    try {
+        [IO.File]::WriteAllText($tmp, ($settings | ConvertTo-Json -Depth 5), (New-Object System.Text.UTF8Encoding($false)))
+        Move-Item -LiteralPath $tmp -Destination $script:ProfileSettingsPath -Force -ErrorAction Stop
+    } finally {
+        if (Test-Path -LiteralPath $tmp) { Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue }
+    }
+    Write-Log "Profile settings saved locally: $script:ProfileSettingsPath"
+}
+
+Load-ProfileSettings
+
+function Refresh-ProfileFromGitHub {
+    param([Parameter(Mandatory=$true)][string]$ProfileName)
+    if (-not $script:GamingProfiles.Contains($ProfileName)) { throw "Unknown profile: $ProfileName" }
+    if ($script:PendingSync[$ProfileName]) {
+        Write-Log "$ProfileName has local edits not synced to GitHub; keeping local settings." 'INFO'
+        return
+    }
+    $url = "https://raw.githubusercontent.com/$($script:GithubRepo)/$($script:GithubBranch)/profiles/$ProfileName.json"
+    try {
+        [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+        # GitHub content is JSON data only; no code is executed from remote profiles.
+        $remote = Invoke-RestMethod -Uri $url -Method Get -Headers @{'Cache-Control'='no-cache'} -TimeoutSec 8 -ErrorAction Stop
+        if ($remote.ProfileName -ne $ProfileName -or [int]$remote.SchemaVersion -ne 1) {
+            throw "Unexpected profile JSON schema for $ProfileName."
+        }
+        Import-ProfileValues -ProfileName $ProfileName -SavedProfile $remote -SourceLabel 'GitHub'
+        try { Save-ProfileSettings } catch { Write-Log "Unable to cache cloud settings: $($_.Exception.Message)" 'WARN' }
+        Write-Log "$ProfileName settings downloaded from GitHub (no login needed)."
+    } catch {
+        Write-Log "Could not refresh $ProfileName settings from GitHub; using cached/local values. $($_.Exception.Message)" 'WARN'
+    }
+}
+
+function Get-GitHubSyncToken {
+    param($OwnerWindow)
+    $authForm = New-Object System.Windows.Forms.Form
+    $authForm.Text = 'Authorize GitHub Sync'
+    $authForm.ClientSize = New-Object System.Drawing.Size(590,286)
+    $authForm.StartPosition='CenterParent'
+    $authForm.FormBorderStyle='FixedDialog'
+    $authForm.MaximizeBox=$false
+    $authForm.MinimizeBox=$false
+    $authForm.BackColor=$PANEL
+    $authForm.ForeColor=$WHITE
+    $authForm.Font=New-Object System.Drawing.Font('Segoe UI',10)
+
+    $instructions = New-Object System.Windows.Forms.Label
+    $instructions.Text = "Paste a fine-grained GitHub access token for $($script:GithubRepo).`r`nPermissions: Contents = Read and write (only this repo).`r`nCreate a short-lived token and revoke it when finished."
+    $instructions.Location=New-Object System.Drawing.Point(20,18)
+    $instructions.Size=New-Object System.Drawing.Size(550,75)
+    $authForm.Controls.Add($instructions)
+
+    $secretBox = New-Object System.Windows.Forms.TextBox
+    $secretBox.Location=New-Object System.Drawing.Point(20,106)
+    $secretBox.Size=New-Object System.Drawing.Size(545,30)
+    $secretBox.UseSystemPasswordChar=$true
+    $authForm.Controls.Add($secretBox)
+
+    $warning = New-Object System.Windows.Forms.Label
+    $warning.Text='Never paste a GitHub token on an untrusted/shared cafe PC. Tokens are not saved by CafeLauncher.'
+    $warning.ForeColor=[System.Drawing.Color]::FromArgb(255,190,105)
+    $warning.Location=New-Object System.Drawing.Point(20,147)
+    $warning.Size=New-Object System.Drawing.Size(550,46)
+    $authForm.Controls.Add($warning)
+
+    $create = New-Object System.Windows.Forms.Button
+    $create.Text='Create a GitHub token...'
+    $create.Location=New-Object System.Drawing.Point(20,213)
+    $create.Size=New-Object System.Drawing.Size(200,36)
+    $create.Add_Click({ Start-Process 'https://github.com/settings/personal-access-tokens/new' })
+    $authForm.Controls.Add($create)
+
+    $ok=New-Object System.Windows.Forms.Button
+    $ok.Text='Authorize & Upload'
+    $ok.Location=New-Object System.Drawing.Point(267,213)
+    $ok.Size=New-Object System.Drawing.Size(162,36)
+    $ok.BackColor=$BLUE
+    $ok.ForeColor=$WHITE
+    $authForm.Controls.Add($ok)
+    $cancel=New-Object System.Windows.Forms.Button
+    $cancel.Text='Cancel'
+    $cancel.Location=New-Object System.Drawing.Point(439,213)
+    $cancel.Size=New-Object System.Drawing.Size(125,36)
+    $cancel.DialogResult=[System.Windows.Forms.DialogResult]::Cancel
+    $authForm.Controls.Add($cancel)
+    $authForm.CancelButton=$cancel
+
+    $ok.Add_Click({
+        if ($secretBox.Text.Trim().Length -lt 20) {
+            [System.Windows.Forms.MessageBox]::Show('Paste a valid GitHub token before uploading.', 'GitHub authorization', 'OK', 'Warning') | Out-Null
+            return
+        }
+        $authForm.DialogResult=[System.Windows.Forms.DialogResult]::OK
+        $authForm.Close()
+    }.GetNewClosure())
+    try {
+        $result=$authForm.ShowDialog($OwnerWindow)
+        if ($result -ne [System.Windows.Forms.DialogResult]::OK) { return $null }
+        return $secretBox.Text.Trim()
+    } finally {
+        $secretBox.Clear()
+        $authForm.Dispose()
+    }
+}
+
+function Sync-ProfileToGitHub {
+    param([Parameter(Mandatory=$true)][string]$ProfileName, [Parameter(Mandatory=$true)][string]$Token)
+    if (-not $script:GamingProfiles.Contains($ProfileName)) { throw "Unknown profile: $ProfileName" }
+    $path = "profiles/$ProfileName.json"
+    $uri = "https://api.github.com/repos/$($script:GithubRepo)/contents/$path"
+    $headers = @{
+        'Authorization'="Bearer $Token"
+        'Accept'='application/vnd.github+json'
+        'User-Agent'='CafeLauncher-ProfileSync'
+        'X-GitHub-Api-Version'='2022-11-28'
+    }
+    $existingSha = $null
+    [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+    try {
+        $current = Invoke-RestMethod -Uri ($uri + '?ref=' + $script:GithubBranch) -Method Get -Headers $headers -TimeoutSec 20 -MaximumRedirection 0 -ErrorAction Stop
+        $existingSha = [string]$current.sha
+    } catch {
+        $status = $null
+        if ($_.Exception.Response) { $status = [int]$_.Exception.Response.StatusCode }
+        if ($status -ne 404) { throw "GitHub authorization or file read failed (HTTP $status)." }
+    }
+
+    $payload = [ordered]@{ SchemaVersion=1; ProfileName=$ProfileName }
+    $values = Export-ProfileValues -ProfileName $ProfileName
+    if ($null -eq $values -or $values -isnot [System.Collections.IDictionary]) {
+        throw "Cannot sync ${ProfileName}: the profile exporter returned no valid settings."
+    }
+    foreach ($key in @($values.Keys)) { $payload[$key] = $values[$key] }
+    $json = $payload | ConvertTo-Json -Depth 5
+    $body = @{
+        message="Update $ProfileName settings from CafeLauncher"
+        content=[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($json + "`n"))
+        branch=$script:GithubBranch
+    }
+    if ($existingSha) { $body.sha = $existingSha }
+    try {
+        $result = Invoke-RestMethod -Uri $uri -Method Put -Headers $headers -ContentType 'application/json' -Body ($body | ConvertTo-Json -Depth 5 -Compress) -TimeoutSec 25 -MaximumRedirection 0 -ErrorAction Stop
+        if (-not $result.commit.sha) { throw 'GitHub did not return a successful commit.' }
+        Write-Log "$ProfileName settings synced to GitHub. Commit: $($result.commit.sha)"
+    } catch {
+        $status = $null
+        if ($_.Exception.Response) { $status = [int]$_.Exception.Response.StatusCode }
+        if ($status -eq 401 -or $status -eq 403) { throw 'GitHub refused the token. Check repository access and Contents: Read and write permission.' }
+        if ($status -eq 409 -or $status -eq 422) { throw 'GitHub rejected the update due to a changed version or validation error. Retry syncing.' }
+        throw "GitHub upload failed (HTTP $status). Your settings remain saved locally."
+    } finally {
+        $headers.Authorization = $null
+        $body.content = $null
+    }
+}
+
+function New-EditorLabel {
+    param($Window, [string]$Caption, [int]$X, [int]$Y, [int]$Width=200)
+    $label = New-Object System.Windows.Forms.Label
+    $label.Text=$Caption
+    $label.ForeColor=$script:EditorTextColor
+    $label.Location=New-Object System.Drawing.Point($X,$Y)
+    $label.Size=New-Object System.Drawing.Size($Width,23)
+    $Window.Controls.Add($label)
+    return $label
+}
+
+function New-EditorNumber {
+    param($Window, [int]$X, [int]$Y, [int]$Min, [int]$Max, [int]$Value, [int]$Width=180)
+    $n = New-Object System.Windows.Forms.NumericUpDown
+    $n.Location=New-Object System.Drawing.Point($X,$Y)
+    $n.Size=New-Object System.Drawing.Size($Width,28)
+    $n.Minimum=[decimal]$Min
+    $n.Maximum=[decimal]$Max
+    $n.Value=[decimal]$Value
+    $Window.Controls.Add($n)
+    return $n
+}
+
+function Show-ProfileEditor {
+    param([Parameter(Mandatory=$true)][string]$ProfileName)
+    Refresh-ProfileFromGitHub -ProfileName $ProfileName
+    $p = $script:GamingProfiles[$ProfileName]
+    if (-not $p) { throw "Unknown profile: $ProfileName" }
+    # GetNewClosure() creates a new dynamic module scope. The script: scope
+    # inside a captured click handler is NOT the original launcher's script:
+    # scope. Capture a reference to the real pending-sync dictionary here.
+    $pendingSyncState = $script:PendingSync
+    if ($null -eq $pendingSyncState -or $pendingSyncState -isnot [System.Collections.IDictionary]) {
+        throw 'Profile sync state is missing; cannot safely edit this profile.'
+    }
+
+    $dialog = New-Object System.Windows.Forms.Form
+    $dialog.Text = "Edit $ProfileName"
+    $dialog.ClientSize = New-Object System.Drawing.Size(590,645)
+    $dialog.StartPosition = 'CenterParent'
+    $dialog.FormBorderStyle = 'FixedDialog'
+    $dialog.MaximizeBox = $false
+    $dialog.MinimizeBox = $false
+    $dialog.ShowInTaskbar = $false
+    $dialog.BackColor = $PANEL
+    $dialog.ForeColor = $WHITE
+    $dialog.Font = New-Object System.Drawing.Font('Segoe UI',10)
+    $script:EditorTextColor = $WHITE
+
+    New-EditorLabel $dialog 'Windows pointer speed (1-20)' 20 18 260 | Out-Null
+    $pointer = New-EditorNumber $dialog 20 42 1 20 ([int]$p.PointerSpeed) 245
+    New-EditorLabel $dialog 'NVIDIA Digital Vibrance (%)' 305 18 260 | Out-Null
+    $vibrance = New-EditorNumber $dialog 305 42 0 100 ([int]$p.Vibrance) 245
+
+    $accel = New-Object System.Windows.Forms.CheckBox
+    $accel.Text='Enable Windows mouse acceleration (EPP)'
+    $accel.Checked = -not [bool]$p.DisableAcceleration
+    $accel.Location=New-Object System.Drawing.Point(20,83)
+    $accel.Size=New-Object System.Drawing.Size(500,27)
+    $dialog.Controls.Add($accel)
+
+    New-EditorLabel $dialog 'Resolution width' 20 122 210 | Out-Null
+    New-EditorLabel $dialog 'Resolution height' 205 122 210 | Out-Null
+    New-EditorLabel $dialog 'Refresh rate (Hz)' 390 122 190 | Out-Null
+    $width = New-EditorNumber $dialog 20 147 640 7680 ([int]$p.Width) 165
+    $height = New-EditorNumber $dialog 205 147 480 4320 ([int]$p.Height) 165
+    $hz = New-EditorNumber $dialog 390 147 30 600 ([int]$p.RefreshHz) 160
+
+    New-EditorLabel $dialog 'CS2 sensitivity (blank = value from .cfg)' 20 196 530 | Out-Null
+    $sens = New-Object System.Windows.Forms.TextBox
+    $sens.Text=[string]$p.CS2Sensitivity
+    $sens.Location=New-Object System.Drawing.Point(20,222)
+    $sens.Size=New-Object System.Drawing.Size(530,29)
+    $dialog.Controls.Add($sens)
+
+    New-EditorLabel $dialog 'CS2 config filename (fixed for each profile)' 20 276 530 | Out-Null
+    $cfgFile = New-Object System.Windows.Forms.TextBox
+    $cfgFile.Text=[string]$p.ConfigFile
+    $cfgFile.ReadOnly=$true
+    $cfgFile.Location=New-Object System.Drawing.Point(20,300)
+    $cfgFile.Size=New-Object System.Drawing.Size(530,29)
+    $dialog.Controls.Add($cfgFile)
+
+    New-EditorLabel $dialog 'GitHub .cfg URL (FabMode default: fab.cfg)' 20 355 540 | Out-Null
+    $url = New-Object System.Windows.Forms.TextBox
+    $url.Text=[string]$p.CfgDownloadUrl
+    $url.Location=New-Object System.Drawing.Point(20,380)
+    $url.Size=New-Object System.Drawing.Size(530,28)
+    $dialog.Controls.Add($url)
+
+    $nv = New-Object System.Windows.Forms.CheckBox
+    $nv.Text='Apply NVIDIA settings (including resolution + vibrance)'
+    $nv.Checked=[bool]$p.ApplyNvidia
+    $nv.Location=New-Object System.Drawing.Point(20,430)
+    $nv.Size=New-Object System.Drawing.Size(550,26)
+    $dialog.Controls.Add($nv)
+
+    $apps = New-Object System.Windows.Forms.CheckBox
+    $apps.Text='Launch Steam, FACEIT, Spotify, G HUB, Mouse Options'
+    $apps.Checked=[bool]$p.LaunchApps
+    $apps.Location=New-Object System.Drawing.Point(20,461)
+    $apps.Size=New-Object System.Drawing.Size(550,26)
+    $dialog.Controls.Add($apps)
+
+    $dialog.ClientSize = New-Object System.Drawing.Size(590,665)
+    $tip = New-EditorLabel $dialog 'Local edits stay on this PC. GitHub sync shares ALL profile settings; CFG binds remain separate.' 20 504 550
+    $tip.ForeColor=$MUTED
+    $tip.Font=New-Object System.Drawing.Font('Segoe UI',8)
+    $tip.Size=New-Object System.Drawing.Size(550,37)
+
+    $status = New-EditorLabel $dialog '' 20 538 550
+    $status.Font=New-Object System.Drawing.Font('Segoe UI',8,[System.Drawing.FontStyle]::Bold)
+    $status.Size=New-Object System.Drawing.Size(550,23)
+    if ($script:PendingSync[$ProfileName]) {
+        $status.Text='Unsynced local edits - cloud download will not overwrite them.'
+        $status.ForeColor=[System.Drawing.Color]::FromArgb(255,190,105)
+    } else {
+        $status.Text='GitHub settings enabled - saved locally and cached for offline use.'
+        $status.ForeColor=$MUTED
+    }
+
+    $saveLocal = New-Object System.Windows.Forms.Button
+    $saveLocal.Text='Save Locally'
+    $saveLocal.Location=New-Object System.Drawing.Point(20,585)
+    $saveLocal.Size=New-Object System.Drawing.Size(155,40)
+    $saveLocal.BackColor=$BLUE
+    $saveLocal.ForeColor=$WHITE
+    $saveLocal.FlatStyle='Flat'
+    $dialog.Controls.Add($saveLocal)
+
+    $saveSync = New-Object System.Windows.Forms.Button
+    $saveSync.Text='Save & Sync to GitHub'
+    $saveSync.Location=New-Object System.Drawing.Point(184,585)
+    $saveSync.Size=New-Object System.Drawing.Size(219,40)
+    $saveSync.BackColor=[System.Drawing.Color]::FromArgb(38,132,102)
+    $saveSync.ForeColor=$WHITE
+    $saveSync.FlatStyle='Flat'
+    $dialog.Controls.Add($saveSync)
+
+    $cancel = New-Object System.Windows.Forms.Button
+    $cancel.Text='Cancel'
+    $cancel.Location=New-Object System.Drawing.Point(413,585)
+    $cancel.Size=New-Object System.Drawing.Size(137,40)
+    $cancel.DialogResult=[System.Windows.Forms.DialogResult]::Cancel
+    $dialog.Controls.Add($cancel)
+    $dialog.CancelButton=$cancel
+
+    $saveEditorValues = {
+        $sensValue=$sens.Text.Trim()
+        if ($sensValue) {
+            $number=0.0
+            if (-not [double]::TryParse($sensValue,[Globalization.NumberStyles]::Float,[Globalization.CultureInfo]::InvariantCulture,[ref]$number) -or
+                [double]::IsNaN($number) -or $number -le 0 -or $number -gt 20) {
+                throw 'Sensitivity must be blank or between 0 and 20, using a decimal point (e.g. 1.2).'
+            }
+            $sensValue=$number.ToString('0.####',[Globalization.CultureInfo]::InvariantCulture)
+        }
+        $cfgUrl=$url.Text.Trim()
+        if ($cfgUrl) { Assert-ConfigUrl $cfgUrl }
+        $p.PointerSpeed=[int]$pointer.Value
+        $p.DisableAcceleration= -not $accel.Checked
+        $p.Width=[int]$width.Value
+        $p.Height=[int]$height.Value
+        $p.RefreshHz=[int]$hz.Value
+        $p.Vibrance=[int]$vibrance.Value
+        $p.ApplyNvidia=[bool]$nv.Checked
+        $p.LaunchApps=[bool]$apps.Checked
+        $p.CS2Sensitivity=$sensValue
+        $p.CfgDownloadUrl=$cfgUrl
+        # Use the captured shared dictionary, not script: scope in this closure.
+        $pendingSyncState[$ProfileName] = $true
+        Save-ProfileSettings
+        Write-Log "$ProfileName edited locally: pointer=$($p.PointerSpeed), acceleration enabled=$(-not $p.DisableAcceleration), display=$($p.Width)x$($p.Height)@$($p.RefreshHz), vibrance=$($p.Vibrance)%, sensitivity=$sensValue."
+    }.GetNewClosure()
+
+    $saveLocal.Add_Click({
+        try {
+            & $saveEditorValues
+            [System.Windows.Forms.MessageBox]::Show("$ProfileName saved locally. No GitHub login required.`nChanges on a Deep Freeze PC may disappear after restart.", 'Saved locally', 'OK', 'Information') | Out-Null
+            $dialog.DialogResult=[System.Windows.Forms.DialogResult]::OK
+            $dialog.Close()
+        } catch {
+            Write-Log "Save Locally failed for ${ProfileName}: $($_.Exception.Message); $($_.ScriptStackTrace)" 'ERROR'
+            [System.Windows.Forms.MessageBox]::Show("Could not save ${ProfileName}:`n$($_.Exception.Message)`n`nSee LIVE LOGS for the failing line.", 'Profile Editor', 'OK', 'Error') | Out-Null
+        }
+    }.GetNewClosure())
+
+    $saveSync.Add_Click({
+        try {
+            & $saveEditorValues
+            $token = Get-GitHubSyncToken -OwnerWindow $dialog
+            if ([string]::IsNullOrWhiteSpace($token)) {
+                $status.Text='Saved locally. GitHub sync canceled; local edits preserved.'
+                $status.ForeColor=[System.Drawing.Color]::FromArgb(255,190,105)
+                Write-Log "$ProfileName GitHub sync canceled; local changes preserved."
+                return
+            }
+            try {
+                $saveSync.Enabled=$false
+                $dialog.Cursor=[System.Windows.Forms.Cursors]::WaitCursor
+                Sync-ProfileToGitHub -ProfileName $ProfileName -Token $token
+                $pendingSyncState[$ProfileName] = $false
+                Save-ProfileSettings
+                [System.Windows.Forms.MessageBox]::Show("$ProfileName settings committed to GitHub and saved locally.`nOther PCs can now download the new settings without signing in.`nThe .cfg bindings are still maintained separately on GitHub.", 'GitHub sync complete', 'OK', 'Information') | Out-Null
+                $dialog.DialogResult=[System.Windows.Forms.DialogResult]::OK
+                $dialog.Close()
+            } finally {
+                $token = $null
+                if (-not $dialog.IsDisposed) {
+                    $saveSync.Enabled=$true
+                    $dialog.Cursor=[System.Windows.Forms.Cursors]::Default
+                }
+            }
+        } catch {
+            Write-Log "$ProfileName GitHub sync failed; local settings kept. $($_.Exception.Message); $($_.ScriptStackTrace)" 'WARN'
+            $status.Text='Cloud sync failed; settings are saved locally. Retry Save & Sync.'
+            $status.ForeColor=[System.Drawing.Color]::FromArgb(255,190,105)
+            [System.Windows.Forms.MessageBox]::Show("$ProfileName saved locally, but GitHub sync failed:`n$($_.Exception.Message)", 'GitHub sync', 'OK', 'Warning') | Out-Null
+        }
+    }.GetNewClosure())
+
+    [void]$dialog.ShowDialog($form)
+    $dialog.Dispose()
+}
+
+function Invoke-GamingProfile {
+    param([Parameter(Mandatory=$true)][string]$ProfileName)
+    if (-not $script:GamingProfiles.Contains($ProfileName)) {
+        Write-Log "Unknown gaming profile: $ProfileName" 'ERROR'
+        return
+    }
+    Refresh-ProfileFromGitHub -ProfileName $ProfileName
+    $profile = $script:GamingProfiles[$ProfileName]
+    Write-Log "$ProfileName full routine started: mouse, NVIDIA, CS2 config, applications."
+
+    $steps = @(
+        @{ Name = 'Windows mouse speed/acceleration'; Action = {
+            Apply-ProfileMouse -ProfileName $ProfileName -PointerSpeed ([int]$profile.PointerSpeed) -DisableAcceleration ([bool]$profile.DisableAcceleration) -SkipPointerOptions
+        } }
+    )
+    if ($profile.ApplyNvidia) {
+        $steps += @{ Name = 'NVIDIA settings'; Action = { Apply-NvidiaGamingSettings -Width ([int]$profile.Width) -Height ([int]$profile.Height) -RefreshHz ([int]$profile.RefreshHz) -Vibrance ([int]$profile.Vibrance) } }
+    }
+    $profileCfgName = [string]$profile.ConfigFile
+    if (-not [string]::IsNullOrWhiteSpace($profileCfgName)) {
+        $profileCfgUrl = [string]$profile.CfgDownloadUrl
+        if ($ProfileName -eq 'FabMode' -and [string]::IsNullOrWhiteSpace($profileCfgUrl)) {
+            $profileCfgUrl = $script:FabCfgCloudUrl
+        }
+        $steps += @{ Name = "Install CS2 $profileCfgName"; Action = {
+            Install-AtCfg -Silent -CfgName $profileCfgName -DownloadUrl $profileCfgUrl -CloudPreferred:([bool]$profileCfgUrl) -CS2Sensitivity ([string]$profile.CS2Sensitivity)
+        } }
+    }
+    if ($profile.LaunchApps) {
+        $steps += @{ Name = 'Launch All (including Mouse Pointer Options)'; Action = { Launch-All } }
+    }
+    foreach ($step in $steps) {
+        Write-Log ("$ProfileName step started: " + $step.Name)
+        try {
+            & ($step.Action)
+            Write-Log ("$ProfileName step returned: " + $step.Name + ". Check logs for individual success or errors.")
+        } catch {
+            Write-Log ("$ProfileName step failed: " + $step.Name + ": " + $_.Exception.Message) 'ERROR'
+        }
+    }
+    Write-Log "$ProfileName full routine finished. Review logs for individual results."
+}
+
+# Backward-compatible entry point.
+function Invoke-FabModeFull { Invoke-GamingProfile -ProfileName 'FabMode' }
+
+# Main window
+$form = New-Object System.Windows.Forms.Form
+$form.Text = "Cafe Launcher"
+$form.Size = New-Object System.Drawing.Size(800,950)
+$form.StartPosition = "CenterScreen"
+$form.FormBorderStyle = "FixedSingle"
+$form.MaximizeBox = $false
+$form.BackColor = $BG
+$form.ForeColor = $WHITE
+$form.Font = New-Object System.Drawing.Font("Segoe UI",10)
+
+# Header
+$header = New-Object System.Windows.Forms.Panel
+$header.Location = New-Object System.Drawing.Point(0,0)
+$header.Size = New-Object System.Drawing.Size(800,105)
+$header.BackColor = $PANEL
+$form.Controls.Add($header)
+
+$title = New-Object System.Windows.Forms.Label
+$title.Text = "GAMING CAFE"
+$title.Location = New-Object System.Drawing.Point(28,18)
+$title.Size = New-Object System.Drawing.Size(500,38)
+$title.Font = New-Object System.Drawing.Font("Segoe UI",21,[System.Drawing.FontStyle]::Bold)
+$title.ForeColor = $WHITE
+$header.Controls.Add($title)
+
+$subtitle = New-Object System.Windows.Forms.Label
+$subtitle.Text = "APP LAUNCHER  |  PC SETTINGS"
+$subtitle.Location = New-Object System.Drawing.Point(31,62)
+$subtitle.Size = New-Object System.Drawing.Size(500,23)
+$subtitle.Font = New-Object System.Drawing.Font("Segoe UI",9)
+$subtitle.ForeColor = $MUTED
+$header.Controls.Add($subtitle)
+
+function New-Tile {
+    param(
+        [string]$Text,
+        [int]$Index,
+        [scriptblock]$Action,
+        [switch]$Primary,
+        [string]$EditProfile = ''
+    )
+
+    $col = $Index % 3
+    $row = [Math]::Floor($Index / 3)
+    $x = 25 + ($col * 250)
+    $y = 125 + ($row * 88)
+
+    $button = New-Object System.Windows.Forms.Button
+    $button.Text = $Text
+    $button.Location = New-Object System.Drawing.Point($x,$y)
+    if ($EditProfile) {
+        $button.Size = New-Object System.Drawing.Size(235,46)
+    } else {
+        $button.Size = New-Object System.Drawing.Size(235,70)
+    }
+    $button.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
+    $button.FlatAppearance.BorderSize = 0
+    if ($Primary) {
+        $button.BackColor = $BLUE
+    } else {
+        $button.BackColor = $PANEL
+    }
+    $button.ForeColor = $WHITE
+    $button.Font = New-Object System.Drawing.Font("Segoe UI",10,[System.Drawing.FontStyle]::Bold)
+    $button.Cursor = [System.Windows.Forms.Cursors]::Hand
+    $actionToRun = $Action
+    $button.Add_Click({
+        Write-Log "Clicked: $($this.Text)"
+        try {
+            & $actionToRun
+        } catch {
+            Write-Log "Button '$($this.Text)' failed: $($_.Exception.Message)" "ERROR"
+            [System.Windows.Forms.MessageBox]::Show(
+                "$($this.Text) failed:`n$($_.Exception.Message)",
+                "Cafe Launcher"
+            )
+        }
+    }.GetNewClosure())
+    $form.Controls.Add($button)
+    if ($EditProfile) {
+        $edit = New-Object System.Windows.Forms.Button
+        $edit.Text = "Edit $EditProfile settings"
+        $edit.Location = [System.Drawing.Point]::new($x, ($y + 48))
+        $edit.Size = New-Object System.Drawing.Size(235,22)
+        $edit.Font = New-Object System.Drawing.Font('Segoe UI',8)
+        $edit.FlatStyle = 'Flat'
+        $edit.FlatAppearance.BorderSize = 0
+        $edit.BackColor = [System.Drawing.Color]::FromArgb(58,67,83)
+        $edit.ForeColor = $WHITE
+        $edit.Cursor = [System.Windows.Forms.Cursors]::Hand
+        $selectedProfile = $EditProfile
+        $edit.Add_Click({
+            Write-Log "Clicked: Edit $selectedProfile settings"
+            try { Show-ProfileEditor -ProfileName $selectedProfile }
+            catch { Write-Log "Profile editor failed: $($_.Exception.Message)" 'ERROR' }
+        }.GetNewClosure())
+        $form.Controls.Add($edit)
+    }
+}
+
+New-Tile "LAUNCH ALL" 0 { Launch-All } -Primary
+New-Tile "Steam" 1 { Start-DetectedSteam }
+New-Tile "FACEIT Anti-Cheat" 2 {
+    Launch-App -Name "FACEIT Anti-Cheat" -Paths @(
+        "$env:ProgramFiles\FACEIT AC\faceitclient.exe",
+        "${env:ProgramFiles(x86)}\FACEIT AC\faceitclient.exe"
+    )
+}
+New-Tile "FACEIT Matchmaking" 3 { Open-FaceitMatchmaking }
+New-Tile "Spotify" 4 { Open-Spotify }
+New-Tile "Logitech G HUB" 5 { Open-GHub }
+
+# Five editable gaming profiles, all using the same shared routine.
+New-Tile "FabMode" 6 { Invoke-GamingProfile -ProfileName 'FabMode' } -Primary -EditProfile 'FabMode'
+New-Tile "ArliMode" 7 { Invoke-GamingProfile -ProfileName 'ArliMode' } -Primary -EditProfile 'ArliMode'
+New-Tile "BrileMode" 8 { Invoke-GamingProfile -ProfileName 'BrileMode' } -Primary -EditProfile 'BrileMode'
+New-Tile "ArmlMode" 9 { Invoke-GamingProfile -ProfileName 'ArmlMode' } -Primary -EditProfile 'ArmlMode'
+New-Tile "OliMode" 10 { Invoke-GamingProfile -ProfileName 'OliMode' } -Primary -EditProfile 'OliMode'
+
+New-Tile "Mouse Pointer Options" 11 { Open-MousePointerOptions }
+New-Tile "NVIDIA Control Panel" 12 { Open-NvidiaControlPanel }
+New-Tile "Apply NVIDIA Settings" 13 { Apply-NvidiaGamingSettings } -Primary
+New-Tile "Install CS2 fab.cfg" 14 { Install-AtCfg -CfgName 'fab.cfg' -DownloadUrl $script:FabCfgCloudUrl -CloudPreferred } -Primary
+New-Tile "Detect PC" 15 { Show-PCDiagnostics }
+New-Tile "Check for Updates" 16 { Check-CafeLauncherUpdates -Manual }
+New-Tile "Exit" 17 { $form.Close() }
+
+# Live diagnostic log panel (visible only while the launcher is open)
+$logTitle = New-Object System.Windows.Forms.Label
+$logTitle.Text = "LIVE LOGS  |  Errors and button activity"
+$logTitle.Location = New-Object System.Drawing.Point(28,663)
+$logTitle.Size = New-Object System.Drawing.Size(500,22)
+$logTitle.Font = New-Object System.Drawing.Font("Segoe UI",9,[System.Drawing.FontStyle]::Bold)
+$logTitle.ForeColor = $WHITE
+$form.Controls.Add($logTitle)
+
+$clearLogs = New-Object System.Windows.Forms.Button
+$clearLogs.Text = "Clear Logs"
+$clearLogs.Location = New-Object System.Drawing.Point(670,659)
+$clearLogs.Size = New-Object System.Drawing.Size(100,27)
+$clearLogs.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
+$clearLogs.FlatAppearance.BorderSize = 0
+$clearLogs.BackColor = $PANEL
+$clearLogs.ForeColor = $WHITE
+$clearLogs.Add_Click({
+    if ($script:LogBox) { $script:LogBox.Clear() }
+    try { Set-Content -LiteralPath $script:LogPath -Value "" -Encoding UTF8 } catch {}
+    Write-Log "Logs cleared."
+})
+$form.Controls.Add($clearLogs)
+
+$script:LogBox = New-Object System.Windows.Forms.TextBox
+$script:LogBox.Location = New-Object System.Drawing.Point(28,690)
+$script:LogBox.Size = New-Object System.Drawing.Size(742,168)
+$script:LogBox.Multiline = $true
+$script:LogBox.ReadOnly = $true
+$script:LogBox.ScrollBars = [System.Windows.Forms.ScrollBars]::Vertical
+$script:LogBox.WordWrap = $false
+$script:LogBox.BackColor = [System.Drawing.Color]::FromArgb(12,15,20)
+$script:LogBox.ForeColor = [System.Drawing.Color]::FromArgb(190,220,190)
+$script:LogBox.Font = New-Object System.Drawing.Font("Consolas",9)
+try {
+    $script:LogBox.Text = Get-Content -LiteralPath $script:LogPath -Raw -ErrorAction Stop
+    $script:LogBox.SelectionStart = $script:LogBox.TextLength
+    $script:LogBox.ScrollToCaret()
+} catch {}
+$form.Controls.Add($script:LogBox)
+Write-Log "Launcher ready. Log file: $script:LogPath"
+
+# Footer
+$footer = New-Object System.Windows.Forms.Label
+$footer.Text = "GAMING CAFE  |  WINDOWS TOOLKIT  |  LOG: %TEMP%\CafeLauncher.log"
+$footer.Location = New-Object System.Drawing.Point(28,878)
+$footer.Size = New-Object System.Drawing.Size(740,22)
+$footer.Font = New-Object System.Drawing.Font("Segoe UI",8)
+$footer.ForeColor = $MUTED
+$form.Controls.Add($footer)
+
+$form.Add_FormClosed({
+    if ($script:ColorWatchTimer) {
+        try { $script:ColorWatchTimer.Stop(); $script:ColorWatchTimer.Dispose() } catch {}
+        Write-Log "Color Watch stopped because the launcher closed."
+    }
+})
+# On first display, automatically inventory the machine and check GitHub for
+# an update. One-shot timer lets Windows render the UI before network access.
+$startupTimer = New-Object System.Windows.Forms.Timer
+$startupTimer.Interval=350
+$startupTimer.Add_Tick({
+    $startupTimer.Stop()
+    $startupTimer.Dispose()
+    try {
+        Write-Log 'Automatic startup inventory:'
+        $summary = Get-PCDiagnostics
+        foreach ($line in ($summary -split '\r?\n')) { if ($line) { Write-Log ('PC: ' + $line) } }
+    } catch { Write-Log "Startup inventory failed: $($_.Exception.Message)" 'WARN' }
+    Check-CafeLauncherUpdates
+})
+$form.Add_Shown({ $startupTimer.Start() })
+[void]$form.ShowDialog()
+) { throw 'Steam VDF has unsupported inline braces.' }
+    $tab = [string][char]9
+    if ($gameEnd -ge 0) {
+        $addition = $indent + $tab + '"LaunchOptions"' + $tab + $quoted + $eol
+    } else {
+        $addition = $indent + '"730"' + $eol + $indent + '{' + $eol +
+                    $indent + $tab + '"LaunchOptions"' + $tab + $quoted + $eol + $indent + '}' + $eol
+    }
+    return $Content.Insert($lineStart,$addition)
+}
+
+function Get-ActiveCS2SteamConfigPath {
+    $exe = Get-SteamExecutable
+    if (-not $exe) { return $null }
+    $root = Split-Path -Parent $exe
+    $userdata = Join-Path $root 'userdata'
+    if (-not (Test-Path -LiteralPath $userdata -PathType Container)) { return $null }
+    $accounts = @(Get-ChildItem -LiteralPath $userdata -Directory -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -match '^[0-9]{1,10}
+    $lines = New-Object 'System.Collections.Generic.List[string]'
+    $lines.Add("Machine: $env:COMPUTERNAME")
+    try {
+        $gpus = @(Get-CimInstance -ClassName Win32_VideoController -ErrorAction Stop |
+            Where-Object { $_.Name } | Select-Object -ExpandProperty Name)
+        $lines.Add('Graphics: ' + ($(if ($gpus.Count) { $gpus -join '; ' } else { 'Unavailable' })))
+    } catch { $lines.Add('Graphics: Could not query GPU details') }
+    try {
+        if ('FabDisplayNative' -as [type]) {
+            $lines.Add([FabDisplayNative]::GetDisplayModesReport())
+        } else { $lines.Add('Display modes: driver helper unavailable') }
+        foreach ($screen in [System.Windows.Forms.Screen]::AllScreens) {
+            $lines.Add("Monitor $($screen.DeviceName): $($screen.Bounds.Width)x$($screen.Bounds.Height), primary=$($screen.Primary)")
+        }
+    } catch { $lines.Add('Display inventory could not be read') }
+    try {
+        $ptr = [Runtime.InteropServices.Marshal]::AllocHGlobal(4)
+        try {
+            $ok = [FabMouseNative]::SystemParametersInfo(0x0070,0,$ptr,0)
+            if ($ok) { $lines.Add('Active Windows pointer speed: ' + [Runtime.InteropServices.Marshal]::ReadInt32($ptr)) }
+            else { $lines.Add('Pointer speed API read failed') }
+        } finally { [Runtime.InteropServices.Marshal]::FreeHGlobal($ptr) }
+        $m = Get-ItemProperty -Path 'HKCU:\Control Panel\Mouse' -ErrorAction Stop
+        $lines.Add("Mouse registry: speed=$($m.MouseSensitivity), acceleration=$($m.MouseSpeed), thresholds=$($m.MouseThreshold1)/$($m.MouseThreshold2)")
+    } catch { $lines.Add('Mouse settings could not be read') }
+    $steam = Get-SteamExecutable
+    $lines.Add('Steam: ' + $(if ($steam) { $steam } else { 'not detected' }))
+    $roots = @(Get-SteamLibraryRoots)
+    $lines.Add('Steam libraries: ' + $(if ($roots.Count) { $roots -join '; ' } else { 'not detected' }))
+    $cs2 = Find-CS2ConfigFolder -NoPrompt
+    $lines.Add('CS2 config: ' + $(if ($cs2) { $cs2 } else { 'not detected' }))
+    $faceit = Find-App -Paths @("$env:ProgramFiles\FACEIT AC\faceitclient.exe", "${env:ProgramFiles(x86)}\FACEIT AC\faceitclient.exe")
+    $lines.Add('FACEIT AC: ' + $(if ($faceit) { $faceit } else { 'not detected' }))
+    $ghub = Find-App -Paths @("$env:ProgramFiles\LGHUB\lghub.exe", "$env:ProgramFiles\LGHUB\lghub_system_tray.exe")
+    $lines.Add('Logitech G HUB: ' + $(if ($ghub) { $ghub } else { 'not detected' }))
+    $chrome = Get-ChromePath
+    $lines.Add('Chrome: ' + $(if ($chrome) { $chrome } else { 'not detected' }))
+    try {
+        $nvPanel = Find-App -Paths @("$env:ProgramFiles\NVIDIA Corporation\Control Panel Client\nvcplui.exe", "${env:ProgramFiles(x86)}\NVIDIA Corporation\Control Panel Client\nvcplui.exe")
+        if (-not $nvPanel) {
+            $storeApp = Get-StartApps -ErrorAction Stop | Where-Object { $_.Name -match '^NVIDIA Control Panel$' } | Select-Object -First 1
+            if ($storeApp) { $nvPanel='Installed Store app' }
+        }
+        $lines.Add('NVIDIA Control Panel: ' + $(if ($nvPanel) { $nvPanel } else { 'not detected' }))
+    } catch { $lines.Add('NVIDIA Control Panel: not detected') }
+    return ($lines -join [Environment]::NewLine)
+}
+
+function Show-PCDiagnostics {
+    Write-Log 'PC detection started.'
+    try {
+        $summary = Get-PCDiagnostics
+        foreach ($line in ($summary -split '\r?\n')) { if ($line) { Write-Log ('PC: ' + $line) } }
+        $formDialog = New-Object System.Windows.Forms.Form
+        $formDialog.Text='PC Detection - CafeLauncher'
+        $formDialog.ClientSize=[System.Drawing.Size]::new(755,445)
+        $formDialog.StartPosition='CenterParent'
+        $formDialog.BackColor=$BG
+        $formDialog.ForeColor=$WHITE
+        $formDialog.Font=New-Object System.Drawing.Font('Consolas',10)
+        $reportBox = New-Object System.Windows.Forms.TextBox
+        $reportBox.Location=[System.Drawing.Point]::new(12,12)
+        $reportBox.Size=[System.Drawing.Size]::new(731,385)
+        $reportBox.Multiline=$true
+        $reportBox.ReadOnly=$true
+        $reportBox.ScrollBars='Both'
+        $reportBox.WordWrap=$false
+        $reportBox.BackColor=$PANEL
+        $reportBox.ForeColor=$WHITE
+        $reportBox.Text=$summary
+        $formDialog.Controls.Add($reportBox)
+        $close = New-Object System.Windows.Forms.Button
+        $close.Text='Close'
+        $close.Location=[System.Drawing.Point]::new(633,404)
+        $close.Size=[System.Drawing.Size]::new(110,30)
+        $close.Add_Click({ $formDialog.Close() })
+        $formDialog.Controls.Add($close)
+        [void]$formDialog.ShowDialog($form)
+        $formDialog.Dispose()
+    } catch { Write-Log "PC detection failed: $($_.Exception.Message)" 'ERROR' }
+}
+
+# ============================================================== 
+# Public GitHub updater: no token needed, never auto-runs new code.
+# Compares local content to the main-branch Git blob SHA, verifies download.
+# ============================================================== 
+function Get-GitBlobSha {
+    param([byte[]]$Bytes)
+    $head=[Text.Encoding]::ASCII.GetBytes('blob ' + $Bytes.Length + [char]0)
+    $blob=New-Object byte[] ($head.Length + $Bytes.Length)
+    [Array]::Copy($head,0,$blob,0,$head.Length)
+    [Array]::Copy($Bytes,0,$blob,$head.Length,$Bytes.Length)
+    $sha=[Security.Cryptography.SHA1]::Create()
+    try { return ([BitConverter]::ToString($sha.ComputeHash($blob))).Replace('-','').ToLowerInvariant() }
+    finally { $sha.Dispose() }
+}
+
+function Test-LauncherIsCurrent {
+    param([string]$CurrentPath,[string]$RemoteBlobSha)
+    if (-not (Test-Path -LiteralPath $CurrentPath -PathType Leaf)) { return $false }
+    $bytes=[IO.File]::ReadAllBytes($CurrentPath)
+    if ((Get-GitBlobSha -Bytes $bytes) -eq $RemoteBlobSha) { return $true }
+    # Chrome/Drive may preserve CRLF even when GitHub stores LF. Ignore just
+    # line-ending differences and an optional final newline for comparison.
+    $normalized=[Text.Encoding]::UTF8.GetString($bytes).Replace("`r`n","`n")
+    if ((Get-GitBlobSha -Bytes ([Text.Encoding]::UTF8.GetBytes($normalized))) -eq $RemoteBlobSha) { return $true }
+    $oneNewline=$normalized.TrimEnd("`n")
+    return (Get-GitBlobSha -Bytes ([Text.Encoding]::UTF8.GetBytes($oneNewline))) -eq $RemoteBlobSha
+}
+
+function Check-CafeLauncherUpdates {
+    param([switch]$Manual)
+    $source=$env:CAFE_SCRIPT
+    if ([string]::IsNullOrWhiteSpace($source)) {
+        if ($Manual) { Write-Log 'Current BAT path not available for updater.' 'WARN' }
+        return
+    }
+    try {
+        [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+        $uri="https://api.github.com/repos/fabjoncela/Cs-script/contents/cafe.bat?ref=main"
+        $remote=Invoke-RestMethod -Uri $uri -Headers @{'User-Agent'='CafeLauncher-Updater'; 'Accept'='application/vnd.github+json'} -TimeoutSec 8 -ErrorAction Stop
+        if ($remote.path -ne 'cafe.bat' -or $remote.sha -notmatch '^[a-fA-F0-9]{40}$' -or
+            [int64]$remote.size -lt 10000 -or [int64]$remote.size -gt 1000000) { throw 'Unexpected update metadata from GitHub.' }
+        # Ignore older/unversioned GitHub builds. A new release must increment
+        # its CAFE_RELEASE marker, rather than merely have different line endings.
+        if ($remote.encoding -ne 'base64' -or [string]::IsNullOrWhiteSpace($remote.content)) {
+            throw 'GitHub did not include update version metadata.'
+        }
+        $remoteText=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String(($remote.content -replace '\s','')))
+        $pattern='(?m)^# CAFE_RELEASE=(\d{4}\.\d{1,2}\.\d{1,2}\.\d+)\s*$'
+        $remoteMatch=[regex]::Match($remoteText,$pattern)
+        $localMatch=[regex]::Match([IO.File]::ReadAllText($source),$pattern)
+        if (-not $remoteMatch.Success) {
+            Write-Log 'GitHub main has no release marker (older launcher); skipping downgrade. Upload this new cafe.bat to main first.' 'WARN'
+            if ($Manual) { [System.Windows.Forms.MessageBox]::Show('Your current local build is newer than the unversioned GitHub launcher. Upload this BAT to GitHub main to activate self-updates.', 'Update Check', 'OK', 'Information') | Out-Null }
+            return
+        }
+        $remoteRelease=[version]::Parse($remoteMatch.Groups[1].Value)
+        $localRelease=if ($localMatch.Success) { [version]::Parse($localMatch.Groups[1].Value) } else { [version]'0.0.0.0' }
+        if ($remoteRelease -le $localRelease) {
+            Write-Log "CafeLauncher local release $localRelease is current; GitHub main release is $remoteRelease."
+            if ($Manual) { [System.Windows.Forms.MessageBox]::Show("CafeLauncher is current (local $localRelease; GitHub $remoteRelease).", 'Update Check', 'OK', 'Information') | Out-Null }
+            return
+        }
+        if (Test-LauncherIsCurrent -CurrentPath $source -RemoteBlobSha $remote.sha) {
+            Write-Log 'CafeLauncher is up to date with GitHub main.'
+            if ($Manual) { [System.Windows.Forms.MessageBox]::Show('CafeLauncher is already up to date.', 'Update Check', 'OK', 'Information') | Out-Null }
+            return
+        }
+        Write-Log 'A newer/different cafe.bat is available on GitHub main.' 'INFO'
+        $reply=[System.Windows.Forms.MessageBox]::Show(
+            "GitHub has a different CafeLauncher build.`n`nDownload and replace your local BAT?`n`nYour currently open launcher will keep running. Reopen it to use the update.`n`nNo GitHub login required.",
+            'CafeLauncher Update Available',
+            [System.Windows.Forms.MessageBoxButtons]::YesNo,
+            [System.Windows.Forms.MessageBoxIcon]::Question)
+        if ($reply -ne [System.Windows.Forms.DialogResult]::Yes) { Write-Log 'User skipped CafeLauncher update.'; return }
+        $temp=Join-Path $env:TEMP ("CafeLauncher-update-{0}.bat" -f [Guid]::NewGuid().ToString('N'))
+        try {
+            Invoke-WebRequest -Uri 'https://raw.githubusercontent.com/fabjoncela/Cs-script/main/cafe.bat' -OutFile $temp -UseBasicParsing -TimeoutSec 20 -ErrorAction Stop | Out-Null
+            $bytes=[IO.File]::ReadAllBytes($temp)
+            if ($bytes.Length -ne [int64]$remote.size -or
+                (Get-GitBlobSha -Bytes $bytes) -ne $remote.sha) { throw 'Downloaded BAT failed GitHub blob hash and size verification.' }
+            $text=[Text.Encoding]::UTF8.GetString($bytes)
+            if (-not $text.StartsWith('@echo off') -or -not $text.Contains('# POWERSHELL_GUI')) { throw 'Downloaded launcher structure check failed.' }
+            # Verify that the embedded PowerShell can be PARSED before installing it.
+            # In earlier releases, a correct GitHub hash was incorrectly treated as proof
+            # that the replacement could launch. A hash does not verify syntax.
+            $downloadLines=[IO.File]::ReadAllLines($temp)
+            $marker=[Array]::IndexOf($downloadLines,'# POWERSHELL_GUI')
+            if ($marker -lt 0 -or $marker -ge ($downloadLines.Length - 1)) { throw 'Update has no valid PowerShell section.' }
+            $downloadScript=($downloadLines[($marker+1)..($downloadLines.Length-1)] -join [Environment]::NewLine)
+            $parseTokens=$null
+            $parseErrors=$null
+            [void][System.Management.Automation.Language.Parser]::ParseInput($downloadScript,[ref]$parseTokens,[ref]$parseErrors)
+            if ($parseErrors.Count -gt 0) {
+                throw ('Refusing update with PowerShell syntax errors: ' + $parseErrors[0].ToString())
+            }
+            # Raw GitHub .bat content can use LF-only line endings. cmd.exe on Windows
+            # expects CRLF for reliable BAT interpretation. Verify original bytes above,
+            # then normalize the verified payload BEFORE placing it on disk.
+            $windowsText=$text.Replace("`r`n","`n").Replace("`r","`n").Replace("`n","`r`n")
+            [IO.File]::WriteAllText($temp,$windowsText,(New-Object System.Text.UTF8Encoding($false)))
+            $backupDir=Join-Path $env:LOCALAPPDATA 'CafeLauncher\backups'
+            if (-not (Test-Path -LiteralPath $backupDir)) { New-Item -ItemType Directory -Path $backupDir -Force -ErrorAction Stop | Out-Null }
+            $backup=Join-Path $backupDir ("cafe-before-update-{0}.bat" -f (Get-Date -Format 'yyyyMMdd-HHmmss'))
+            try {
+                # Stage beside the original and replace atomically when supported;
+                # this avoids leaving a partially overwritten BAT after a crash.
+                $staged=Join-Path (Split-Path -Parent $source) ('.CafeLauncher-update-' + [Guid]::NewGuid().ToString('N') + '.bat')
+                try {
+                    Copy-Item -LiteralPath $temp -Destination $staged -ErrorAction Stop
+                    try {
+                        [IO.File]::Replace($staged,$source,$backup)
+                    } catch {
+                        # File.Replace can be unavailable on network/FAT volumes.
+                        Copy-Item -LiteralPath $source -Destination $backup -ErrorAction Stop
+                        Copy-Item -LiteralPath $staged -Destination $source -Force -ErrorAction Stop
+                    }
+                } finally {
+                    Remove-Item -LiteralPath $staged -Force -ErrorAction SilentlyContinue
+                }
+                Write-Log "Update downloaded, syntax-checked, CRLF-normalized and installed at $source; backup: $backup"
+                [System.Windows.Forms.MessageBox]::Show("CafeLauncher updated successfully at:`n$source`n`nClose and reopen the BAT to use the latest version.", 'Update Installed', 'OK', 'Information') | Out-Null
+            } catch {
+                $dest=Join-Path $env:USERPROFILE 'Downloads\CafeLauncher_latest.bat'
+                Copy-Item -LiteralPath $temp -Destination $dest -Force -ErrorAction Stop
+                Write-Log "Current BAT could not be overwritten; saved verified update to $dest" 'WARN'
+                [System.Windows.Forms.MessageBox]::Show("Your original BAT could not be replaced (read-only/protected folder).`n`nA verified new copy was saved to:`n$dest`n`nOpen that copy next time.", 'Update Downloaded', 'OK', 'Warning') | Out-Null
+            }
+        } finally { Remove-Item -LiteralPath $temp -Force -ErrorAction SilentlyContinue }
+    } catch {
+        Write-Log "Update check/download failed; the existing launcher is unchanged where possible: $($_.Exception.Message)" 'WARN'
+        if ($Manual) { [System.Windows.Forms.MessageBox]::Show("Update check failed: $($_.Exception.Message)", 'Update Check', 'OK', 'Warning') | Out-Null }
+    }
+}
+
+function Launch-All {
+    Start-DetectedSteam
+
+    Launch-App -Name "FACEIT Anti-Cheat" -Paths @(
+        "$env:ProgramFiles\FACEIT AC\faceitclient.exe",
+        "${env:ProgramFiles(x86)}\FACEIT AC\faceitclient.exe"
+    )
+
+    Open-FaceitMatchmaking
+    Open-Spotify
+    Open-GHub
+    Write-Log "Launch All: opening Mouse Pointer Options."
+    Open-MousePointerOptions
+}
+
+# ==============================================================
+# PROFILE DEFAULTS - Edit in GUI, save locally or sync via GitHub
+# Cloud profile settings: profiles/<ProfileName>.json (public read).
+# CS2 .cfg files remain separately managed on GitHub.
+# Local unsynced edits ALWAYS win over downloaded cloud settings.
+# ==============================================================
+$script:GithubRepo = 'fabjoncela/Cs-script'
+$script:GithubBranch = 'main'
+$script:FabCfgCloudUrl = 'https://raw.githubusercontent.com/fabjoncela/Cs-script/main/fab.cfg'
+$script:GamingProfiles = [ordered]@{
+    FabMode = @{
+        PointerSpeed=10; DisableAcceleration=$true; ApplyNvidia=$true
+        Width=1920; Height=1080; RefreshHz=360; Vibrance=75
+        CS2Sensitivity=''; ConfigFile='fab.cfg'; CfgDownloadUrl=$script:FabCfgCloudUrl; LaunchApps=$true
+    }
+    ArliMode = @{
+        PointerSpeed=10; DisableAcceleration=$true; ApplyNvidia=$true
+        Width=1920; Height=1080; RefreshHz=360; Vibrance=75
+        CS2Sensitivity=''; ConfigFile='arli.cfg'; CfgDownloadUrl='https://raw.githubusercontent.com/fabjoncela/Cs-script/main/arli.cfg'; LaunchApps=$true
+    }
+    BrileMode = @{
+        PointerSpeed=10; DisableAcceleration=$true; ApplyNvidia=$true
+        Width=1920; Height=1080; RefreshHz=360; Vibrance=75
+        CS2Sensitivity=''; ConfigFile='brile.cfg'; CfgDownloadUrl='https://raw.githubusercontent.com/fabjoncela/Cs-script/main/brile.cfg'; LaunchApps=$true
+    }
+    ArmlMode = @{
+        PointerSpeed=10; DisableAcceleration=$true; ApplyNvidia=$true
+        Width=1920; Height=1080; RefreshHz=360; Vibrance=75
+        CS2Sensitivity=''; ConfigFile='arml.cfg'; CfgDownloadUrl='https://raw.githubusercontent.com/fabjoncela/Cs-script/main/arml.cfg'; LaunchApps=$true
+    }
+    OliMode = @{
+        PointerSpeed=10; DisableAcceleration=$true; ApplyNvidia=$true
+        Width=1920; Height=1080; RefreshHz=360; Vibrance=75
+        CS2Sensitivity=''; ConfigFile='oli.cfg'; CfgDownloadUrl='https://raw.githubusercontent.com/fabjoncela/Cs-script/main/oli.cfg'; LaunchApps=$true
+    }
+}
+$script:ProfileSettingsPath = Join-Path $env:LOCALAPPDATA 'CafeLauncher\profiles.json'
+$script:PendingSync = @{}
+foreach ($name in @($script:GamingProfiles.Keys)) { $script:PendingSync[$name] = $false }
+
+function Import-ProfileValues {
+    param([string]$ProfileName, $SavedProfile, [string]$SourceLabel = 'local')
+    if (-not $script:GamingProfiles.Contains($ProfileName) -or -not $SavedProfile) { return }
+    foreach ($setting in @('PointerSpeed','DisableAcceleration','ApplyNvidia','Width','Height','RefreshHz','Vibrance','CS2Sensitivity','CfgDownloadUrl','LaunchApps')) {
+        $saved = $SavedProfile.PSObject.Properties[$setting]
+        if (-not $saved) { continue }
+        $value = $saved.Value
+        try {
+            switch ($setting) {
+                'PointerSpeed' { $value=[int]$value; if ($value -lt 1 -or $value -gt 20) { throw 'range' } }
+                'Width'        { $value=[int]$value; if ($value -lt 640 -or $value -gt 7680) { throw 'range' } }
+                'Height'       { $value=[int]$value; if ($value -lt 480 -or $value -gt 4320) { throw 'range' } }
+                'RefreshHz'    { $value=[int]$value; if ($value -lt 30 -or $value -gt 600) { throw 'range' } }
+                'Vibrance'     { $value=[int]$value; if ($value -lt 0 -or $value -gt 100) { throw 'range' } }
+                'CS2Sensitivity' {
+                    $value=[string]$value
+                    if ($value -and $value -notmatch '^(?:[0-9]+(?:\.[0-9]+)?)$') { throw 'invalid sensitivity' }
+                    if ($value -and ([double]::Parse($value,[Globalization.CultureInfo]::InvariantCulture) -le 0 -or [double]::Parse($value,[Globalization.CultureInfo]::InvariantCulture) -gt 20)) { throw 'range' }
+                }
+                'CfgDownloadUrl' {
+                    $value = [string]$value
+                    if ($ProfileName -eq 'FabMode' -and [string]::IsNullOrWhiteSpace($value)) {
+                        $value = $script:FabCfgCloudUrl
+                        Write-Log 'Migrated old FabMode empty CFG URL to GitHub fab.cfg.'
+                    }
+                    if ($value) { Assert-ConfigUrl $value }
+                }
+                default {
+                    if ($setting -in @('DisableAcceleration','ApplyNvidia','LaunchApps')) {
+                        if ($value -isnot [bool]) { throw 'boolean expected' }
+                    }
+                }
+            }
+            $script:GamingProfiles[$ProfileName][$setting] = $value
+        } catch { Write-Log "Ignored invalid $SourceLabel $ProfileName/$setting value." 'WARN' }
+    }
+}
+
+function Load-ProfileSettings {
+    if (-not (Test-Path -LiteralPath $script:ProfileSettingsPath -PathType Leaf)) { return }
+    try {
+        $settings = Get-Content -LiteralPath $script:ProfileSettingsPath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+        foreach ($name in @($script:GamingProfiles.Keys)) {
+            $savedProfile = $settings.PSObject.Properties[$name]
+            if (-not $savedProfile -or -not $savedProfile.Value) { continue }
+            Import-ProfileValues -ProfileName $name -SavedProfile $savedProfile.Value -SourceLabel 'local'
+            $dirty = $savedProfile.Value.PSObject.Properties['SyncPending']
+            # Old versions saved ONLY locally: protect edits from being replaced by cloud defaults.
+            if ($dirty -and $dirty.Value -is [bool]) {
+                $script:PendingSync[$name] = [bool]$dirty.Value
+            } else {
+                $script:PendingSync[$name] = $true
+            }
+        }
+        Write-Log "Loaded local profile settings from $script:ProfileSettingsPath."
+    } catch {
+        Write-Log "Profile settings JSON could not be read; using defaults: $($_.Exception.Message)" 'WARN'
+    }
+}
+
+function Export-ProfileValues {
+    param([string]$ProfileName)
+    $p = $script:GamingProfiles[$ProfileName]
+    if (-not $p) { throw "Unknown profile: $ProfileName" }
+    $profileValues = [ordered]@{
+        PointerSpeed=[int]$p.PointerSpeed; DisableAcceleration=[bool]$p.DisableAcceleration
+        ApplyNvidia=[bool]$p.ApplyNvidia; Width=[int]$p.Width; Height=[int]$p.Height
+        RefreshHz=[int]$p.RefreshHz; Vibrance=[int]$p.Vibrance
+        CS2Sensitivity=[string]$p.CS2Sensitivity; CfgDownloadUrl=[string]$p.CfgDownloadUrl
+        LaunchApps=[bool]$p.LaunchApps
+    }
+    # Preserve the dictionary as ONE pipeline object on Windows PowerShell 5.1.
+    Write-Output -NoEnumerate $profileValues
+}
+
+function Save-ProfileSettings {
+    # Build a full independent snapshot before writing to disk. Do NOT index
+    # $settings[$name] immediately after assignment: in some Windows PowerShell
+    # hosts a missing/empty pipeline output caused a null-array exception here.
+    $settings = [ordered]@{}
+    foreach ($name in @($script:GamingProfiles.Keys)) {
+        $values = Export-ProfileValues -ProfileName $name
+        if ($null -eq $values -or $values -isnot [System.Collections.IDictionary]) {
+            throw "Cannot save ${name}: the profile exporter did not return a settings dictionary."
+        }
+        $snapshot = [ordered]@{}
+        foreach ($key in @($values.Keys)) { $snapshot[$key] = $values[$key] }
+        $snapshot['SyncPending'] = [bool]$script:PendingSync[$name]
+        $settings[$name] = $snapshot
+    }
+    $dir = Split-Path -Parent $script:ProfileSettingsPath
+    if (-not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Path $dir -Force -ErrorAction Stop | Out-Null }
+    $tmp = Join-Path $dir ("profiles-{0}.tmp" -f [Guid]::NewGuid().ToString('N'))
+    try {
+        [IO.File]::WriteAllText($tmp, ($settings | ConvertTo-Json -Depth 5), (New-Object System.Text.UTF8Encoding($false)))
+        Move-Item -LiteralPath $tmp -Destination $script:ProfileSettingsPath -Force -ErrorAction Stop
+    } finally {
+        if (Test-Path -LiteralPath $tmp) { Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue }
+    }
+    Write-Log "Profile settings saved locally: $script:ProfileSettingsPath"
+}
+
+Load-ProfileSettings
+
+function Refresh-ProfileFromGitHub {
+    param([Parameter(Mandatory=$true)][string]$ProfileName)
+    if (-not $script:GamingProfiles.Contains($ProfileName)) { throw "Unknown profile: $ProfileName" }
+    if ($script:PendingSync[$ProfileName]) {
+        Write-Log "$ProfileName has local edits not synced to GitHub; keeping local settings." 'INFO'
+        return
+    }
+    $url = "https://raw.githubusercontent.com/$($script:GithubRepo)/$($script:GithubBranch)/profiles/$ProfileName.json"
+    try {
+        [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+        # GitHub content is JSON data only; no code is executed from remote profiles.
+        $remote = Invoke-RestMethod -Uri $url -Method Get -Headers @{'Cache-Control'='no-cache'} -TimeoutSec 8 -ErrorAction Stop
+        if ($remote.ProfileName -ne $ProfileName -or [int]$remote.SchemaVersion -ne 1) {
+            throw "Unexpected profile JSON schema for $ProfileName."
+        }
+        Import-ProfileValues -ProfileName $ProfileName -SavedProfile $remote -SourceLabel 'GitHub'
+        try { Save-ProfileSettings } catch { Write-Log "Unable to cache cloud settings: $($_.Exception.Message)" 'WARN' }
+        Write-Log "$ProfileName settings downloaded from GitHub (no login needed)."
+    } catch {
+        Write-Log "Could not refresh $ProfileName settings from GitHub; using cached/local values. $($_.Exception.Message)" 'WARN'
+    }
+}
+
+function Get-GitHubSyncToken {
+    param($OwnerWindow)
+    $authForm = New-Object System.Windows.Forms.Form
+    $authForm.Text = 'Authorize GitHub Sync'
+    $authForm.ClientSize = New-Object System.Drawing.Size(590,286)
+    $authForm.StartPosition='CenterParent'
+    $authForm.FormBorderStyle='FixedDialog'
+    $authForm.MaximizeBox=$false
+    $authForm.MinimizeBox=$false
+    $authForm.BackColor=$PANEL
+    $authForm.ForeColor=$WHITE
+    $authForm.Font=New-Object System.Drawing.Font('Segoe UI',10)
+
+    $instructions = New-Object System.Windows.Forms.Label
+    $instructions.Text = "Paste a fine-grained GitHub access token for $($script:GithubRepo).`r`nPermissions: Contents = Read and write (only this repo).`r`nCreate a short-lived token and revoke it when finished."
+    $instructions.Location=New-Object System.Drawing.Point(20,18)
+    $instructions.Size=New-Object System.Drawing.Size(550,75)
+    $authForm.Controls.Add($instructions)
+
+    $secretBox = New-Object System.Windows.Forms.TextBox
+    $secretBox.Location=New-Object System.Drawing.Point(20,106)
+    $secretBox.Size=New-Object System.Drawing.Size(545,30)
+    $secretBox.UseSystemPasswordChar=$true
+    $authForm.Controls.Add($secretBox)
+
+    $warning = New-Object System.Windows.Forms.Label
+    $warning.Text='Never paste a GitHub token on an untrusted/shared cafe PC. Tokens are not saved by CafeLauncher.'
+    $warning.ForeColor=[System.Drawing.Color]::FromArgb(255,190,105)
+    $warning.Location=New-Object System.Drawing.Point(20,147)
+    $warning.Size=New-Object System.Drawing.Size(550,46)
+    $authForm.Controls.Add($warning)
+
+    $create = New-Object System.Windows.Forms.Button
+    $create.Text='Create a GitHub token...'
+    $create.Location=New-Object System.Drawing.Point(20,213)
+    $create.Size=New-Object System.Drawing.Size(200,36)
+    $create.Add_Click({ Start-Process 'https://github.com/settings/personal-access-tokens/new' })
+    $authForm.Controls.Add($create)
+
+    $ok=New-Object System.Windows.Forms.Button
+    $ok.Text='Authorize & Upload'
+    $ok.Location=New-Object System.Drawing.Point(267,213)
+    $ok.Size=New-Object System.Drawing.Size(162,36)
+    $ok.BackColor=$BLUE
+    $ok.ForeColor=$WHITE
+    $authForm.Controls.Add($ok)
+    $cancel=New-Object System.Windows.Forms.Button
+    $cancel.Text='Cancel'
+    $cancel.Location=New-Object System.Drawing.Point(439,213)
+    $cancel.Size=New-Object System.Drawing.Size(125,36)
+    $cancel.DialogResult=[System.Windows.Forms.DialogResult]::Cancel
+    $authForm.Controls.Add($cancel)
+    $authForm.CancelButton=$cancel
+
+    $ok.Add_Click({
+        if ($secretBox.Text.Trim().Length -lt 20) {
+            [System.Windows.Forms.MessageBox]::Show('Paste a valid GitHub token before uploading.', 'GitHub authorization', 'OK', 'Warning') | Out-Null
+            return
+        }
+        $authForm.DialogResult=[System.Windows.Forms.DialogResult]::OK
+        $authForm.Close()
+    }.GetNewClosure())
+    try {
+        $result=$authForm.ShowDialog($OwnerWindow)
+        if ($result -ne [System.Windows.Forms.DialogResult]::OK) { return $null }
+        return $secretBox.Text.Trim()
+    } finally {
+        $secretBox.Clear()
+        $authForm.Dispose()
+    }
+}
+
+function Sync-ProfileToGitHub {
+    param([Parameter(Mandatory=$true)][string]$ProfileName, [Parameter(Mandatory=$true)][string]$Token)
+    if (-not $script:GamingProfiles.Contains($ProfileName)) { throw "Unknown profile: $ProfileName" }
+    $path = "profiles/$ProfileName.json"
+    $uri = "https://api.github.com/repos/$($script:GithubRepo)/contents/$path"
+    $headers = @{
+        'Authorization'="Bearer $Token"
+        'Accept'='application/vnd.github+json'
+        'User-Agent'='CafeLauncher-ProfileSync'
+        'X-GitHub-Api-Version'='2022-11-28'
+    }
+    $existingSha = $null
+    [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+    try {
+        $current = Invoke-RestMethod -Uri ($uri + '?ref=' + $script:GithubBranch) -Method Get -Headers $headers -TimeoutSec 20 -MaximumRedirection 0 -ErrorAction Stop
+        $existingSha = [string]$current.sha
+    } catch {
+        $status = $null
+        if ($_.Exception.Response) { $status = [int]$_.Exception.Response.StatusCode }
+        if ($status -ne 404) { throw "GitHub authorization or file read failed (HTTP $status)." }
+    }
+
+    $payload = [ordered]@{ SchemaVersion=1; ProfileName=$ProfileName }
+    $values = Export-ProfileValues -ProfileName $ProfileName
+    if ($null -eq $values -or $values -isnot [System.Collections.IDictionary]) {
+        throw "Cannot sync ${ProfileName}: the profile exporter returned no valid settings."
+    }
+    foreach ($key in @($values.Keys)) { $payload[$key] = $values[$key] }
+    $json = $payload | ConvertTo-Json -Depth 5
+    $body = @{
+        message="Update $ProfileName settings from CafeLauncher"
+        content=[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($json + "`n"))
+        branch=$script:GithubBranch
+    }
+    if ($existingSha) { $body.sha = $existingSha }
+    try {
+        $result = Invoke-RestMethod -Uri $uri -Method Put -Headers $headers -ContentType 'application/json' -Body ($body | ConvertTo-Json -Depth 5 -Compress) -TimeoutSec 25 -MaximumRedirection 0 -ErrorAction Stop
+        if (-not $result.commit.sha) { throw 'GitHub did not return a successful commit.' }
+        Write-Log "$ProfileName settings synced to GitHub. Commit: $($result.commit.sha)"
+    } catch {
+        $status = $null
+        if ($_.Exception.Response) { $status = [int]$_.Exception.Response.StatusCode }
+        if ($status -eq 401 -or $status -eq 403) { throw 'GitHub refused the token. Check repository access and Contents: Read and write permission.' }
+        if ($status -eq 409 -or $status -eq 422) { throw 'GitHub rejected the update due to a changed version or validation error. Retry syncing.' }
+        throw "GitHub upload failed (HTTP $status). Your settings remain saved locally."
+    } finally {
+        $headers.Authorization = $null
+        $body.content = $null
+    }
+}
+
+function New-EditorLabel {
+    param($Window, [string]$Caption, [int]$X, [int]$Y, [int]$Width=200)
+    $label = New-Object System.Windows.Forms.Label
+    $label.Text=$Caption
+    $label.ForeColor=$script:EditorTextColor
+    $label.Location=New-Object System.Drawing.Point($X,$Y)
+    $label.Size=New-Object System.Drawing.Size($Width,23)
+    $Window.Controls.Add($label)
+    return $label
+}
+
+function New-EditorNumber {
+    param($Window, [int]$X, [int]$Y, [int]$Min, [int]$Max, [int]$Value, [int]$Width=180)
+    $n = New-Object System.Windows.Forms.NumericUpDown
+    $n.Location=New-Object System.Drawing.Point($X,$Y)
+    $n.Size=New-Object System.Drawing.Size($Width,28)
+    $n.Minimum=[decimal]$Min
+    $n.Maximum=[decimal]$Max
+    $n.Value=[decimal]$Value
+    $Window.Controls.Add($n)
+    return $n
+}
+
+function Show-ProfileEditor {
+    param([Parameter(Mandatory=$true)][string]$ProfileName)
+    Refresh-ProfileFromGitHub -ProfileName $ProfileName
+    $p = $script:GamingProfiles[$ProfileName]
+    if (-not $p) { throw "Unknown profile: $ProfileName" }
+    # GetNewClosure() creates a new dynamic module scope. The script: scope
+    # inside a captured click handler is NOT the original launcher's script:
+    # scope. Capture a reference to the real pending-sync dictionary here.
+    $pendingSyncState = $script:PendingSync
+    if ($null -eq $pendingSyncState -or $pendingSyncState -isnot [System.Collections.IDictionary]) {
+        throw 'Profile sync state is missing; cannot safely edit this profile.'
+    }
+
+    $dialog = New-Object System.Windows.Forms.Form
+    $dialog.Text = "Edit $ProfileName"
+    $dialog.ClientSize = New-Object System.Drawing.Size(590,645)
+    $dialog.StartPosition = 'CenterParent'
+    $dialog.FormBorderStyle = 'FixedDialog'
+    $dialog.MaximizeBox = $false
+    $dialog.MinimizeBox = $false
+    $dialog.ShowInTaskbar = $false
+    $dialog.BackColor = $PANEL
+    $dialog.ForeColor = $WHITE
+    $dialog.Font = New-Object System.Drawing.Font('Segoe UI',10)
+    $script:EditorTextColor = $WHITE
+
+    New-EditorLabel $dialog 'Windows pointer speed (1-20)' 20 18 260 | Out-Null
+    $pointer = New-EditorNumber $dialog 20 42 1 20 ([int]$p.PointerSpeed) 245
+    New-EditorLabel $dialog 'NVIDIA Digital Vibrance (%)' 305 18 260 | Out-Null
+    $vibrance = New-EditorNumber $dialog 305 42 0 100 ([int]$p.Vibrance) 245
+
+    $accel = New-Object System.Windows.Forms.CheckBox
+    $accel.Text='Enable Windows mouse acceleration (EPP)'
+    $accel.Checked = -not [bool]$p.DisableAcceleration
+    $accel.Location=New-Object System.Drawing.Point(20,83)
+    $accel.Size=New-Object System.Drawing.Size(500,27)
+    $dialog.Controls.Add($accel)
+
+    New-EditorLabel $dialog 'Resolution width' 20 122 210 | Out-Null
+    New-EditorLabel $dialog 'Resolution height' 205 122 210 | Out-Null
+    New-EditorLabel $dialog 'Refresh rate (Hz)' 390 122 190 | Out-Null
+    $width = New-EditorNumber $dialog 20 147 640 7680 ([int]$p.Width) 165
+    $height = New-EditorNumber $dialog 205 147 480 4320 ([int]$p.Height) 165
+    $hz = New-EditorNumber $dialog 390 147 30 600 ([int]$p.RefreshHz) 160
+
+    New-EditorLabel $dialog 'CS2 sensitivity (blank = value from .cfg)' 20 196 530 | Out-Null
+    $sens = New-Object System.Windows.Forms.TextBox
+    $sens.Text=[string]$p.CS2Sensitivity
+    $sens.Location=New-Object System.Drawing.Point(20,222)
+    $sens.Size=New-Object System.Drawing.Size(530,29)
+    $dialog.Controls.Add($sens)
+
+    New-EditorLabel $dialog 'CS2 config filename (fixed for each profile)' 20 276 530 | Out-Null
+    $cfgFile = New-Object System.Windows.Forms.TextBox
+    $cfgFile.Text=[string]$p.ConfigFile
+    $cfgFile.ReadOnly=$true
+    $cfgFile.Location=New-Object System.Drawing.Point(20,300)
+    $cfgFile.Size=New-Object System.Drawing.Size(530,29)
+    $dialog.Controls.Add($cfgFile)
+
+    New-EditorLabel $dialog 'GitHub .cfg URL (FabMode default: fab.cfg)' 20 355 540 | Out-Null
+    $url = New-Object System.Windows.Forms.TextBox
+    $url.Text=[string]$p.CfgDownloadUrl
+    $url.Location=New-Object System.Drawing.Point(20,380)
+    $url.Size=New-Object System.Drawing.Size(530,28)
+    $dialog.Controls.Add($url)
+
+    $nv = New-Object System.Windows.Forms.CheckBox
+    $nv.Text='Apply NVIDIA settings (including resolution + vibrance)'
+    $nv.Checked=[bool]$p.ApplyNvidia
+    $nv.Location=New-Object System.Drawing.Point(20,430)
+    $nv.Size=New-Object System.Drawing.Size(550,26)
+    $dialog.Controls.Add($nv)
+
+    $apps = New-Object System.Windows.Forms.CheckBox
+    $apps.Text='Launch Steam, FACEIT, Spotify, G HUB, Mouse Options'
+    $apps.Checked=[bool]$p.LaunchApps
+    $apps.Location=New-Object System.Drawing.Point(20,461)
+    $apps.Size=New-Object System.Drawing.Size(550,26)
+    $dialog.Controls.Add($apps)
+
+    $dialog.ClientSize = New-Object System.Drawing.Size(590,665)
+    $tip = New-EditorLabel $dialog 'Local edits stay on this PC. GitHub sync shares ALL profile settings; CFG binds remain separate.' 20 504 550
+    $tip.ForeColor=$MUTED
+    $tip.Font=New-Object System.Drawing.Font('Segoe UI',8)
+    $tip.Size=New-Object System.Drawing.Size(550,37)
+
+    $status = New-EditorLabel $dialog '' 20 538 550
+    $status.Font=New-Object System.Drawing.Font('Segoe UI',8,[System.Drawing.FontStyle]::Bold)
+    $status.Size=New-Object System.Drawing.Size(550,23)
+    if ($script:PendingSync[$ProfileName]) {
+        $status.Text='Unsynced local edits - cloud download will not overwrite them.'
+        $status.ForeColor=[System.Drawing.Color]::FromArgb(255,190,105)
+    } else {
+        $status.Text='GitHub settings enabled - saved locally and cached for offline use.'
+        $status.ForeColor=$MUTED
+    }
+
+    $saveLocal = New-Object System.Windows.Forms.Button
+    $saveLocal.Text='Save Locally'
+    $saveLocal.Location=New-Object System.Drawing.Point(20,585)
+    $saveLocal.Size=New-Object System.Drawing.Size(155,40)
+    $saveLocal.BackColor=$BLUE
+    $saveLocal.ForeColor=$WHITE
+    $saveLocal.FlatStyle='Flat'
+    $dialog.Controls.Add($saveLocal)
+
+    $saveSync = New-Object System.Windows.Forms.Button
+    $saveSync.Text='Save & Sync to GitHub'
+    $saveSync.Location=New-Object System.Drawing.Point(184,585)
+    $saveSync.Size=New-Object System.Drawing.Size(219,40)
+    $saveSync.BackColor=[System.Drawing.Color]::FromArgb(38,132,102)
+    $saveSync.ForeColor=$WHITE
+    $saveSync.FlatStyle='Flat'
+    $dialog.Controls.Add($saveSync)
+
+    $cancel = New-Object System.Windows.Forms.Button
+    $cancel.Text='Cancel'
+    $cancel.Location=New-Object System.Drawing.Point(413,585)
+    $cancel.Size=New-Object System.Drawing.Size(137,40)
+    $cancel.DialogResult=[System.Windows.Forms.DialogResult]::Cancel
+    $dialog.Controls.Add($cancel)
+    $dialog.CancelButton=$cancel
+
+    $saveEditorValues = {
+        $sensValue=$sens.Text.Trim()
+        if ($sensValue) {
+            $number=0.0
+            if (-not [double]::TryParse($sensValue,[Globalization.NumberStyles]::Float,[Globalization.CultureInfo]::InvariantCulture,[ref]$number) -or
+                [double]::IsNaN($number) -or $number -le 0 -or $number -gt 20) {
+                throw 'Sensitivity must be blank or between 0 and 20, using a decimal point (e.g. 1.2).'
+            }
+            $sensValue=$number.ToString('0.####',[Globalization.CultureInfo]::InvariantCulture)
+        }
+        $cfgUrl=$url.Text.Trim()
+        if ($cfgUrl) { Assert-ConfigUrl $cfgUrl }
+        $p.PointerSpeed=[int]$pointer.Value
+        $p.DisableAcceleration= -not $accel.Checked
+        $p.Width=[int]$width.Value
+        $p.Height=[int]$height.Value
+        $p.RefreshHz=[int]$hz.Value
+        $p.Vibrance=[int]$vibrance.Value
+        $p.ApplyNvidia=[bool]$nv.Checked
+        $p.LaunchApps=[bool]$apps.Checked
+        $p.CS2Sensitivity=$sensValue
+        $p.CfgDownloadUrl=$cfgUrl
+        # Use the captured shared dictionary, not script: scope in this closure.
+        $pendingSyncState[$ProfileName] = $true
+        Save-ProfileSettings
+        Write-Log "$ProfileName edited locally: pointer=$($p.PointerSpeed), acceleration enabled=$(-not $p.DisableAcceleration), display=$($p.Width)x$($p.Height)@$($p.RefreshHz), vibrance=$($p.Vibrance)%, sensitivity=$sensValue."
+    }.GetNewClosure()
+
+    $saveLocal.Add_Click({
+        try {
+            & $saveEditorValues
+            [System.Windows.Forms.MessageBox]::Show("$ProfileName saved locally. No GitHub login required.`nChanges on a Deep Freeze PC may disappear after restart.", 'Saved locally', 'OK', 'Information') | Out-Null
+            $dialog.DialogResult=[System.Windows.Forms.DialogResult]::OK
+            $dialog.Close()
+        } catch {
+            Write-Log "Save Locally failed for ${ProfileName}: $($_.Exception.Message); $($_.ScriptStackTrace)" 'ERROR'
+            [System.Windows.Forms.MessageBox]::Show("Could not save ${ProfileName}:`n$($_.Exception.Message)`n`nSee LIVE LOGS for the failing line.", 'Profile Editor', 'OK', 'Error') | Out-Null
+        }
+    }.GetNewClosure())
+
+    $saveSync.Add_Click({
+        try {
+            & $saveEditorValues
+            $token = Get-GitHubSyncToken -OwnerWindow $dialog
+            if ([string]::IsNullOrWhiteSpace($token)) {
+                $status.Text='Saved locally. GitHub sync canceled; local edits preserved.'
+                $status.ForeColor=[System.Drawing.Color]::FromArgb(255,190,105)
+                Write-Log "$ProfileName GitHub sync canceled; local changes preserved."
+                return
+            }
+            try {
+                $saveSync.Enabled=$false
+                $dialog.Cursor=[System.Windows.Forms.Cursors]::WaitCursor
+                Sync-ProfileToGitHub -ProfileName $ProfileName -Token $token
+                $pendingSyncState[$ProfileName] = $false
+                Save-ProfileSettings
+                [System.Windows.Forms.MessageBox]::Show("$ProfileName settings committed to GitHub and saved locally.`nOther PCs can now download the new settings without signing in.`nThe .cfg bindings are still maintained separately on GitHub.", 'GitHub sync complete', 'OK', 'Information') | Out-Null
+                $dialog.DialogResult=[System.Windows.Forms.DialogResult]::OK
+                $dialog.Close()
+            } finally {
+                $token = $null
+                if (-not $dialog.IsDisposed) {
+                    $saveSync.Enabled=$true
+                    $dialog.Cursor=[System.Windows.Forms.Cursors]::Default
+                }
+            }
+        } catch {
+            Write-Log "$ProfileName GitHub sync failed; local settings kept. $($_.Exception.Message); $($_.ScriptStackTrace)" 'WARN'
+            $status.Text='Cloud sync failed; settings are saved locally. Retry Save & Sync.'
+            $status.ForeColor=[System.Drawing.Color]::FromArgb(255,190,105)
+            [System.Windows.Forms.MessageBox]::Show("$ProfileName saved locally, but GitHub sync failed:`n$($_.Exception.Message)", 'GitHub sync', 'OK', 'Warning') | Out-Null
+        }
+    }.GetNewClosure())
+
+    [void]$dialog.ShowDialog($form)
+    $dialog.Dispose()
+}
+
+function Invoke-GamingProfile {
+    param([Parameter(Mandatory=$true)][string]$ProfileName)
+    if (-not $script:GamingProfiles.Contains($ProfileName)) {
+        Write-Log "Unknown gaming profile: $ProfileName" 'ERROR'
+        return
+    }
+    Refresh-ProfileFromGitHub -ProfileName $ProfileName
+    $profile = $script:GamingProfiles[$ProfileName]
+    Write-Log "$ProfileName full routine started: mouse, NVIDIA, CS2 config, applications."
+
+    $steps = @(
+        @{ Name = 'Windows mouse speed/acceleration'; Action = {
+            Apply-ProfileMouse -ProfileName $ProfileName -PointerSpeed ([int]$profile.PointerSpeed) -DisableAcceleration ([bool]$profile.DisableAcceleration) -SkipPointerOptions
+        } }
+    )
+    if ($profile.ApplyNvidia) {
+        $steps += @{ Name = 'NVIDIA settings'; Action = { Apply-NvidiaGamingSettings -Width ([int]$profile.Width) -Height ([int]$profile.Height) -RefreshHz ([int]$profile.RefreshHz) -Vibrance ([int]$profile.Vibrance) } }
+    }
+    $profileCfgName = [string]$profile.ConfigFile
+    if (-not [string]::IsNullOrWhiteSpace($profileCfgName)) {
+        $profileCfgUrl = [string]$profile.CfgDownloadUrl
+        if ($ProfileName -eq 'FabMode' -and [string]::IsNullOrWhiteSpace($profileCfgUrl)) {
+            $profileCfgUrl = $script:FabCfgCloudUrl
+        }
+        $steps += @{ Name = "Install CS2 $profileCfgName"; Action = {
+            Install-AtCfg -Silent -CfgName $profileCfgName -DownloadUrl $profileCfgUrl -CloudPreferred:([bool]$profileCfgUrl) -CS2Sensitivity ([string]$profile.CS2Sensitivity)
+        } }
+    }
+    if ($profile.LaunchApps) {
+        $steps += @{ Name = 'Launch All (including Mouse Pointer Options)'; Action = { Launch-All } }
+    }
+    foreach ($step in $steps) {
+        Write-Log ("$ProfileName step started: " + $step.Name)
+        try {
+            & ($step.Action)
+            Write-Log ("$ProfileName step returned: " + $step.Name + ". Check logs for individual success or errors.")
+        } catch {
+            Write-Log ("$ProfileName step failed: " + $step.Name + ": " + $_.Exception.Message) 'ERROR'
+        }
+    }
+    Write-Log "$ProfileName full routine finished. Review logs for individual results."
+}
+
+# Backward-compatible entry point.
+function Invoke-FabModeFull { Invoke-GamingProfile -ProfileName 'FabMode' }
+
+# Main window
+$form = New-Object System.Windows.Forms.Form
+$form.Text = "Cafe Launcher"
+$form.Size = New-Object System.Drawing.Size(800,950)
+$form.StartPosition = "CenterScreen"
+$form.FormBorderStyle = "FixedSingle"
+$form.MaximizeBox = $false
+$form.BackColor = $BG
+$form.ForeColor = $WHITE
+$form.Font = New-Object System.Drawing.Font("Segoe UI",10)
+
+# Header
+$header = New-Object System.Windows.Forms.Panel
+$header.Location = New-Object System.Drawing.Point(0,0)
+$header.Size = New-Object System.Drawing.Size(800,105)
+$header.BackColor = $PANEL
+$form.Controls.Add($header)
+
+$title = New-Object System.Windows.Forms.Label
+$title.Text = "GAMING CAFE"
+$title.Location = New-Object System.Drawing.Point(28,18)
+$title.Size = New-Object System.Drawing.Size(500,38)
+$title.Font = New-Object System.Drawing.Font("Segoe UI",21,[System.Drawing.FontStyle]::Bold)
+$title.ForeColor = $WHITE
+$header.Controls.Add($title)
+
+$subtitle = New-Object System.Windows.Forms.Label
+$subtitle.Text = "APP LAUNCHER  |  PC SETTINGS"
+$subtitle.Location = New-Object System.Drawing.Point(31,62)
+$subtitle.Size = New-Object System.Drawing.Size(500,23)
+$subtitle.Font = New-Object System.Drawing.Font("Segoe UI",9)
+$subtitle.ForeColor = $MUTED
+$header.Controls.Add($subtitle)
+
+function New-Tile {
+    param(
+        [string]$Text,
+        [int]$Index,
+        [scriptblock]$Action,
+        [switch]$Primary,
+        [string]$EditProfile = ''
+    )
+
+    $col = $Index % 3
+    $row = [Math]::Floor($Index / 3)
+    $x = 25 + ($col * 250)
+    $y = 125 + ($row * 88)
+
+    $button = New-Object System.Windows.Forms.Button
+    $button.Text = $Text
+    $button.Location = New-Object System.Drawing.Point($x,$y)
+    if ($EditProfile) {
+        $button.Size = New-Object System.Drawing.Size(235,46)
+    } else {
+        $button.Size = New-Object System.Drawing.Size(235,70)
+    }
+    $button.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
+    $button.FlatAppearance.BorderSize = 0
+    if ($Primary) {
+        $button.BackColor = $BLUE
+    } else {
+        $button.BackColor = $PANEL
+    }
+    $button.ForeColor = $WHITE
+    $button.Font = New-Object System.Drawing.Font("Segoe UI",10,[System.Drawing.FontStyle]::Bold)
+    $button.Cursor = [System.Windows.Forms.Cursors]::Hand
+    $actionToRun = $Action
+    $button.Add_Click({
+        Write-Log "Clicked: $($this.Text)"
+        try {
+            & $actionToRun
+        } catch {
+            Write-Log "Button '$($this.Text)' failed: $($_.Exception.Message)" "ERROR"
+            [System.Windows.Forms.MessageBox]::Show(
+                "$($this.Text) failed:`n$($_.Exception.Message)",
+                "Cafe Launcher"
+            )
+        }
+    }.GetNewClosure())
+    $form.Controls.Add($button)
+    if ($EditProfile) {
+        $edit = New-Object System.Windows.Forms.Button
+        $edit.Text = "Edit $EditProfile settings"
+        $edit.Location = [System.Drawing.Point]::new($x, ($y + 48))
+        $edit.Size = New-Object System.Drawing.Size(235,22)
+        $edit.Font = New-Object System.Drawing.Font('Segoe UI',8)
+        $edit.FlatStyle = 'Flat'
+        $edit.FlatAppearance.BorderSize = 0
+        $edit.BackColor = [System.Drawing.Color]::FromArgb(58,67,83)
+        $edit.ForeColor = $WHITE
+        $edit.Cursor = [System.Windows.Forms.Cursors]::Hand
+        $selectedProfile = $EditProfile
+        $edit.Add_Click({
+            Write-Log "Clicked: Edit $selectedProfile settings"
+            try { Show-ProfileEditor -ProfileName $selectedProfile }
+            catch { Write-Log "Profile editor failed: $($_.Exception.Message)" 'ERROR' }
+        }.GetNewClosure())
+        $form.Controls.Add($edit)
+    }
+}
+
+New-Tile "LAUNCH ALL" 0 { Launch-All } -Primary
+New-Tile "Steam" 1 { Start-DetectedSteam }
+New-Tile "FACEIT Anti-Cheat" 2 {
+    Launch-App -Name "FACEIT Anti-Cheat" -Paths @(
+        "$env:ProgramFiles\FACEIT AC\faceitclient.exe",
+        "${env:ProgramFiles(x86)}\FACEIT AC\faceitclient.exe"
+    )
+}
+New-Tile "FACEIT Matchmaking" 3 { Open-FaceitMatchmaking }
+New-Tile "Spotify" 4 { Open-Spotify }
+New-Tile "Logitech G HUB" 5 { Open-GHub }
+
+# Five editable gaming profiles, all using the same shared routine.
+New-Tile "FabMode" 6 { Invoke-GamingProfile -ProfileName 'FabMode' } -Primary -EditProfile 'FabMode'
+New-Tile "ArliMode" 7 { Invoke-GamingProfile -ProfileName 'ArliMode' } -Primary -EditProfile 'ArliMode'
+New-Tile "BrileMode" 8 { Invoke-GamingProfile -ProfileName 'BrileMode' } -Primary -EditProfile 'BrileMode'
+New-Tile "ArmlMode" 9 { Invoke-GamingProfile -ProfileName 'ArmlMode' } -Primary -EditProfile 'ArmlMode'
+New-Tile "OliMode" 10 { Invoke-GamingProfile -ProfileName 'OliMode' } -Primary -EditProfile 'OliMode'
+
+New-Tile "Mouse Pointer Options" 11 { Open-MousePointerOptions }
+New-Tile "NVIDIA Control Panel" 12 { Open-NvidiaControlPanel }
+New-Tile "Apply NVIDIA Settings" 13 { Apply-NvidiaGamingSettings } -Primary
+New-Tile "Install CS2 fab.cfg" 14 { Install-AtCfg -CfgName 'fab.cfg' -DownloadUrl $script:FabCfgCloudUrl -CloudPreferred } -Primary
+New-Tile "Detect PC" 15 { Show-PCDiagnostics }
+New-Tile "Check for Updates" 16 { Check-CafeLauncherUpdates -Manual }
+New-Tile "Exit" 17 { $form.Close() }
+
+# Live diagnostic log panel (visible only while the launcher is open)
+$logTitle = New-Object System.Windows.Forms.Label
+$logTitle.Text = "LIVE LOGS  |  Errors and button activity"
+$logTitle.Location = New-Object System.Drawing.Point(28,663)
+$logTitle.Size = New-Object System.Drawing.Size(500,22)
+$logTitle.Font = New-Object System.Drawing.Font("Segoe UI",9,[System.Drawing.FontStyle]::Bold)
+$logTitle.ForeColor = $WHITE
+$form.Controls.Add($logTitle)
+
+$clearLogs = New-Object System.Windows.Forms.Button
+$clearLogs.Text = "Clear Logs"
+$clearLogs.Location = New-Object System.Drawing.Point(670,659)
+$clearLogs.Size = New-Object System.Drawing.Size(100,27)
+$clearLogs.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
+$clearLogs.FlatAppearance.BorderSize = 0
+$clearLogs.BackColor = $PANEL
+$clearLogs.ForeColor = $WHITE
+$clearLogs.Add_Click({
+    if ($script:LogBox) { $script:LogBox.Clear() }
+    try { Set-Content -LiteralPath $script:LogPath -Value "" -Encoding UTF8 } catch {}
+    Write-Log "Logs cleared."
+})
+$form.Controls.Add($clearLogs)
+
+$script:LogBox = New-Object System.Windows.Forms.TextBox
+$script:LogBox.Location = New-Object System.Drawing.Point(28,690)
+$script:LogBox.Size = New-Object System.Drawing.Size(742,168)
+$script:LogBox.Multiline = $true
+$script:LogBox.ReadOnly = $true
+$script:LogBox.ScrollBars = [System.Windows.Forms.ScrollBars]::Vertical
+$script:LogBox.WordWrap = $false
+$script:LogBox.BackColor = [System.Drawing.Color]::FromArgb(12,15,20)
+$script:LogBox.ForeColor = [System.Drawing.Color]::FromArgb(190,220,190)
+$script:LogBox.Font = New-Object System.Drawing.Font("Consolas",9)
+try {
+    $script:LogBox.Text = Get-Content -LiteralPath $script:LogPath -Raw -ErrorAction Stop
+    $script:LogBox.SelectionStart = $script:LogBox.TextLength
+    $script:LogBox.ScrollToCaret()
+} catch {}
+$form.Controls.Add($script:LogBox)
+Write-Log "Launcher ready. Log file: $script:LogPath"
+
+# Footer
+$footer = New-Object System.Windows.Forms.Label
+$footer.Text = "GAMING CAFE  |  WINDOWS TOOLKIT  |  LOG: %TEMP%\CafeLauncher.log"
+$footer.Location = New-Object System.Drawing.Point(28,878)
+$footer.Size = New-Object System.Drawing.Size(740,22)
+$footer.Font = New-Object System.Drawing.Font("Segoe UI",8)
+$footer.ForeColor = $MUTED
+$form.Controls.Add($footer)
+
+$form.Add_FormClosed({
+    if ($script:ColorWatchTimer) {
+        try { $script:ColorWatchTimer.Stop(); $script:ColorWatchTimer.Dispose() } catch {}
+        Write-Log "Color Watch stopped because the launcher closed."
+    }
+})
+# On first display, automatically inventory the machine and check GitHub for
+# an update. One-shot timer lets Windows render the UI before network access.
+$startupTimer = New-Object System.Windows.Forms.Timer
+$startupTimer.Interval=350
+$startupTimer.Add_Tick({
+    $startupTimer.Stop()
+    $startupTimer.Dispose()
+    try {
+        Write-Log 'Automatic startup inventory:'
+        $summary = Get-PCDiagnostics
+        foreach ($line in ($summary -split '\r?\n')) { if ($line) { Write-Log ('PC: ' + $line) } }
+    } catch { Write-Log "Startup inventory failed: $($_.Exception.Message)" 'WARN' }
+    Check-CafeLauncherUpdates
+})
+$form.Add_Shown({ $startupTimer.Start() })
+[void]$form.ShowDialog()
+ -and (Test-Path -LiteralPath (Join-Path $_.FullName 'config\localconfig.vdf') -PathType Leaf) })
+    if ($accounts.Count -eq 0) { return $null }
+    try {
+        $id = [long](Get-ItemProperty -Path 'HKCU:\Software\Valve\Steam\ActiveProcess' -ErrorAction Stop).ActiveUser
+        if ($id -lt 0) { $id += 4294967296 }
+        $matches = @($accounts | Where-Object { $_.Name -eq [string]$id })
+        if ($matches.Count -eq 1 -and $id -gt 0) {
+            return (Join-Path $matches[0].FullName 'config\localconfig.vdf')
+        }
+    } catch {}
+    # With multiple accounts, never guess which person's launch options to alter.
+    if ($accounts.Count -eq 1) { return (Join-Path $accounts[0].FullName 'config\localconfig.vdf') }
+    return $null
+}
+
+function Set-CS2SteamLaunchOptions {
+    param([string]$CfgName)
+    if ($CfgName -notmatch '^[a-zA-Z0-9_-]+\.cfg
+    $lines = New-Object 'System.Collections.Generic.List[string]'
+    $lines.Add("Machine: $env:COMPUTERNAME")
+    try {
+        $gpus = @(Get-CimInstance -ClassName Win32_VideoController -ErrorAction Stop |
+            Where-Object { $_.Name } | Select-Object -ExpandProperty Name)
+        $lines.Add('Graphics: ' + ($(if ($gpus.Count) { $gpus -join '; ' } else { 'Unavailable' })))
+    } catch { $lines.Add('Graphics: Could not query GPU details') }
+    try {
+        if ('FabDisplayNative' -as [type]) {
+            $lines.Add([FabDisplayNative]::GetDisplayModesReport())
+        } else { $lines.Add('Display modes: driver helper unavailable') }
+        foreach ($screen in [System.Windows.Forms.Screen]::AllScreens) {
+            $lines.Add("Monitor $($screen.DeviceName): $($screen.Bounds.Width)x$($screen.Bounds.Height), primary=$($screen.Primary)")
+        }
+    } catch { $lines.Add('Display inventory could not be read') }
+    try {
+        $ptr = [Runtime.InteropServices.Marshal]::AllocHGlobal(4)
+        try {
+            $ok = [FabMouseNative]::SystemParametersInfo(0x0070,0,$ptr,0)
+            if ($ok) { $lines.Add('Active Windows pointer speed: ' + [Runtime.InteropServices.Marshal]::ReadInt32($ptr)) }
+            else { $lines.Add('Pointer speed API read failed') }
+        } finally { [Runtime.InteropServices.Marshal]::FreeHGlobal($ptr) }
+        $m = Get-ItemProperty -Path 'HKCU:\Control Panel\Mouse' -ErrorAction Stop
+        $lines.Add("Mouse registry: speed=$($m.MouseSensitivity), acceleration=$($m.MouseSpeed), thresholds=$($m.MouseThreshold1)/$($m.MouseThreshold2)")
+    } catch { $lines.Add('Mouse settings could not be read') }
+    $steam = Get-SteamExecutable
+    $lines.Add('Steam: ' + $(if ($steam) { $steam } else { 'not detected' }))
+    $roots = @(Get-SteamLibraryRoots)
+    $lines.Add('Steam libraries: ' + $(if ($roots.Count) { $roots -join '; ' } else { 'not detected' }))
+    $cs2 = Find-CS2ConfigFolder -NoPrompt
+    $lines.Add('CS2 config: ' + $(if ($cs2) { $cs2 } else { 'not detected' }))
+    $faceit = Find-App -Paths @("$env:ProgramFiles\FACEIT AC\faceitclient.exe", "${env:ProgramFiles(x86)}\FACEIT AC\faceitclient.exe")
+    $lines.Add('FACEIT AC: ' + $(if ($faceit) { $faceit } else { 'not detected' }))
+    $ghub = Find-App -Paths @("$env:ProgramFiles\LGHUB\lghub.exe", "$env:ProgramFiles\LGHUB\lghub_system_tray.exe")
+    $lines.Add('Logitech G HUB: ' + $(if ($ghub) { $ghub } else { 'not detected' }))
+    $chrome = Get-ChromePath
+    $lines.Add('Chrome: ' + $(if ($chrome) { $chrome } else { 'not detected' }))
+    try {
+        $nvPanel = Find-App -Paths @("$env:ProgramFiles\NVIDIA Corporation\Control Panel Client\nvcplui.exe", "${env:ProgramFiles(x86)}\NVIDIA Corporation\Control Panel Client\nvcplui.exe")
+        if (-not $nvPanel) {
+            $storeApp = Get-StartApps -ErrorAction Stop | Where-Object { $_.Name -match '^NVIDIA Control Panel$' } | Select-Object -First 1
+            if ($storeApp) { $nvPanel='Installed Store app' }
+        }
+        $lines.Add('NVIDIA Control Panel: ' + $(if ($nvPanel) { $nvPanel } else { 'not detected' }))
+    } catch { $lines.Add('NVIDIA Control Panel: not detected') }
+    return ($lines -join [Environment]::NewLine)
+}
+
+function Show-PCDiagnostics {
+    Write-Log 'PC detection started.'
+    try {
+        $summary = Get-PCDiagnostics
+        foreach ($line in ($summary -split '\r?\n')) { if ($line) { Write-Log ('PC: ' + $line) } }
+        $formDialog = New-Object System.Windows.Forms.Form
+        $formDialog.Text='PC Detection - CafeLauncher'
+        $formDialog.ClientSize=[System.Drawing.Size]::new(755,445)
+        $formDialog.StartPosition='CenterParent'
+        $formDialog.BackColor=$BG
+        $formDialog.ForeColor=$WHITE
+        $formDialog.Font=New-Object System.Drawing.Font('Consolas',10)
+        $reportBox = New-Object System.Windows.Forms.TextBox
+        $reportBox.Location=[System.Drawing.Point]::new(12,12)
+        $reportBox.Size=[System.Drawing.Size]::new(731,385)
+        $reportBox.Multiline=$true
+        $reportBox.ReadOnly=$true
+        $reportBox.ScrollBars='Both'
+        $reportBox.WordWrap=$false
+        $reportBox.BackColor=$PANEL
+        $reportBox.ForeColor=$WHITE
+        $reportBox.Text=$summary
+        $formDialog.Controls.Add($reportBox)
+        $close = New-Object System.Windows.Forms.Button
+        $close.Text='Close'
+        $close.Location=[System.Drawing.Point]::new(633,404)
+        $close.Size=[System.Drawing.Size]::new(110,30)
+        $close.Add_Click({ $formDialog.Close() })
+        $formDialog.Controls.Add($close)
+        [void]$formDialog.ShowDialog($form)
+        $formDialog.Dispose()
+    } catch { Write-Log "PC detection failed: $($_.Exception.Message)" 'ERROR' }
+}
+
+# ============================================================== 
+# Public GitHub updater: no token needed, never auto-runs new code.
+# Compares local content to the main-branch Git blob SHA, verifies download.
+# ============================================================== 
+function Get-GitBlobSha {
+    param([byte[]]$Bytes)
+    $head=[Text.Encoding]::ASCII.GetBytes('blob ' + $Bytes.Length + [char]0)
+    $blob=New-Object byte[] ($head.Length + $Bytes.Length)
+    [Array]::Copy($head,0,$blob,0,$head.Length)
+    [Array]::Copy($Bytes,0,$blob,$head.Length,$Bytes.Length)
+    $sha=[Security.Cryptography.SHA1]::Create()
+    try { return ([BitConverter]::ToString($sha.ComputeHash($blob))).Replace('-','').ToLowerInvariant() }
+    finally { $sha.Dispose() }
+}
+
+function Test-LauncherIsCurrent {
+    param([string]$CurrentPath,[string]$RemoteBlobSha)
+    if (-not (Test-Path -LiteralPath $CurrentPath -PathType Leaf)) { return $false }
+    $bytes=[IO.File]::ReadAllBytes($CurrentPath)
+    if ((Get-GitBlobSha -Bytes $bytes) -eq $RemoteBlobSha) { return $true }
+    # Chrome/Drive may preserve CRLF even when GitHub stores LF. Ignore just
+    # line-ending differences and an optional final newline for comparison.
+    $normalized=[Text.Encoding]::UTF8.GetString($bytes).Replace("`r`n","`n")
+    if ((Get-GitBlobSha -Bytes ([Text.Encoding]::UTF8.GetBytes($normalized))) -eq $RemoteBlobSha) { return $true }
+    $oneNewline=$normalized.TrimEnd("`n")
+    return (Get-GitBlobSha -Bytes ([Text.Encoding]::UTF8.GetBytes($oneNewline))) -eq $RemoteBlobSha
+}
+
+function Check-CafeLauncherUpdates {
+    param([switch]$Manual)
+    $source=$env:CAFE_SCRIPT
+    if ([string]::IsNullOrWhiteSpace($source)) {
+        if ($Manual) { Write-Log 'Current BAT path not available for updater.' 'WARN' }
+        return
+    }
+    try {
+        [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+        $uri="https://api.github.com/repos/fabjoncela/Cs-script/contents/cafe.bat?ref=main"
+        $remote=Invoke-RestMethod -Uri $uri -Headers @{'User-Agent'='CafeLauncher-Updater'; 'Accept'='application/vnd.github+json'} -TimeoutSec 8 -ErrorAction Stop
+        if ($remote.path -ne 'cafe.bat' -or $remote.sha -notmatch '^[a-fA-F0-9]{40}$' -or
+            [int64]$remote.size -lt 10000 -or [int64]$remote.size -gt 1000000) { throw 'Unexpected update metadata from GitHub.' }
+        # Ignore older/unversioned GitHub builds. A new release must increment
+        # its CAFE_RELEASE marker, rather than merely have different line endings.
+        if ($remote.encoding -ne 'base64' -or [string]::IsNullOrWhiteSpace($remote.content)) {
+            throw 'GitHub did not include update version metadata.'
+        }
+        $remoteText=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String(($remote.content -replace '\s','')))
+        $pattern='(?m)^# CAFE_RELEASE=(\d{4}\.\d{1,2}\.\d{1,2}\.\d+)\s*$'
+        $remoteMatch=[regex]::Match($remoteText,$pattern)
+        $localMatch=[regex]::Match([IO.File]::ReadAllText($source),$pattern)
+        if (-not $remoteMatch.Success) {
+            Write-Log 'GitHub main has no release marker (older launcher); skipping downgrade. Upload this new cafe.bat to main first.' 'WARN'
+            if ($Manual) { [System.Windows.Forms.MessageBox]::Show('Your current local build is newer than the unversioned GitHub launcher. Upload this BAT to GitHub main to activate self-updates.', 'Update Check', 'OK', 'Information') | Out-Null }
+            return
+        }
+        $remoteRelease=[version]::Parse($remoteMatch.Groups[1].Value)
+        $localRelease=if ($localMatch.Success) { [version]::Parse($localMatch.Groups[1].Value) } else { [version]'0.0.0.0' }
+        if ($remoteRelease -le $localRelease) {
+            Write-Log "CafeLauncher local release $localRelease is current; GitHub main release is $remoteRelease."
+            if ($Manual) { [System.Windows.Forms.MessageBox]::Show("CafeLauncher is current (local $localRelease; GitHub $remoteRelease).", 'Update Check', 'OK', 'Information') | Out-Null }
+            return
+        }
+        if (Test-LauncherIsCurrent -CurrentPath $source -RemoteBlobSha $remote.sha) {
+            Write-Log 'CafeLauncher is up to date with GitHub main.'
+            if ($Manual) { [System.Windows.Forms.MessageBox]::Show('CafeLauncher is already up to date.', 'Update Check', 'OK', 'Information') | Out-Null }
+            return
+        }
+        Write-Log 'A newer/different cafe.bat is available on GitHub main.' 'INFO'
+        $reply=[System.Windows.Forms.MessageBox]::Show(
+            "GitHub has a different CafeLauncher build.`n`nDownload and replace your local BAT?`n`nYour currently open launcher will keep running. Reopen it to use the update.`n`nNo GitHub login required.",
+            'CafeLauncher Update Available',
+            [System.Windows.Forms.MessageBoxButtons]::YesNo,
+            [System.Windows.Forms.MessageBoxIcon]::Question)
+        if ($reply -ne [System.Windows.Forms.DialogResult]::Yes) { Write-Log 'User skipped CafeLauncher update.'; return }
+        $temp=Join-Path $env:TEMP ("CafeLauncher-update-{0}.bat" -f [Guid]::NewGuid().ToString('N'))
+        try {
+            Invoke-WebRequest -Uri 'https://raw.githubusercontent.com/fabjoncela/Cs-script/main/cafe.bat' -OutFile $temp -UseBasicParsing -TimeoutSec 20 -ErrorAction Stop | Out-Null
+            $bytes=[IO.File]::ReadAllBytes($temp)
+            if ($bytes.Length -ne [int64]$remote.size -or
+                (Get-GitBlobSha -Bytes $bytes) -ne $remote.sha) { throw 'Downloaded BAT failed GitHub blob hash and size verification.' }
+            $text=[Text.Encoding]::UTF8.GetString($bytes)
+            if (-not $text.StartsWith('@echo off') -or -not $text.Contains('# POWERSHELL_GUI')) { throw 'Downloaded launcher structure check failed.' }
+            # Verify that the embedded PowerShell can be PARSED before installing it.
+            # In earlier releases, a correct GitHub hash was incorrectly treated as proof
+            # that the replacement could launch. A hash does not verify syntax.
+            $downloadLines=[IO.File]::ReadAllLines($temp)
+            $marker=[Array]::IndexOf($downloadLines,'# POWERSHELL_GUI')
+            if ($marker -lt 0 -or $marker -ge ($downloadLines.Length - 1)) { throw 'Update has no valid PowerShell section.' }
+            $downloadScript=($downloadLines[($marker+1)..($downloadLines.Length-1)] -join [Environment]::NewLine)
+            $parseTokens=$null
+            $parseErrors=$null
+            [void][System.Management.Automation.Language.Parser]::ParseInput($downloadScript,[ref]$parseTokens,[ref]$parseErrors)
+            if ($parseErrors.Count -gt 0) {
+                throw ('Refusing update with PowerShell syntax errors: ' + $parseErrors[0].ToString())
+            }
+            # Raw GitHub .bat content can use LF-only line endings. cmd.exe on Windows
+            # expects CRLF for reliable BAT interpretation. Verify original bytes above,
+            # then normalize the verified payload BEFORE placing it on disk.
+            $windowsText=$text.Replace("`r`n","`n").Replace("`r","`n").Replace("`n","`r`n")
+            [IO.File]::WriteAllText($temp,$windowsText,(New-Object System.Text.UTF8Encoding($false)))
+            $backupDir=Join-Path $env:LOCALAPPDATA 'CafeLauncher\backups'
+            if (-not (Test-Path -LiteralPath $backupDir)) { New-Item -ItemType Directory -Path $backupDir -Force -ErrorAction Stop | Out-Null }
+            $backup=Join-Path $backupDir ("cafe-before-update-{0}.bat" -f (Get-Date -Format 'yyyyMMdd-HHmmss'))
+            try {
+                # Stage beside the original and replace atomically when supported;
+                # this avoids leaving a partially overwritten BAT after a crash.
+                $staged=Join-Path (Split-Path -Parent $source) ('.CafeLauncher-update-' + [Guid]::NewGuid().ToString('N') + '.bat')
+                try {
+                    Copy-Item -LiteralPath $temp -Destination $staged -ErrorAction Stop
+                    try {
+                        [IO.File]::Replace($staged,$source,$backup)
+                    } catch {
+                        # File.Replace can be unavailable on network/FAT volumes.
+                        Copy-Item -LiteralPath $source -Destination $backup -ErrorAction Stop
+                        Copy-Item -LiteralPath $staged -Destination $source -Force -ErrorAction Stop
+                    }
+                } finally {
+                    Remove-Item -LiteralPath $staged -Force -ErrorAction SilentlyContinue
+                }
+                Write-Log "Update downloaded, syntax-checked, CRLF-normalized and installed at $source; backup: $backup"
+                [System.Windows.Forms.MessageBox]::Show("CafeLauncher updated successfully at:`n$source`n`nClose and reopen the BAT to use the latest version.", 'Update Installed', 'OK', 'Information') | Out-Null
+            } catch {
+                $dest=Join-Path $env:USERPROFILE 'Downloads\CafeLauncher_latest.bat'
+                Copy-Item -LiteralPath $temp -Destination $dest -Force -ErrorAction Stop
+                Write-Log "Current BAT could not be overwritten; saved verified update to $dest" 'WARN'
+                [System.Windows.Forms.MessageBox]::Show("Your original BAT could not be replaced (read-only/protected folder).`n`nA verified new copy was saved to:`n$dest`n`nOpen that copy next time.", 'Update Downloaded', 'OK', 'Warning') | Out-Null
+            }
+        } finally { Remove-Item -LiteralPath $temp -Force -ErrorAction SilentlyContinue }
+    } catch {
+        Write-Log "Update check/download failed; the existing launcher is unchanged where possible: $($_.Exception.Message)" 'WARN'
+        if ($Manual) { [System.Windows.Forms.MessageBox]::Show("Update check failed: $($_.Exception.Message)", 'Update Check', 'OK', 'Warning') | Out-Null }
+    }
+}
+
+function Launch-All {
+    Start-DetectedSteam
+
+    Launch-App -Name "FACEIT Anti-Cheat" -Paths @(
+        "$env:ProgramFiles\FACEIT AC\faceitclient.exe",
+        "${env:ProgramFiles(x86)}\FACEIT AC\faceitclient.exe"
+    )
+
+    Open-FaceitMatchmaking
+    Open-Spotify
+    Open-GHub
+    Write-Log "Launch All: opening Mouse Pointer Options."
+    Open-MousePointerOptions
+}
+
+# ==============================================================
+# PROFILE DEFAULTS - Edit in GUI, save locally or sync via GitHub
+# Cloud profile settings: profiles/<ProfileName>.json (public read).
+# CS2 .cfg files remain separately managed on GitHub.
+# Local unsynced edits ALWAYS win over downloaded cloud settings.
+# ==============================================================
+$script:GithubRepo = 'fabjoncela/Cs-script'
+$script:GithubBranch = 'main'
+$script:FabCfgCloudUrl = 'https://raw.githubusercontent.com/fabjoncela/Cs-script/main/fab.cfg'
+$script:GamingProfiles = [ordered]@{
+    FabMode = @{
+        PointerSpeed=10; DisableAcceleration=$true; ApplyNvidia=$true
+        Width=1920; Height=1080; RefreshHz=360; Vibrance=75
+        CS2Sensitivity=''; ConfigFile='fab.cfg'; CfgDownloadUrl=$script:FabCfgCloudUrl; LaunchApps=$true
+    }
+    ArliMode = @{
+        PointerSpeed=10; DisableAcceleration=$true; ApplyNvidia=$true
+        Width=1920; Height=1080; RefreshHz=360; Vibrance=75
+        CS2Sensitivity=''; ConfigFile='arli.cfg'; CfgDownloadUrl='https://raw.githubusercontent.com/fabjoncela/Cs-script/main/arli.cfg'; LaunchApps=$true
+    }
+    BrileMode = @{
+        PointerSpeed=10; DisableAcceleration=$true; ApplyNvidia=$true
+        Width=1920; Height=1080; RefreshHz=360; Vibrance=75
+        CS2Sensitivity=''; ConfigFile='brile.cfg'; CfgDownloadUrl='https://raw.githubusercontent.com/fabjoncela/Cs-script/main/brile.cfg'; LaunchApps=$true
+    }
+    ArmlMode = @{
+        PointerSpeed=10; DisableAcceleration=$true; ApplyNvidia=$true
+        Width=1920; Height=1080; RefreshHz=360; Vibrance=75
+        CS2Sensitivity=''; ConfigFile='arml.cfg'; CfgDownloadUrl='https://raw.githubusercontent.com/fabjoncela/Cs-script/main/arml.cfg'; LaunchApps=$true
+    }
+    OliMode = @{
+        PointerSpeed=10; DisableAcceleration=$true; ApplyNvidia=$true
+        Width=1920; Height=1080; RefreshHz=360; Vibrance=75
+        CS2Sensitivity=''; ConfigFile='oli.cfg'; CfgDownloadUrl='https://raw.githubusercontent.com/fabjoncela/Cs-script/main/oli.cfg'; LaunchApps=$true
+    }
+}
+$script:ProfileSettingsPath = Join-Path $env:LOCALAPPDATA 'CafeLauncher\profiles.json'
+$script:PendingSync = @{}
+foreach ($name in @($script:GamingProfiles.Keys)) { $script:PendingSync[$name] = $false }
+
+function Import-ProfileValues {
+    param([string]$ProfileName, $SavedProfile, [string]$SourceLabel = 'local')
+    if (-not $script:GamingProfiles.Contains($ProfileName) -or -not $SavedProfile) { return }
+    foreach ($setting in @('PointerSpeed','DisableAcceleration','ApplyNvidia','Width','Height','RefreshHz','Vibrance','CS2Sensitivity','CfgDownloadUrl','LaunchApps')) {
+        $saved = $SavedProfile.PSObject.Properties[$setting]
+        if (-not $saved) { continue }
+        $value = $saved.Value
+        try {
+            switch ($setting) {
+                'PointerSpeed' { $value=[int]$value; if ($value -lt 1 -or $value -gt 20) { throw 'range' } }
+                'Width'        { $value=[int]$value; if ($value -lt 640 -or $value -gt 7680) { throw 'range' } }
+                'Height'       { $value=[int]$value; if ($value -lt 480 -or $value -gt 4320) { throw 'range' } }
+                'RefreshHz'    { $value=[int]$value; if ($value -lt 30 -or $value -gt 600) { throw 'range' } }
+                'Vibrance'     { $value=[int]$value; if ($value -lt 0 -or $value -gt 100) { throw 'range' } }
+                'CS2Sensitivity' {
+                    $value=[string]$value
+                    if ($value -and $value -notmatch '^(?:[0-9]+(?:\.[0-9]+)?)$') { throw 'invalid sensitivity' }
+                    if ($value -and ([double]::Parse($value,[Globalization.CultureInfo]::InvariantCulture) -le 0 -or [double]::Parse($value,[Globalization.CultureInfo]::InvariantCulture) -gt 20)) { throw 'range' }
+                }
+                'CfgDownloadUrl' {
+                    $value = [string]$value
+                    if ($ProfileName -eq 'FabMode' -and [string]::IsNullOrWhiteSpace($value)) {
+                        $value = $script:FabCfgCloudUrl
+                        Write-Log 'Migrated old FabMode empty CFG URL to GitHub fab.cfg.'
+                    }
+                    if ($value) { Assert-ConfigUrl $value }
+                }
+                default {
+                    if ($setting -in @('DisableAcceleration','ApplyNvidia','LaunchApps')) {
+                        if ($value -isnot [bool]) { throw 'boolean expected' }
+                    }
+                }
+            }
+            $script:GamingProfiles[$ProfileName][$setting] = $value
+        } catch { Write-Log "Ignored invalid $SourceLabel $ProfileName/$setting value." 'WARN' }
+    }
+}
+
+function Load-ProfileSettings {
+    if (-not (Test-Path -LiteralPath $script:ProfileSettingsPath -PathType Leaf)) { return }
+    try {
+        $settings = Get-Content -LiteralPath $script:ProfileSettingsPath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+        foreach ($name in @($script:GamingProfiles.Keys)) {
+            $savedProfile = $settings.PSObject.Properties[$name]
+            if (-not $savedProfile -or -not $savedProfile.Value) { continue }
+            Import-ProfileValues -ProfileName $name -SavedProfile $savedProfile.Value -SourceLabel 'local'
+            $dirty = $savedProfile.Value.PSObject.Properties['SyncPending']
+            # Old versions saved ONLY locally: protect edits from being replaced by cloud defaults.
+            if ($dirty -and $dirty.Value -is [bool]) {
+                $script:PendingSync[$name] = [bool]$dirty.Value
+            } else {
+                $script:PendingSync[$name] = $true
+            }
+        }
+        Write-Log "Loaded local profile settings from $script:ProfileSettingsPath."
+    } catch {
+        Write-Log "Profile settings JSON could not be read; using defaults: $($_.Exception.Message)" 'WARN'
+    }
+}
+
+function Export-ProfileValues {
+    param([string]$ProfileName)
+    $p = $script:GamingProfiles[$ProfileName]
+    if (-not $p) { throw "Unknown profile: $ProfileName" }
+    $profileValues = [ordered]@{
+        PointerSpeed=[int]$p.PointerSpeed; DisableAcceleration=[bool]$p.DisableAcceleration
+        ApplyNvidia=[bool]$p.ApplyNvidia; Width=[int]$p.Width; Height=[int]$p.Height
+        RefreshHz=[int]$p.RefreshHz; Vibrance=[int]$p.Vibrance
+        CS2Sensitivity=[string]$p.CS2Sensitivity; CfgDownloadUrl=[string]$p.CfgDownloadUrl
+        LaunchApps=[bool]$p.LaunchApps
+    }
+    # Preserve the dictionary as ONE pipeline object on Windows PowerShell 5.1.
+    Write-Output -NoEnumerate $profileValues
+}
+
+function Save-ProfileSettings {
+    # Build a full independent snapshot before writing to disk. Do NOT index
+    # $settings[$name] immediately after assignment: in some Windows PowerShell
+    # hosts a missing/empty pipeline output caused a null-array exception here.
+    $settings = [ordered]@{}
+    foreach ($name in @($script:GamingProfiles.Keys)) {
+        $values = Export-ProfileValues -ProfileName $name
+        if ($null -eq $values -or $values -isnot [System.Collections.IDictionary]) {
+            throw "Cannot save ${name}: the profile exporter did not return a settings dictionary."
+        }
+        $snapshot = [ordered]@{}
+        foreach ($key in @($values.Keys)) { $snapshot[$key] = $values[$key] }
+        $snapshot['SyncPending'] = [bool]$script:PendingSync[$name]
+        $settings[$name] = $snapshot
+    }
+    $dir = Split-Path -Parent $script:ProfileSettingsPath
+    if (-not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Path $dir -Force -ErrorAction Stop | Out-Null }
+    $tmp = Join-Path $dir ("profiles-{0}.tmp" -f [Guid]::NewGuid().ToString('N'))
+    try {
+        [IO.File]::WriteAllText($tmp, ($settings | ConvertTo-Json -Depth 5), (New-Object System.Text.UTF8Encoding($false)))
+        Move-Item -LiteralPath $tmp -Destination $script:ProfileSettingsPath -Force -ErrorAction Stop
+    } finally {
+        if (Test-Path -LiteralPath $tmp) { Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue }
+    }
+    Write-Log "Profile settings saved locally: $script:ProfileSettingsPath"
+}
+
+Load-ProfileSettings
+
+function Refresh-ProfileFromGitHub {
+    param([Parameter(Mandatory=$true)][string]$ProfileName)
+    if (-not $script:GamingProfiles.Contains($ProfileName)) { throw "Unknown profile: $ProfileName" }
+    if ($script:PendingSync[$ProfileName]) {
+        Write-Log "$ProfileName has local edits not synced to GitHub; keeping local settings." 'INFO'
+        return
+    }
+    $url = "https://raw.githubusercontent.com/$($script:GithubRepo)/$($script:GithubBranch)/profiles/$ProfileName.json"
+    try {
+        [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+        # GitHub content is JSON data only; no code is executed from remote profiles.
+        $remote = Invoke-RestMethod -Uri $url -Method Get -Headers @{'Cache-Control'='no-cache'} -TimeoutSec 8 -ErrorAction Stop
+        if ($remote.ProfileName -ne $ProfileName -or [int]$remote.SchemaVersion -ne 1) {
+            throw "Unexpected profile JSON schema for $ProfileName."
+        }
+        Import-ProfileValues -ProfileName $ProfileName -SavedProfile $remote -SourceLabel 'GitHub'
+        try { Save-ProfileSettings } catch { Write-Log "Unable to cache cloud settings: $($_.Exception.Message)" 'WARN' }
+        Write-Log "$ProfileName settings downloaded from GitHub (no login needed)."
+    } catch {
+        Write-Log "Could not refresh $ProfileName settings from GitHub; using cached/local values. $($_.Exception.Message)" 'WARN'
+    }
+}
+
+function Get-GitHubSyncToken {
+    param($OwnerWindow)
+    $authForm = New-Object System.Windows.Forms.Form
+    $authForm.Text = 'Authorize GitHub Sync'
+    $authForm.ClientSize = New-Object System.Drawing.Size(590,286)
+    $authForm.StartPosition='CenterParent'
+    $authForm.FormBorderStyle='FixedDialog'
+    $authForm.MaximizeBox=$false
+    $authForm.MinimizeBox=$false
+    $authForm.BackColor=$PANEL
+    $authForm.ForeColor=$WHITE
+    $authForm.Font=New-Object System.Drawing.Font('Segoe UI',10)
+
+    $instructions = New-Object System.Windows.Forms.Label
+    $instructions.Text = "Paste a fine-grained GitHub access token for $($script:GithubRepo).`r`nPermissions: Contents = Read and write (only this repo).`r`nCreate a short-lived token and revoke it when finished."
+    $instructions.Location=New-Object System.Drawing.Point(20,18)
+    $instructions.Size=New-Object System.Drawing.Size(550,75)
+    $authForm.Controls.Add($instructions)
+
+    $secretBox = New-Object System.Windows.Forms.TextBox
+    $secretBox.Location=New-Object System.Drawing.Point(20,106)
+    $secretBox.Size=New-Object System.Drawing.Size(545,30)
+    $secretBox.UseSystemPasswordChar=$true
+    $authForm.Controls.Add($secretBox)
+
+    $warning = New-Object System.Windows.Forms.Label
+    $warning.Text='Never paste a GitHub token on an untrusted/shared cafe PC. Tokens are not saved by CafeLauncher.'
+    $warning.ForeColor=[System.Drawing.Color]::FromArgb(255,190,105)
+    $warning.Location=New-Object System.Drawing.Point(20,147)
+    $warning.Size=New-Object System.Drawing.Size(550,46)
+    $authForm.Controls.Add($warning)
+
+    $create = New-Object System.Windows.Forms.Button
+    $create.Text='Create a GitHub token...'
+    $create.Location=New-Object System.Drawing.Point(20,213)
+    $create.Size=New-Object System.Drawing.Size(200,36)
+    $create.Add_Click({ Start-Process 'https://github.com/settings/personal-access-tokens/new' })
+    $authForm.Controls.Add($create)
+
+    $ok=New-Object System.Windows.Forms.Button
+    $ok.Text='Authorize & Upload'
+    $ok.Location=New-Object System.Drawing.Point(267,213)
+    $ok.Size=New-Object System.Drawing.Size(162,36)
+    $ok.BackColor=$BLUE
+    $ok.ForeColor=$WHITE
+    $authForm.Controls.Add($ok)
+    $cancel=New-Object System.Windows.Forms.Button
+    $cancel.Text='Cancel'
+    $cancel.Location=New-Object System.Drawing.Point(439,213)
+    $cancel.Size=New-Object System.Drawing.Size(125,36)
+    $cancel.DialogResult=[System.Windows.Forms.DialogResult]::Cancel
+    $authForm.Controls.Add($cancel)
+    $authForm.CancelButton=$cancel
+
+    $ok.Add_Click({
+        if ($secretBox.Text.Trim().Length -lt 20) {
+            [System.Windows.Forms.MessageBox]::Show('Paste a valid GitHub token before uploading.', 'GitHub authorization', 'OK', 'Warning') | Out-Null
+            return
+        }
+        $authForm.DialogResult=[System.Windows.Forms.DialogResult]::OK
+        $authForm.Close()
+    }.GetNewClosure())
+    try {
+        $result=$authForm.ShowDialog($OwnerWindow)
+        if ($result -ne [System.Windows.Forms.DialogResult]::OK) { return $null }
+        return $secretBox.Text.Trim()
+    } finally {
+        $secretBox.Clear()
+        $authForm.Dispose()
+    }
+}
+
+function Sync-ProfileToGitHub {
+    param([Parameter(Mandatory=$true)][string]$ProfileName, [Parameter(Mandatory=$true)][string]$Token)
+    if (-not $script:GamingProfiles.Contains($ProfileName)) { throw "Unknown profile: $ProfileName" }
+    $path = "profiles/$ProfileName.json"
+    $uri = "https://api.github.com/repos/$($script:GithubRepo)/contents/$path"
+    $headers = @{
+        'Authorization'="Bearer $Token"
+        'Accept'='application/vnd.github+json'
+        'User-Agent'='CafeLauncher-ProfileSync'
+        'X-GitHub-Api-Version'='2022-11-28'
+    }
+    $existingSha = $null
+    [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+    try {
+        $current = Invoke-RestMethod -Uri ($uri + '?ref=' + $script:GithubBranch) -Method Get -Headers $headers -TimeoutSec 20 -MaximumRedirection 0 -ErrorAction Stop
+        $existingSha = [string]$current.sha
+    } catch {
+        $status = $null
+        if ($_.Exception.Response) { $status = [int]$_.Exception.Response.StatusCode }
+        if ($status -ne 404) { throw "GitHub authorization or file read failed (HTTP $status)." }
+    }
+
+    $payload = [ordered]@{ SchemaVersion=1; ProfileName=$ProfileName }
+    $values = Export-ProfileValues -ProfileName $ProfileName
+    if ($null -eq $values -or $values -isnot [System.Collections.IDictionary]) {
+        throw "Cannot sync ${ProfileName}: the profile exporter returned no valid settings."
+    }
+    foreach ($key in @($values.Keys)) { $payload[$key] = $values[$key] }
+    $json = $payload | ConvertTo-Json -Depth 5
+    $body = @{
+        message="Update $ProfileName settings from CafeLauncher"
+        content=[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($json + "`n"))
+        branch=$script:GithubBranch
+    }
+    if ($existingSha) { $body.sha = $existingSha }
+    try {
+        $result = Invoke-RestMethod -Uri $uri -Method Put -Headers $headers -ContentType 'application/json' -Body ($body | ConvertTo-Json -Depth 5 -Compress) -TimeoutSec 25 -MaximumRedirection 0 -ErrorAction Stop
+        if (-not $result.commit.sha) { throw 'GitHub did not return a successful commit.' }
+        Write-Log "$ProfileName settings synced to GitHub. Commit: $($result.commit.sha)"
+    } catch {
+        $status = $null
+        if ($_.Exception.Response) { $status = [int]$_.Exception.Response.StatusCode }
+        if ($status -eq 401 -or $status -eq 403) { throw 'GitHub refused the token. Check repository access and Contents: Read and write permission.' }
+        if ($status -eq 409 -or $status -eq 422) { throw 'GitHub rejected the update due to a changed version or validation error. Retry syncing.' }
+        throw "GitHub upload failed (HTTP $status). Your settings remain saved locally."
+    } finally {
+        $headers.Authorization = $null
+        $body.content = $null
+    }
+}
+
+function New-EditorLabel {
+    param($Window, [string]$Caption, [int]$X, [int]$Y, [int]$Width=200)
+    $label = New-Object System.Windows.Forms.Label
+    $label.Text=$Caption
+    $label.ForeColor=$script:EditorTextColor
+    $label.Location=New-Object System.Drawing.Point($X,$Y)
+    $label.Size=New-Object System.Drawing.Size($Width,23)
+    $Window.Controls.Add($label)
+    return $label
+}
+
+function New-EditorNumber {
+    param($Window, [int]$X, [int]$Y, [int]$Min, [int]$Max, [int]$Value, [int]$Width=180)
+    $n = New-Object System.Windows.Forms.NumericUpDown
+    $n.Location=New-Object System.Drawing.Point($X,$Y)
+    $n.Size=New-Object System.Drawing.Size($Width,28)
+    $n.Minimum=[decimal]$Min
+    $n.Maximum=[decimal]$Max
+    $n.Value=[decimal]$Value
+    $Window.Controls.Add($n)
+    return $n
+}
+
+function Show-ProfileEditor {
+    param([Parameter(Mandatory=$true)][string]$ProfileName)
+    Refresh-ProfileFromGitHub -ProfileName $ProfileName
+    $p = $script:GamingProfiles[$ProfileName]
+    if (-not $p) { throw "Unknown profile: $ProfileName" }
+    # GetNewClosure() creates a new dynamic module scope. The script: scope
+    # inside a captured click handler is NOT the original launcher's script:
+    # scope. Capture a reference to the real pending-sync dictionary here.
+    $pendingSyncState = $script:PendingSync
+    if ($null -eq $pendingSyncState -or $pendingSyncState -isnot [System.Collections.IDictionary]) {
+        throw 'Profile sync state is missing; cannot safely edit this profile.'
+    }
+
+    $dialog = New-Object System.Windows.Forms.Form
+    $dialog.Text = "Edit $ProfileName"
+    $dialog.ClientSize = New-Object System.Drawing.Size(590,645)
+    $dialog.StartPosition = 'CenterParent'
+    $dialog.FormBorderStyle = 'FixedDialog'
+    $dialog.MaximizeBox = $false
+    $dialog.MinimizeBox = $false
+    $dialog.ShowInTaskbar = $false
+    $dialog.BackColor = $PANEL
+    $dialog.ForeColor = $WHITE
+    $dialog.Font = New-Object System.Drawing.Font('Segoe UI',10)
+    $script:EditorTextColor = $WHITE
+
+    New-EditorLabel $dialog 'Windows pointer speed (1-20)' 20 18 260 | Out-Null
+    $pointer = New-EditorNumber $dialog 20 42 1 20 ([int]$p.PointerSpeed) 245
+    New-EditorLabel $dialog 'NVIDIA Digital Vibrance (%)' 305 18 260 | Out-Null
+    $vibrance = New-EditorNumber $dialog 305 42 0 100 ([int]$p.Vibrance) 245
+
+    $accel = New-Object System.Windows.Forms.CheckBox
+    $accel.Text='Enable Windows mouse acceleration (EPP)'
+    $accel.Checked = -not [bool]$p.DisableAcceleration
+    $accel.Location=New-Object System.Drawing.Point(20,83)
+    $accel.Size=New-Object System.Drawing.Size(500,27)
+    $dialog.Controls.Add($accel)
+
+    New-EditorLabel $dialog 'Resolution width' 20 122 210 | Out-Null
+    New-EditorLabel $dialog 'Resolution height' 205 122 210 | Out-Null
+    New-EditorLabel $dialog 'Refresh rate (Hz)' 390 122 190 | Out-Null
+    $width = New-EditorNumber $dialog 20 147 640 7680 ([int]$p.Width) 165
+    $height = New-EditorNumber $dialog 205 147 480 4320 ([int]$p.Height) 165
+    $hz = New-EditorNumber $dialog 390 147 30 600 ([int]$p.RefreshHz) 160
+
+    New-EditorLabel $dialog 'CS2 sensitivity (blank = value from .cfg)' 20 196 530 | Out-Null
+    $sens = New-Object System.Windows.Forms.TextBox
+    $sens.Text=[string]$p.CS2Sensitivity
+    $sens.Location=New-Object System.Drawing.Point(20,222)
+    $sens.Size=New-Object System.Drawing.Size(530,29)
+    $dialog.Controls.Add($sens)
+
+    New-EditorLabel $dialog 'CS2 config filename (fixed for each profile)' 20 276 530 | Out-Null
+    $cfgFile = New-Object System.Windows.Forms.TextBox
+    $cfgFile.Text=[string]$p.ConfigFile
+    $cfgFile.ReadOnly=$true
+    $cfgFile.Location=New-Object System.Drawing.Point(20,300)
+    $cfgFile.Size=New-Object System.Drawing.Size(530,29)
+    $dialog.Controls.Add($cfgFile)
+
+    New-EditorLabel $dialog 'GitHub .cfg URL (FabMode default: fab.cfg)' 20 355 540 | Out-Null
+    $url = New-Object System.Windows.Forms.TextBox
+    $url.Text=[string]$p.CfgDownloadUrl
+    $url.Location=New-Object System.Drawing.Point(20,380)
+    $url.Size=New-Object System.Drawing.Size(530,28)
+    $dialog.Controls.Add($url)
+
+    $nv = New-Object System.Windows.Forms.CheckBox
+    $nv.Text='Apply NVIDIA settings (including resolution + vibrance)'
+    $nv.Checked=[bool]$p.ApplyNvidia
+    $nv.Location=New-Object System.Drawing.Point(20,430)
+    $nv.Size=New-Object System.Drawing.Size(550,26)
+    $dialog.Controls.Add($nv)
+
+    $apps = New-Object System.Windows.Forms.CheckBox
+    $apps.Text='Launch Steam, FACEIT, Spotify, G HUB, Mouse Options'
+    $apps.Checked=[bool]$p.LaunchApps
+    $apps.Location=New-Object System.Drawing.Point(20,461)
+    $apps.Size=New-Object System.Drawing.Size(550,26)
+    $dialog.Controls.Add($apps)
+
+    $dialog.ClientSize = New-Object System.Drawing.Size(590,665)
+    $tip = New-EditorLabel $dialog 'Local edits stay on this PC. GitHub sync shares ALL profile settings; CFG binds remain separate.' 20 504 550
+    $tip.ForeColor=$MUTED
+    $tip.Font=New-Object System.Drawing.Font('Segoe UI',8)
+    $tip.Size=New-Object System.Drawing.Size(550,37)
+
+    $status = New-EditorLabel $dialog '' 20 538 550
+    $status.Font=New-Object System.Drawing.Font('Segoe UI',8,[System.Drawing.FontStyle]::Bold)
+    $status.Size=New-Object System.Drawing.Size(550,23)
+    if ($script:PendingSync[$ProfileName]) {
+        $status.Text='Unsynced local edits - cloud download will not overwrite them.'
+        $status.ForeColor=[System.Drawing.Color]::FromArgb(255,190,105)
+    } else {
+        $status.Text='GitHub settings enabled - saved locally and cached for offline use.'
+        $status.ForeColor=$MUTED
+    }
+
+    $saveLocal = New-Object System.Windows.Forms.Button
+    $saveLocal.Text='Save Locally'
+    $saveLocal.Location=New-Object System.Drawing.Point(20,585)
+    $saveLocal.Size=New-Object System.Drawing.Size(155,40)
+    $saveLocal.BackColor=$BLUE
+    $saveLocal.ForeColor=$WHITE
+    $saveLocal.FlatStyle='Flat'
+    $dialog.Controls.Add($saveLocal)
+
+    $saveSync = New-Object System.Windows.Forms.Button
+    $saveSync.Text='Save & Sync to GitHub'
+    $saveSync.Location=New-Object System.Drawing.Point(184,585)
+    $saveSync.Size=New-Object System.Drawing.Size(219,40)
+    $saveSync.BackColor=[System.Drawing.Color]::FromArgb(38,132,102)
+    $saveSync.ForeColor=$WHITE
+    $saveSync.FlatStyle='Flat'
+    $dialog.Controls.Add($saveSync)
+
+    $cancel = New-Object System.Windows.Forms.Button
+    $cancel.Text='Cancel'
+    $cancel.Location=New-Object System.Drawing.Point(413,585)
+    $cancel.Size=New-Object System.Drawing.Size(137,40)
+    $cancel.DialogResult=[System.Windows.Forms.DialogResult]::Cancel
+    $dialog.Controls.Add($cancel)
+    $dialog.CancelButton=$cancel
+
+    $saveEditorValues = {
+        $sensValue=$sens.Text.Trim()
+        if ($sensValue) {
+            $number=0.0
+            if (-not [double]::TryParse($sensValue,[Globalization.NumberStyles]::Float,[Globalization.CultureInfo]::InvariantCulture,[ref]$number) -or
+                [double]::IsNaN($number) -or $number -le 0 -or $number -gt 20) {
+                throw 'Sensitivity must be blank or between 0 and 20, using a decimal point (e.g. 1.2).'
+            }
+            $sensValue=$number.ToString('0.####',[Globalization.CultureInfo]::InvariantCulture)
+        }
+        $cfgUrl=$url.Text.Trim()
+        if ($cfgUrl) { Assert-ConfigUrl $cfgUrl }
+        $p.PointerSpeed=[int]$pointer.Value
+        $p.DisableAcceleration= -not $accel.Checked
+        $p.Width=[int]$width.Value
+        $p.Height=[int]$height.Value
+        $p.RefreshHz=[int]$hz.Value
+        $p.Vibrance=[int]$vibrance.Value
+        $p.ApplyNvidia=[bool]$nv.Checked
+        $p.LaunchApps=[bool]$apps.Checked
+        $p.CS2Sensitivity=$sensValue
+        $p.CfgDownloadUrl=$cfgUrl
+        # Use the captured shared dictionary, not script: scope in this closure.
+        $pendingSyncState[$ProfileName] = $true
+        Save-ProfileSettings
+        Write-Log "$ProfileName edited locally: pointer=$($p.PointerSpeed), acceleration enabled=$(-not $p.DisableAcceleration), display=$($p.Width)x$($p.Height)@$($p.RefreshHz), vibrance=$($p.Vibrance)%, sensitivity=$sensValue."
+    }.GetNewClosure()
+
+    $saveLocal.Add_Click({
+        try {
+            & $saveEditorValues
+            [System.Windows.Forms.MessageBox]::Show("$ProfileName saved locally. No GitHub login required.`nChanges on a Deep Freeze PC may disappear after restart.", 'Saved locally', 'OK', 'Information') | Out-Null
+            $dialog.DialogResult=[System.Windows.Forms.DialogResult]::OK
+            $dialog.Close()
+        } catch {
+            Write-Log "Save Locally failed for ${ProfileName}: $($_.Exception.Message); $($_.ScriptStackTrace)" 'ERROR'
+            [System.Windows.Forms.MessageBox]::Show("Could not save ${ProfileName}:`n$($_.Exception.Message)`n`nSee LIVE LOGS for the failing line.", 'Profile Editor', 'OK', 'Error') | Out-Null
+        }
+    }.GetNewClosure())
+
+    $saveSync.Add_Click({
+        try {
+            & $saveEditorValues
+            $token = Get-GitHubSyncToken -OwnerWindow $dialog
+            if ([string]::IsNullOrWhiteSpace($token)) {
+                $status.Text='Saved locally. GitHub sync canceled; local edits preserved.'
+                $status.ForeColor=[System.Drawing.Color]::FromArgb(255,190,105)
+                Write-Log "$ProfileName GitHub sync canceled; local changes preserved."
+                return
+            }
+            try {
+                $saveSync.Enabled=$false
+                $dialog.Cursor=[System.Windows.Forms.Cursors]::WaitCursor
+                Sync-ProfileToGitHub -ProfileName $ProfileName -Token $token
+                $pendingSyncState[$ProfileName] = $false
+                Save-ProfileSettings
+                [System.Windows.Forms.MessageBox]::Show("$ProfileName settings committed to GitHub and saved locally.`nOther PCs can now download the new settings without signing in.`nThe .cfg bindings are still maintained separately on GitHub.", 'GitHub sync complete', 'OK', 'Information') | Out-Null
+                $dialog.DialogResult=[System.Windows.Forms.DialogResult]::OK
+                $dialog.Close()
+            } finally {
+                $token = $null
+                if (-not $dialog.IsDisposed) {
+                    $saveSync.Enabled=$true
+                    $dialog.Cursor=[System.Windows.Forms.Cursors]::Default
+                }
+            }
+        } catch {
+            Write-Log "$ProfileName GitHub sync failed; local settings kept. $($_.Exception.Message); $($_.ScriptStackTrace)" 'WARN'
+            $status.Text='Cloud sync failed; settings are saved locally. Retry Save & Sync.'
+            $status.ForeColor=[System.Drawing.Color]::FromArgb(255,190,105)
+            [System.Windows.Forms.MessageBox]::Show("$ProfileName saved locally, but GitHub sync failed:`n$($_.Exception.Message)", 'GitHub sync', 'OK', 'Warning') | Out-Null
+        }
+    }.GetNewClosure())
+
+    [void]$dialog.ShowDialog($form)
+    $dialog.Dispose()
+}
+
+function Invoke-GamingProfile {
+    param([Parameter(Mandatory=$true)][string]$ProfileName)
+    if (-not $script:GamingProfiles.Contains($ProfileName)) {
+        Write-Log "Unknown gaming profile: $ProfileName" 'ERROR'
+        return
+    }
+    Refresh-ProfileFromGitHub -ProfileName $ProfileName
+    $profile = $script:GamingProfiles[$ProfileName]
+    Write-Log "$ProfileName full routine started: mouse, NVIDIA, CS2 config, applications."
+
+    $steps = @(
+        @{ Name = 'Windows mouse speed/acceleration'; Action = {
+            Apply-ProfileMouse -ProfileName $ProfileName -PointerSpeed ([int]$profile.PointerSpeed) -DisableAcceleration ([bool]$profile.DisableAcceleration) -SkipPointerOptions
+        } }
+    )
+    if ($profile.ApplyNvidia) {
+        $steps += @{ Name = 'NVIDIA settings'; Action = { Apply-NvidiaGamingSettings -Width ([int]$profile.Width) -Height ([int]$profile.Height) -RefreshHz ([int]$profile.RefreshHz) -Vibrance ([int]$profile.Vibrance) } }
+    }
+    $profileCfgName = [string]$profile.ConfigFile
+    if (-not [string]::IsNullOrWhiteSpace($profileCfgName)) {
+        $profileCfgUrl = [string]$profile.CfgDownloadUrl
+        if ($ProfileName -eq 'FabMode' -and [string]::IsNullOrWhiteSpace($profileCfgUrl)) {
+            $profileCfgUrl = $script:FabCfgCloudUrl
+        }
+        $steps += @{ Name = "Install CS2 $profileCfgName"; Action = {
+            Install-AtCfg -Silent -CfgName $profileCfgName -DownloadUrl $profileCfgUrl -CloudPreferred:([bool]$profileCfgUrl) -CS2Sensitivity ([string]$profile.CS2Sensitivity)
+        } }
+    }
+    if ($profile.LaunchApps) {
+        $steps += @{ Name = 'Launch All (including Mouse Pointer Options)'; Action = { Launch-All } }
+    }
+    foreach ($step in $steps) {
+        Write-Log ("$ProfileName step started: " + $step.Name)
+        try {
+            & ($step.Action)
+            Write-Log ("$ProfileName step returned: " + $step.Name + ". Check logs for individual success or errors.")
+        } catch {
+            Write-Log ("$ProfileName step failed: " + $step.Name + ": " + $_.Exception.Message) 'ERROR'
+        }
+    }
+    Write-Log "$ProfileName full routine finished. Review logs for individual results."
+}
+
+# Backward-compatible entry point.
+function Invoke-FabModeFull { Invoke-GamingProfile -ProfileName 'FabMode' }
+
+# Main window
+$form = New-Object System.Windows.Forms.Form
+$form.Text = "Cafe Launcher"
+$form.Size = New-Object System.Drawing.Size(800,950)
+$form.StartPosition = "CenterScreen"
+$form.FormBorderStyle = "FixedSingle"
+$form.MaximizeBox = $false
+$form.BackColor = $BG
+$form.ForeColor = $WHITE
+$form.Font = New-Object System.Drawing.Font("Segoe UI",10)
+
+# Header
+$header = New-Object System.Windows.Forms.Panel
+$header.Location = New-Object System.Drawing.Point(0,0)
+$header.Size = New-Object System.Drawing.Size(800,105)
+$header.BackColor = $PANEL
+$form.Controls.Add($header)
+
+$title = New-Object System.Windows.Forms.Label
+$title.Text = "GAMING CAFE"
+$title.Location = New-Object System.Drawing.Point(28,18)
+$title.Size = New-Object System.Drawing.Size(500,38)
+$title.Font = New-Object System.Drawing.Font("Segoe UI",21,[System.Drawing.FontStyle]::Bold)
+$title.ForeColor = $WHITE
+$header.Controls.Add($title)
+
+$subtitle = New-Object System.Windows.Forms.Label
+$subtitle.Text = "APP LAUNCHER  |  PC SETTINGS"
+$subtitle.Location = New-Object System.Drawing.Point(31,62)
+$subtitle.Size = New-Object System.Drawing.Size(500,23)
+$subtitle.Font = New-Object System.Drawing.Font("Segoe UI",9)
+$subtitle.ForeColor = $MUTED
+$header.Controls.Add($subtitle)
+
+function New-Tile {
+    param(
+        [string]$Text,
+        [int]$Index,
+        [scriptblock]$Action,
+        [switch]$Primary,
+        [string]$EditProfile = ''
+    )
+
+    $col = $Index % 3
+    $row = [Math]::Floor($Index / 3)
+    $x = 25 + ($col * 250)
+    $y = 125 + ($row * 88)
+
+    $button = New-Object System.Windows.Forms.Button
+    $button.Text = $Text
+    $button.Location = New-Object System.Drawing.Point($x,$y)
+    if ($EditProfile) {
+        $button.Size = New-Object System.Drawing.Size(235,46)
+    } else {
+        $button.Size = New-Object System.Drawing.Size(235,70)
+    }
+    $button.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
+    $button.FlatAppearance.BorderSize = 0
+    if ($Primary) {
+        $button.BackColor = $BLUE
+    } else {
+        $button.BackColor = $PANEL
+    }
+    $button.ForeColor = $WHITE
+    $button.Font = New-Object System.Drawing.Font("Segoe UI",10,[System.Drawing.FontStyle]::Bold)
+    $button.Cursor = [System.Windows.Forms.Cursors]::Hand
+    $actionToRun = $Action
+    $button.Add_Click({
+        Write-Log "Clicked: $($this.Text)"
+        try {
+            & $actionToRun
+        } catch {
+            Write-Log "Button '$($this.Text)' failed: $($_.Exception.Message)" "ERROR"
+            [System.Windows.Forms.MessageBox]::Show(
+                "$($this.Text) failed:`n$($_.Exception.Message)",
+                "Cafe Launcher"
+            )
+        }
+    }.GetNewClosure())
+    $form.Controls.Add($button)
+    if ($EditProfile) {
+        $edit = New-Object System.Windows.Forms.Button
+        $edit.Text = "Edit $EditProfile settings"
+        $edit.Location = [System.Drawing.Point]::new($x, ($y + 48))
+        $edit.Size = New-Object System.Drawing.Size(235,22)
+        $edit.Font = New-Object System.Drawing.Font('Segoe UI',8)
+        $edit.FlatStyle = 'Flat'
+        $edit.FlatAppearance.BorderSize = 0
+        $edit.BackColor = [System.Drawing.Color]::FromArgb(58,67,83)
+        $edit.ForeColor = $WHITE
+        $edit.Cursor = [System.Windows.Forms.Cursors]::Hand
+        $selectedProfile = $EditProfile
+        $edit.Add_Click({
+            Write-Log "Clicked: Edit $selectedProfile settings"
+            try { Show-ProfileEditor -ProfileName $selectedProfile }
+            catch { Write-Log "Profile editor failed: $($_.Exception.Message)" 'ERROR' }
+        }.GetNewClosure())
+        $form.Controls.Add($edit)
+    }
+}
+
+New-Tile "LAUNCH ALL" 0 { Launch-All } -Primary
+New-Tile "Steam" 1 { Start-DetectedSteam }
+New-Tile "FACEIT Anti-Cheat" 2 {
+    Launch-App -Name "FACEIT Anti-Cheat" -Paths @(
+        "$env:ProgramFiles\FACEIT AC\faceitclient.exe",
+        "${env:ProgramFiles(x86)}\FACEIT AC\faceitclient.exe"
+    )
+}
+New-Tile "FACEIT Matchmaking" 3 { Open-FaceitMatchmaking }
+New-Tile "Spotify" 4 { Open-Spotify }
+New-Tile "Logitech G HUB" 5 { Open-GHub }
+
+# Five editable gaming profiles, all using the same shared routine.
+New-Tile "FabMode" 6 { Invoke-GamingProfile -ProfileName 'FabMode' } -Primary -EditProfile 'FabMode'
+New-Tile "ArliMode" 7 { Invoke-GamingProfile -ProfileName 'ArliMode' } -Primary -EditProfile 'ArliMode'
+New-Tile "BrileMode" 8 { Invoke-GamingProfile -ProfileName 'BrileMode' } -Primary -EditProfile 'BrileMode'
+New-Tile "ArmlMode" 9 { Invoke-GamingProfile -ProfileName 'ArmlMode' } -Primary -EditProfile 'ArmlMode'
+New-Tile "OliMode" 10 { Invoke-GamingProfile -ProfileName 'OliMode' } -Primary -EditProfile 'OliMode'
+
+New-Tile "Mouse Pointer Options" 11 { Open-MousePointerOptions }
+New-Tile "NVIDIA Control Panel" 12 { Open-NvidiaControlPanel }
+New-Tile "Apply NVIDIA Settings" 13 { Apply-NvidiaGamingSettings } -Primary
+New-Tile "Install CS2 fab.cfg" 14 { Install-AtCfg -CfgName 'fab.cfg' -DownloadUrl $script:FabCfgCloudUrl -CloudPreferred } -Primary
+New-Tile "Detect PC" 15 { Show-PCDiagnostics }
+New-Tile "Check for Updates" 16 { Check-CafeLauncherUpdates -Manual }
+New-Tile "Exit" 17 { $form.Close() }
+
+# Live diagnostic log panel (visible only while the launcher is open)
+$logTitle = New-Object System.Windows.Forms.Label
+$logTitle.Text = "LIVE LOGS  |  Errors and button activity"
+$logTitle.Location = New-Object System.Drawing.Point(28,663)
+$logTitle.Size = New-Object System.Drawing.Size(500,22)
+$logTitle.Font = New-Object System.Drawing.Font("Segoe UI",9,[System.Drawing.FontStyle]::Bold)
+$logTitle.ForeColor = $WHITE
+$form.Controls.Add($logTitle)
+
+$clearLogs = New-Object System.Windows.Forms.Button
+$clearLogs.Text = "Clear Logs"
+$clearLogs.Location = New-Object System.Drawing.Point(670,659)
+$clearLogs.Size = New-Object System.Drawing.Size(100,27)
+$clearLogs.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
+$clearLogs.FlatAppearance.BorderSize = 0
+$clearLogs.BackColor = $PANEL
+$clearLogs.ForeColor = $WHITE
+$clearLogs.Add_Click({
+    if ($script:LogBox) { $script:LogBox.Clear() }
+    try { Set-Content -LiteralPath $script:LogPath -Value "" -Encoding UTF8 } catch {}
+    Write-Log "Logs cleared."
+})
+$form.Controls.Add($clearLogs)
+
+$script:LogBox = New-Object System.Windows.Forms.TextBox
+$script:LogBox.Location = New-Object System.Drawing.Point(28,690)
+$script:LogBox.Size = New-Object System.Drawing.Size(742,168)
+$script:LogBox.Multiline = $true
+$script:LogBox.ReadOnly = $true
+$script:LogBox.ScrollBars = [System.Windows.Forms.ScrollBars]::Vertical
+$script:LogBox.WordWrap = $false
+$script:LogBox.BackColor = [System.Drawing.Color]::FromArgb(12,15,20)
+$script:LogBox.ForeColor = [System.Drawing.Color]::FromArgb(190,220,190)
+$script:LogBox.Font = New-Object System.Drawing.Font("Consolas",9)
+try {
+    $script:LogBox.Text = Get-Content -LiteralPath $script:LogPath -Raw -ErrorAction Stop
+    $script:LogBox.SelectionStart = $script:LogBox.TextLength
+    $script:LogBox.ScrollToCaret()
+} catch {}
+$form.Controls.Add($script:LogBox)
+Write-Log "Launcher ready. Log file: $script:LogPath"
+
+# Footer
+$footer = New-Object System.Windows.Forms.Label
+$footer.Text = "GAMING CAFE  |  WINDOWS TOOLKIT  |  LOG: %TEMP%\CafeLauncher.log"
+$footer.Location = New-Object System.Drawing.Point(28,878)
+$footer.Size = New-Object System.Drawing.Size(740,22)
+$footer.Font = New-Object System.Drawing.Font("Segoe UI",8)
+$footer.ForeColor = $MUTED
+$form.Controls.Add($footer)
+
+$form.Add_FormClosed({
+    if ($script:ColorWatchTimer) {
+        try { $script:ColorWatchTimer.Stop(); $script:ColorWatchTimer.Dispose() } catch {}
+        Write-Log "Color Watch stopped because the launcher closed."
+    }
+})
+# On first display, automatically inventory the machine and check GitHub for
+# an update. One-shot timer lets Windows render the UI before network access.
+$startupTimer = New-Object System.Windows.Forms.Timer
+$startupTimer.Interval=350
+$startupTimer.Add_Tick({
+    $startupTimer.Stop()
+    $startupTimer.Dispose()
+    try {
+        Write-Log 'Automatic startup inventory:'
+        $summary = Get-PCDiagnostics
+        foreach ($line in ($summary -split '\r?\n')) { if ($line) { Write-Log ('PC: ' + $line) } }
+    } catch { Write-Log "Startup inventory failed: $($_.Exception.Message)" 'WARN' }
+    Check-CafeLauncherUpdates
+})
+$form.Add_Shown({ $startupTimer.Start() })
+[void]$form.ShowDialog()
+) { throw 'Invalid CS2 CFG name.' }
+    $path = Get-ActiveCS2SteamConfigPath
+    $wanted = '+exec ' + $CfgName
+    if (-not $path) {
+        Write-Log ("No unambiguous active Steam account found; set launch options manually: " + $wanted) 'WARN'
+        return $false
+    }
+    $exe = Get-SteamExecutable
+    $running = @(Get-Process steam -ErrorAction SilentlyContinue).Count -gt 0
+    $restart = $false
+    try {
+        $before = [IO.File]::ReadAllText($path)
+        $after = Update-CS2LaunchOptionsVdfText -Content $before -CfgName $CfgName
+        if ($after -ceq $before) { Write-Log ("CS2 launch options already set: " + $wanted); return $true }
+        if ($running) {
+            if (Get-Process cs2 -ErrorAction SilentlyContinue) {
+                Write-Log ("CS2 is running; launch options unchanged. Manually set: " + $wanted) 'WARN'
+                return $false
+            }
+            $prompt = ("Steam caches launch options and may undo changes while open." + [Environment]::NewLine +
+                      "Close and restart Steam now to set " + $wanted + "?" + [Environment]::NewLine +
+                      "Other launch options will be kept.")
+            $choice = [System.Windows.Forms.MessageBox]::Show($prompt,'CS2 Steam launch options','YesNo','Question')
+            if ($choice -ne [System.Windows.Forms.DialogResult]::Yes) {
+                Write-Log ("User skipped Steam restart. Set launch options manually: " + $wanted) 'WARN'
+                return $false
+            }
+            $restart = $true
+            Start-Process -FilePath $exe -ArgumentList '-shutdown' -ErrorAction Stop
+            for($i=0;$i -lt 60;$i++){
+                if(-not (Get-Process steam -ErrorAction SilentlyContinue)){break}
+                Start-Sleep -Milliseconds 250
+            }
+            if (Get-Process steam -ErrorAction SilentlyContinue) { throw 'Steam did not close within 15 seconds.' }
+            # Read again because Steam rewrites its localconfig on exit.
+            $before = [IO.File]::ReadAllText($path)
+            $after = Update-CS2LaunchOptionsVdfText -Content $before -CfgName $CfgName
+            if ($after -ceq $before) { return $true }
+        }
+        if (Get-Process steam -ErrorAction SilentlyContinue) { throw 'Steam started again before settings could be written.' }
+        $backup = $path + '.cafe-backup-' + (Get-Date -Format 'yyyyMMdd-HHmmss-fff')
+        $temp = Join-Path (Split-Path -Parent $path) ('localconfig.cafe-' + [guid]::NewGuid().ToString('N') + '.tmp')
+        try {
+            $data = [IO.File]::ReadAllBytes($path)
+            $bom = $data.Length -ge 3 -and $data[0] -eq 239 -and $data[1] -eq 187 -and $data[2] -eq 191
+            [IO.File]::WriteAllText($temp,$after,(New-Object System.Text.UTF8Encoding($bom)))
+            Copy-Item -LiteralPath $path -Destination $backup -ErrorAction Stop
+            Copy-Item -LiteralPath $temp -Destination $path -Force -ErrorAction Stop
+            if ([IO.File]::ReadAllText($path) -cne $after) {
+                Copy-Item -LiteralPath $backup -Destination $path -Force -ErrorAction SilentlyContinue
+                throw 'Steam launch option read-back failed; attempted to restore backup.'
+            }
+        } finally { Remove-Item -LiteralPath $temp -Force -ErrorAction SilentlyContinue }
+        Write-Log ("CS2 Steam launch options saved: " + $wanted + ". Backup: " + $backup)
+        return $true
+    } catch {
+        Write-Log ("Steam launch options not saved: " + $_.Exception.Message) 'WARN'
+        return $false
+    } finally {
+        if ($restart -and $exe) {
+            try { Start-Process -FilePath $exe -ErrorAction Stop; Write-Log 'Steam restarted after launch option update.' }
+            catch { Write-Log ("Steam restart failed: " + $_.Exception.Message) 'WARN' }
+        }
+    }
+}
+
 function Get-PCDiagnostics {
     $lines = New-Object 'System.Collections.Generic.List[string]'
     $lines.Add("Machine: $env:COMPUTERNAME")
