@@ -6,6 +6,7 @@ on:
       - 'cafe.bat'
       - 'tools/Test-CafeLauncher.ps1'
       - 'tools/Test-ProfileSave.ps1'
+      - 'tools/Test-SteamLaunchOptions.ps1'
       - '.github/workflows/cafe-syntax.yml'
   push:
     branches: [main]
@@ -13,6 +14,7 @@ on:
       - 'cafe.bat'
       - 'tools/Test-CafeLauncher.ps1'
       - 'tools/Test-ProfileSave.ps1'
+      - 'tools/Test-SteamLaunchOptions.ps1'
       - '.github/workflows/cafe-syntax.yml'
   workflow_dispatch:
 
@@ -35,3 +37,7 @@ jobs:
         shell: powershell
         run: |
           & "$env:GITHUB_WORKSPACE\tools\Test-ProfileSave.ps1"
+      - name: Test CS2 Steam launch option VDF updater
+        shell: powershell
+        run: |
+          & "$env:GITHUB_WORKSPACE\tools\Test-SteamLaunchOptions.ps1"
