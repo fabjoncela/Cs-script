@@ -4,7 +4,7 @@ start "" powershell.exe -NoProfile -ExecutionPolicy Bypass -STA -WindowStyle Hid
 exit /b
 
 # POWERSHELL_GUI
-# CAFE_RELEASE=2026.10.13.12
+# CAFE_RELEASE=2026.10.13.13
 
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
@@ -2490,25 +2490,111 @@ function Assert-LogitechDPI {
     param([int]$DPI)
     if($DPI -lt 100 -or $DPI -gt 25600){throw 'Logitech DPI must be 100 to 25600.'}
 }
+# One asynchronous download at a time. WinForms timer handles completion on UI thread.
+$script:LogihubDownloadProcess=$null
+$script:LogihubDownloadTimer=$null
+$script:LogihubRequestedDPI=$null
+$script:LogihubDownloadStatus=$null
+$script:LogihubExpectedSHA='c876fe0172bb3910c4c6cfee0ef5674ebde4c9d37069b412daffbdf7a2505635'
+$script:LogihubDirectory=Join-Path $env:LOCALAPPDATA 'CafeLauncher\logihub'
+$script:LogihubExe=Join-Path $script:LogihubDirectory 'logihub.exe'
 function Get-LogihubExecutable {
-    $dir=Join-Path $env:LOCALAPPDATA 'CafeLauncher\logihub'
-    $exe=Join-Path $dir 'logihub.exe'
-    $sha='c876fe0172bb3910c4c6cfee0ef5674ebde4c9d37069b412daffbdf7a2505635'
-    if(Test-Path -LiteralPath $exe -PathType Leaf){
-        if((Get-FileHash -LiteralPath $exe -Algorithm SHA256).Hash.ToLowerInvariant() -eq $sha){return $exe}
+    if(-not (Test-Path -LiteralPath $script:LogihubExe -PathType Leaf)){throw 'logihub.exe not downloaded yet.'}
+    if((Get-FileHash -LiteralPath $script:LogihubExe -Algorithm SHA256 -ErrorAction Stop).Hash.ToLowerInvariant() -ne $script:LogihubExpectedSHA){
         throw 'Cached logihub.exe checksum mismatch; refusing to execute.'
     }
-    [void](New-Item -ItemType Directory -Path $dir -Force -ErrorAction Stop)
-    $temp=Join-Path $dir ('logihub-'+[guid]::NewGuid().ToString('N')+'.tmp')
-    try {
-        [Net.ServicePointManager]::SecurityProtocol=[Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
-        Invoke-WebRequest -Uri 'https://github.com/cUDGk/better-logihub/releases/download/v0.1.0/logihub.exe' -OutFile $temp -UseBasicParsing -TimeoutSec 30 -ErrorAction Stop
-        if((Get-FileHash -LiteralPath $temp -Algorithm SHA256).Hash.ToLowerInvariant() -ne $sha){throw 'Downloaded logihub.exe checksum mismatch.'}
-        Move-Item -LiteralPath $temp -Destination $exe -ErrorAction Stop
-        Write-Log 'Verified and cached better-logihub v0.1.0.'
-        return $exe
-    } finally {Remove-Item -LiteralPath $temp -Force -ErrorAction SilentlyContinue}
+    return $script:LogihubExe
 }
+function Start-LogihubAsyncDownload {
+    if($script:LogihubDownloadProcess -and -not $script:LogihubDownloadProcess.HasExited){return}
+    [void](New-Item -ItemType Directory -Path $script:LogihubDirectory -Force -ErrorAction Stop)
+    $id=[guid]::NewGuid().ToString('N')
+    $script:LogihubDownloadStatus=Join-Path $script:LogihubDirectory ('download-'+$id+'.status')
+    $temp=Join-Path $script:LogihubDirectory ('logihub-'+$id+'.tmp')
+    $status=$script:LogihubDownloadStatus
+    $exe=$script:LogihubExe
+    $expected=$script:LogihubExpectedSHA
+    # Separate PowerShell process: no GUI-thread network I/O. Only this
+    # known embedded script runs, and only the SHA-verified binary is cached.
+    $worker=@'
+param([string]$Temp,[string]$Destination,[string]$Status,[string]$Expected)
+try {
+    $ErrorActionPreference='Stop'
+    [Net.ServicePointManager]::SecurityProtocol=[Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+    Invoke-WebRequest -Uri 'https://github.com/cUDGk/better-logihub/releases/download/v0.1.0/logihub.exe' -OutFile $Temp -UseBasicParsing -TimeoutSec 30 -ErrorAction Stop
+    if((Get-FileHash -LiteralPath $Temp -Algorithm SHA256).Hash.ToLowerInvariant() -ne $Expected){throw 'Downloaded Logitech helper SHA-256 verification failed.'}
+    Move-Item -LiteralPath $Temp -Destination $Destination -Force -ErrorAction Stop
+    [IO.File]::WriteAllText($Status,'OK')
+} catch {
+    [IO.File]::WriteAllText($Status,('ERROR: '+$_.Exception.Message))
+} finally {
+    Remove-Item -LiteralPath $Temp -Force -ErrorAction SilentlyContinue
+}
+'@
+
+    # EncodedCommand with positional parameters does not reliably bind flags after
+    # the encoded script; instead pass required data as environment-safe literals
+    # embedded before encoding (validated, generated local paths).
+    $worker=$worker.Replace('param([string]$Temp,[string]$Destination,[string]$Status,[string]$Expected)',(
+        '$Temp='+("'"+$temp.Replace("'","''")+"'")+'; '+
+        '$Destination='+("'"+$exe.Replace("'","''")+"'")+'; '+
+        '$Status='+("'"+$status.Replace("'","''")+"'")+'; '+
+        '$Expected='+("'"+$expected+"'")))
+    $encoded=[Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($worker))
+    $script:LogihubDownloadProcess=Start-Process -FilePath 'powershell.exe' -ArgumentList ('-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -EncodedCommand '+$encoded) -WindowStyle Hidden -PassThru -ErrorAction Stop
+    Write-Log 'Logitech helper download started in background (~3 MB). Other profile actions continue.'
+    if(-not $script:LogihubDownloadTimer){
+        $script:LogihubDownloadTimer=New-Object System.Windows.Forms.Timer
+        $script:LogihubDownloadTimer.Interval=400
+        $script:LogihubDownloadTimer.Add_Tick({
+            if(-not $script:LogihubDownloadProcess){return}
+            if(-not $script:LogihubDownloadProcess.HasExited){return}
+            $script:LogihubDownloadTimer.Stop()
+            $statusPath=$script:LogihubDownloadStatus
+            $statusText=''
+            try {
+                if(Test-Path -LiteralPath $statusPath -PathType Leaf){$statusText=[IO.File]::ReadAllText($statusPath)}
+                if($statusText -ne 'OK'){throw ('Logitech download failed: '+$(if($statusText){$statusText}else{'worker exited without completion status'}))}
+                [void](Get-LogihubExecutable)
+                Write-Log 'Verified Logitech helper downloaded successfully.'
+                if($null -ne $script:LogihubRequestedDPI){
+                    $dpi=[int]$script:LogihubRequestedDPI
+                    $script:LogihubRequestedDPI=$null
+                    try{Set-LogitechLiveDPI -DPI $dpi}catch{Write-Log ('Delayed Logitech DPI failed: '+$_.Exception.Message) 'ERROR'}
+                }
+            } catch {
+                Write-Log $_.Exception.Message 'ERROR'
+                $script:LogihubRequestedDPI=$null
+            } finally {
+                Remove-Item -LiteralPath $statusPath -Force -ErrorAction SilentlyContinue
+                $script:LogihubDownloadProcess.Dispose()
+                $script:LogihubDownloadProcess=$null
+            }
+        })
+    }
+    $script:LogihubDownloadTimer.Start()
+}
+function Request-LogitechLiveDPI {
+    param([int]$DPI=800)
+    Assert-LogitechDPI $DPI
+    # Latest-click-wins: a later profile changes the target DPI, not the download.
+    $script:LogihubRequestedDPI=$DPI
+    if(Test-Path -LiteralPath $script:LogihubExe -PathType Leaf){
+        try {
+            [void](Get-LogihubExecutable)
+            $dpi=[int]$script:LogihubRequestedDPI
+            $script:LogihubRequestedDPI=$null
+            Set-LogitechLiveDPI -DPI $dpi
+            return
+        } catch {Write-Log ('Logitech helper cache invalid: '+$_.Exception.Message) 'ERROR';$script:LogihubRequestedDPI=$null;return}
+    }
+    if($script:LogihubDownloadProcess -and -not $script:LogihubDownloadProcess.HasExited){
+        Write-Log ('Logitech download pending; latest requested live DPI = '+$DPI)
+        return
+    }
+    Start-LogihubAsyncDownload
+}
+
 function Invoke-Logihub {
     param([string[]]$Arguments)
     $exe=Get-LogihubExecutable
@@ -2552,7 +2638,7 @@ function Invoke-LogitechDpiButton {
     param([switch]$Onboard)
     try {
         if($Onboard){Set-LogitechOnboardDPI -DPI 800}
-        else{Set-LogitechLiveDPI -DPI 800}
+        else{Request-LogitechLiveDPI -DPI 800}
     } catch {
         Write-Log ('Logitech DPI failed: '+$_.Exception.Message) 'ERROR'
         [void][System.Windows.Forms.MessageBox]::Show($_.Exception.Message,'Logitech DPI','OK','Warning')
@@ -2593,7 +2679,7 @@ function Invoke-GamingProfile {
     }
     # Live DPI LAST: Launch All may start Logitech G HUB, which can otherwise
     # overwrite a DPI set early in the profile routine. Never write onboard here.
-    $steps += @{ Name = 'Logitech live DPI'; Action = { Set-LogitechLiveDPI -DPI ([int]$profile.LogitechDPI) } }
+    $steps += @{ Name = 'Logitech live DPI'; Action = { Request-LogitechLiveDPI -DPI ([int]$profile.LogitechDPI) } }
     foreach ($step in $steps) {
         Write-Log ("$ProfileName step started: " + $step.Name)
         try {
@@ -2870,7 +2956,7 @@ New-Tile "Detect PC" 15 { Show-PCDiagnostics }
 New-Tile "Check for Updates" 16 { Check-CafeLauncherUpdates -Manual }
 New-Tile "Exit" 17 { $form.Close() }
 New-Tile "Set DPI 800 (Live)" 18 { Invoke-LogitechDpiButton }
-New-Tile "Set DPI 800 (Onboard)" 19 { Invoke-LogitechDpiButton -Onboard }
+# New-Tile "Set DPI 800 (Onboard)" 19 { Invoke-LogitechDpiButton -Onboard } # disabled until hardware tested
 
 # Live diagnostic log panel (visible only while the launcher is open)
 $logTitle = New-Object System.Windows.Forms.Label
@@ -2924,6 +3010,8 @@ $footer.ForeColor = $MUTED
 $form.Controls.Add($footer)
 
 $form.Add_FormClosed({
+    if($script:LogihubDownloadTimer){$script:LogihubDownloadTimer.Stop();$script:LogihubDownloadTimer.Dispose();$script:LogihubDownloadTimer=$null}
+    $script:LogihubRequestedDPI=$null
     if ($script:ColorWatchTimer) {
         try { $script:ColorWatchTimer.Stop(); $script:ColorWatchTimer.Dispose() } catch {}
         Write-Log "Color Watch stopped because the launcher closed."
