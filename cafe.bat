@@ -4,9 +4,11 @@ start "" powershell.exe -NoProfile -ExecutionPolicy Bypass -STA -WindowStyle Hid
 exit /b
 
 # POWERSHELL_GUI
-# CAFE_RELEASE=2026.10.13.21
+# CAFE_RELEASE=2026.10.13.22
+# CAFE_PREVIEW_BRANCH=ui/dashboard-tabbed-editor-preview
 
 Add-Type -AssemblyName System.Windows.Forms
+$script:PreviewBranch='ui/dashboard-tabbed-editor-preview'
 Add-Type -AssemblyName System.Drawing
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
@@ -1944,6 +1946,15 @@ function Test-LauncherIsCurrent {
 }
 
 function Check-CafeLauncherUpdates {
+    # This experimental branch never switches itself to the production main.
+    # Testers can manually download the production version when they choose.
+    if($script:PreviewBranch){
+        Write-Log ('Preview branch '+$script:PreviewBranch+': production auto-update disabled.')
+        if($Manual){[void][System.Windows.Forms.MessageBox]::Show(
+            'This is a preview build. Main-branch updates are disabled to keep your test copy on its branch.',
+            'CafeLauncher Preview','OK','Information')}
+        return
+    }
     param([switch]$Manual)
     $source=$env:CAFE_SCRIPT
     if ([string]::IsNullOrWhiteSpace($source)) {
@@ -2383,6 +2394,64 @@ function New-EditorNumber {
     return $n
 }
 
+# Field controls live in isolated table cells: labels can never cover adjacent inputs.
+function New-EditorTabGrid {
+    param($Page,[int]$Rows)
+    $grid=New-Object System.Windows.Forms.TableLayoutPanel
+    $grid.Dock='Top'
+    $grid.AutoSize=$true
+    $grid.AutoSizeMode='GrowAndShrink'
+    $grid.ColumnCount=2
+    $grid.RowCount=$Rows
+    $grid.Padding=New-Object System.Windows.Forms.Padding(10,12,10,10)
+    [void]$grid.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle('Percent',50)))
+    [void]$grid.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle('Percent',50)))
+    for($i=0;$i -lt $Rows;$i++){
+        [void]$grid.RowStyles.Add((New-Object System.Windows.Forms.RowStyle('Absolute',75)))
+    }
+    $Page.Controls.Add($grid)
+    return $grid
+}
+function Add-EditorTabField {
+    param($Grid,[string]$Title,$Control,[int]$Column,[int]$Row)
+    $cell=New-Object System.Windows.Forms.TableLayoutPanel
+    $cell.Dock='Fill'
+    $cell.ColumnCount=1
+    $cell.RowCount=2
+    $cell.Margin=New-Object System.Windows.Forms.Padding(7,4,7,4)
+    [void]$cell.RowStyles.Add((New-Object System.Windows.Forms.RowStyle('Absolute',28)))
+    [void]$cell.RowStyles.Add((New-Object System.Windows.Forms.RowStyle('Percent',100)))
+    $caption=New-Object System.Windows.Forms.Label
+    $caption.Text=$Title
+    $caption.ForeColor=$WHITE
+    $caption.Dock='Fill'
+    $caption.AutoEllipsis=$true
+    $caption.Font=New-Object System.Drawing.Font('Segoe UI',9)
+    $cell.Controls.Add($caption,0,0)
+    $Control.Dock='Fill'
+    $Control.Margin=New-Object System.Windows.Forms.Padding(0,0,0,3)
+    $cell.Controls.Add($Control,0,1)
+    $Grid.Controls.Add($cell,$Column,$Row)
+    return $cell
+}
+function New-EditorTabNumber {
+    param($Grid,[string]$Title,[int]$Column,[int]$Row,[int]$Min,[int]$Max,[int]$Value)
+    $numeric=New-Object System.Windows.Forms.NumericUpDown
+    $numeric.Minimum=[decimal]$Min
+    $numeric.Maximum=[decimal]$Max
+    $numeric.Value=[decimal]$Value
+    [void](Add-EditorTabField -Grid $Grid -Title $Title -Control $numeric -Column $Column -Row $Row)
+    return $numeric
+}
+function Add-EditorTabWide {
+    param($Grid,$Control,[int]$Row)
+    $Control.Dock='Fill'
+    $Control.Margin=New-Object System.Windows.Forms.Padding(13,9,13,5)
+    $Control.AutoSize=$false
+    $Grid.Controls.Add($Control,0,$Row)
+    $Grid.SetColumnSpan($Control,2)
+}
+
 function Show-ProfileEditor {
     param([Parameter(Mandatory=$true)][string]$ProfileName)
     Refresh-ProfileFromGitHub -ProfileName $ProfileName
@@ -2397,117 +2466,166 @@ function Show-ProfileEditor {
     }
 
     $dialog = New-Object System.Windows.Forms.Form
-    $dialog.Text = "Edit $ProfileName"
-    $dialog.ClientSize = New-Object System.Drawing.Size(590,645)
+    $dialog.Text = "Edit $ProfileName - CafeLauncher"
+    $dialog.ClientSize = New-Object System.Drawing.Size(740,600)
+    $dialog.MinimumSize = New-Object System.Drawing.Size(740,620)
     $dialog.StartPosition = 'CenterParent'
-    $dialog.FormBorderStyle = 'FixedDialog'
+    $dialog.FormBorderStyle = 'Sizable'
     $dialog.MaximizeBox = $false
     $dialog.MinimizeBox = $false
     $dialog.ShowInTaskbar = $false
-    $dialog.BackColor = $PANEL
+    $dialog.BackColor = $BG
     $dialog.ForeColor = $WHITE
     $dialog.Font = New-Object System.Drawing.Font('Segoe UI',10)
     $script:EditorTextColor = $WHITE
 
-    New-EditorLabel $dialog 'Windows pointer speed (1-20)' 20 18 260 | Out-Null
-    $pointer = New-EditorNumber $dialog 20 42 1 20 ([int]$p.PointerSpeed) 245
-    New-EditorLabel $dialog 'NVIDIA Digital Vibrance (%)' 305 18 260 | Out-Null
-    $vibrance = New-EditorNumber $dialog 305 42 0 100 ([int]$p.Vibrance) 245
+    # A docked layout and per-field cells prevent labels from painting over
+    # neighboring numeric boxes at 100%, 125% and 150% Windows display scaling.
+    $editorRoot = New-Object System.Windows.Forms.TableLayoutPanel
+    $editorRoot.Dock = 'Fill'
+    $editorRoot.ColumnCount = 1
+    $editorRoot.RowCount = 3
+    [void]$editorRoot.RowStyles.Add((New-Object System.Windows.Forms.RowStyle('Absolute',76)))
+    [void]$editorRoot.RowStyles.Add((New-Object System.Windows.Forms.RowStyle('Percent',100)))
+    [void]$editorRoot.RowStyles.Add((New-Object System.Windows.Forms.RowStyle('Absolute',136)))
+    $dialog.Controls.Add($editorRoot)
 
-    $accel = New-Object System.Windows.Forms.CheckBox
-    $accel.Text='Enable Windows mouse acceleration (EPP)'
-    $accel.Checked = -not [bool]$p.DisableAcceleration
-    $accel.Location=New-Object System.Drawing.Point(20,83)
-    $accel.Size=New-Object System.Drawing.Size(500,27)
-    $dialog.Controls.Add($accel)
+    $intro = New-Object System.Windows.Forms.Panel
+    $intro.Dock='Fill'
+    $intro.Padding=New-Object System.Windows.Forms.Padding(20,12,20,0)
+    $editorRoot.Controls.Add($intro,0,0)
+    $introTitle=New-Object System.Windows.Forms.Label
+    $introTitle.Text="Edit $ProfileName"
+    $introTitle.Dock='Top'
+    $introTitle.Height=32
+    $introTitle.Font=New-Object System.Drawing.Font('Segoe UI',17,[System.Drawing.FontStyle]::Bold)
+    $introTitle.ForeColor=$WHITE
+    $intro.Controls.Add($introTitle)
+    $introSubtitle=New-Object System.Windows.Forms.Label
+    $introSubtitle.Text='Mouse, NVIDIA/display, CS2 and app preferences'
+    $introSubtitle.Dock='Bottom'
+    $introSubtitle.Height=23
+    $introSubtitle.ForeColor=$MUTED
+    $introSubtitle.Font=New-Object System.Drawing.Font('Segoe UI',9)
+    $intro.Controls.Add($introSubtitle)
 
-    New-EditorLabel $dialog 'Resolution width' 20 122 160 | Out-Null
-    New-EditorLabel $dialog 'Resolution height' 205 122 160 | Out-Null
-    New-EditorLabel $dialog 'Refresh rate (Hz)' 390 122 160 | Out-Null
-    $width = New-EditorNumber $dialog 20 147 640 7680 ([int]$p.Width) 165
-    $height = New-EditorNumber $dialog 205 147 480 4320 ([int]$p.Height) 165
-    $hz = New-EditorNumber $dialog 390 147 30 600 ([int]$p.RefreshHz) 160
-
-    New-EditorLabel $dialog 'CS2 sensitivity (blank = value from .cfg)' 20 196 530 | Out-Null
-    $sens = New-Object System.Windows.Forms.TextBox
-    $sens.Text=[string]$p.CS2Sensitivity
-    $sens.Location=New-Object System.Drawing.Point(20,222)
-    $sens.Size=New-Object System.Drawing.Size(530,29)
-    $dialog.Controls.Add($sens)
-
-    New-EditorLabel $dialog 'CS2 config filename (fixed for each profile)' 20 276 530 | Out-Null
-    $cfgFile = New-Object System.Windows.Forms.TextBox
-    $cfgFile.Text=[string]$p.ConfigFile
-    $cfgFile.ReadOnly=$true
-    $cfgFile.Location=New-Object System.Drawing.Point(20,300)
-    $cfgFile.Size=New-Object System.Drawing.Size(530,29)
-    $dialog.Controls.Add($cfgFile)
-
-    New-EditorLabel $dialog 'GitHub .cfg URL (FabMode default: fab.cfg)' 20 355 540 | Out-Null
-    $url = New-Object System.Windows.Forms.TextBox
-    $url.Text=[string]$p.CfgDownloadUrl
-    $url.Location=New-Object System.Drawing.Point(20,380)
-    $url.Size=New-Object System.Drawing.Size(530,28)
-    $dialog.Controls.Add($url)
-
-    $nv = New-Object System.Windows.Forms.CheckBox
-    $nv.Text='Apply NVIDIA settings (including resolution + vibrance)'
-    $nv.Checked=[bool]$p.ApplyNvidia
-    $nv.Location=New-Object System.Drawing.Point(20,430)
-    $nv.Size=New-Object System.Drawing.Size(550,26)
-    $dialog.Controls.Add($nv)
-
-    $apps = New-Object System.Windows.Forms.CheckBox
-    $apps.Text='Launch Steam, FACEIT, Spotify, Mouse Options (no G HUB)'
-    $apps.Checked=[bool]$p.LaunchApps
-    $apps.Location=New-Object System.Drawing.Point(20,461)
-    $apps.Size=New-Object System.Drawing.Size(550,26)
-    $dialog.Controls.Add($apps)
-
-    $dialog.ClientSize = New-Object System.Drawing.Size(590,725)
-    New-EditorLabel $dialog 'Logitech DPI (live, per profile)' 20 495 330 | Out-Null
-    $logitechDpi = New-EditorNumber $dialog 405 493 100 25600 ([int]$p.LogitechDPI) 145
-    $logitechDpi.Increment = 50
-    $tip = New-EditorLabel $dialog 'Local edits stay on this PC. GitHub sync shares ALL profile settings; CFG binds remain separate.' 20 538 550
-    $tip.ForeColor=$MUTED
-    $tip.Font=New-Object System.Drawing.Font('Segoe UI',8)
-    $tip.Size=New-Object System.Drawing.Size(550,37)
-
-    $status = New-EditorLabel $dialog '' 20 582 550
-    $status.Font=New-Object System.Drawing.Font('Segoe UI',8,[System.Drawing.FontStyle]::Bold)
-    $status.Size=New-Object System.Drawing.Size(550,23)
-    if ($script:PendingSync[$ProfileName]) {
-        $status.Text='Unsynced local edits - cloud download will not overwrite them.'
-        $status.ForeColor=[System.Drawing.Color]::FromArgb(255,190,105)
-    } else {
-        $status.Text='GitHub settings enabled - saved locally and cached for offline use.'
-        $status.ForeColor=$MUTED
+    $editorTabs=New-Object System.Windows.Forms.TabControl
+    $editorTabs.Dock='Fill'
+    $editorTabs.Margin=New-Object System.Windows.Forms.Padding(17,0,17,3)
+    $editorRoot.Controls.Add($editorTabs,0,1)
+    $mousePage=New-Object System.Windows.Forms.TabPage
+    $mousePage.Text='Mouse'
+    $displayPage=New-Object System.Windows.Forms.TabPage
+    $displayPage.Text='NVIDIA / Display'
+    $cs2Page=New-Object System.Windows.Forms.TabPage
+    $cs2Page.Text='CS2 / Apps'
+    foreach($page in @($mousePage,$displayPage,$cs2Page)){
+        $page.BackColor=$PANEL
+        $page.ForeColor=$WHITE
+        $page.AutoScroll=$true
+        [void]$editorTabs.TabPages.Add($page)
     }
 
-    $saveLocal = New-Object System.Windows.Forms.Button
+    $mouseGrid=New-EditorTabGrid -Page $mousePage -Rows 3
+    $pointer=New-EditorTabNumber -Grid $mouseGrid -Title 'Windows pointer speed (1-20)' -Column 0 -Row 0 -Min 1 -Max 20 -Value ([int]$p.PointerSpeed)
+    $logitechDpi=New-EditorTabNumber -Grid $mouseGrid -Title 'Logitech DPI (live, per profile)' -Column 1 -Row 0 -Min 100 -Max 25600 -Value ([int]$p.LogitechDPI)
+    $logitechDpi.Increment=50
+    $accel=New-Object System.Windows.Forms.CheckBox
+    $accel.Text='Enable Windows mouse acceleration (EPP)'
+    $accel.Checked= -not [bool]$p.DisableAcceleration
+    Add-EditorTabWide -Grid $mouseGrid -Control $accel -Row 1
+    $mouseHint=New-Object System.Windows.Forms.Label
+    $mouseHint.Text='Live DPI uses your better-logihub helper. G HUB is not launched by profiles.'
+    $mouseHint.ForeColor=$MUTED
+    Add-EditorTabWide -Grid $mouseGrid -Control $mouseHint -Row 2
+
+    $displayGrid=New-EditorTabGrid -Page $displayPage -Rows 3
+    $width=New-EditorTabNumber -Grid $displayGrid -Title 'Resolution width' -Column 0 -Row 0 -Min 640 -Max 7680 -Value ([int]$p.Width)
+    $height=New-EditorTabNumber -Grid $displayGrid -Title 'Resolution height' -Column 1 -Row 0 -Min 480 -Max 4320 -Value ([int]$p.Height)
+    $hz=New-EditorTabNumber -Grid $displayGrid -Title 'Refresh rate (Hz)' -Column 0 -Row 1 -Min 30 -Max 600 -Value ([int]$p.RefreshHz)
+    $vibrance=New-EditorTabNumber -Grid $displayGrid -Title 'NVIDIA Digital Vibrance (%)' -Column 1 -Row 1 -Min 0 -Max 100 -Value ([int]$p.Vibrance)
+    $nv=New-Object System.Windows.Forms.CheckBox
+    $nv.Text='Apply NVIDIA settings (including resolution + vibrance)'
+    $nv.Checked=[bool]$p.ApplyNvidia
+    Add-EditorTabWide -Grid $displayGrid -Control $nv -Row 2
+
+    $cs2Grid=New-EditorTabGrid -Page $cs2Page -Rows 4
+    $cfgFile=New-Object System.Windows.Forms.TextBox
+    $cfgFile.Text=[string]$p.ConfigFile
+    $cfgFile.ReadOnly=$true
+    Add-EditorTabField -Grid $cs2Grid -Title 'CS2 config filename (fixed)' -Control $cfgFile -Column 0 -Row 0
+    $sens=New-Object System.Windows.Forms.TextBox
+    $sens.Text=[string]$p.CS2Sensitivity
+    Add-EditorTabField -Grid $cs2Grid -Title 'CS2 sensitivity (blank = value from .cfg)' -Control $sens -Column 1 -Row 0
+    $url=New-Object System.Windows.Forms.TextBox
+    $url.Text=[string]$p.CfgDownloadUrl
+    $urlCell=Add-EditorTabField -Grid $cs2Grid -Title 'GitHub .cfg URL (FabMode default: fab.cfg)' -Control $url -Column 0 -Row 1
+    $cs2Grid.SetColumnSpan($urlCell,2)
+    $apps=New-Object System.Windows.Forms.CheckBox
+    $apps.Text='Launch Steam, FACEIT, Spotify, Mouse Options (no G HUB)'
+    $apps.Checked=[bool]$p.LaunchApps
+    Add-EditorTabWide -Grid $cs2Grid -Control $apps -Row 2
+    $cs2Hint=New-Object System.Windows.Forms.Label
+    $cs2Hint.Text='Apply Graphics and Play + Exec remain separate actions on the dashboard.'
+    $cs2Hint.ForeColor=$MUTED
+    Add-EditorTabWide -Grid $cs2Grid -Control $cs2Hint -Row 3
+
+    $editorFooter=New-Object System.Windows.Forms.TableLayoutPanel
+    $editorFooter.Dock='Fill'
+    $editorFooter.Padding=New-Object System.Windows.Forms.Padding(20,4,20,10)
+    $editorFooter.ColumnCount=3
+    $editorFooter.RowCount=3
+    [void]$editorFooter.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle('Percent',28)))
+    [void]$editorFooter.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle('Percent',44)))
+    [void]$editorFooter.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle('Percent',28)))
+    [void]$editorFooter.RowStyles.Add((New-Object System.Windows.Forms.RowStyle('Absolute',32)))
+    [void]$editorFooter.RowStyles.Add((New-Object System.Windows.Forms.RowStyle('Absolute',30)))
+    [void]$editorFooter.RowStyles.Add((New-Object System.Windows.Forms.RowStyle('Percent',100)))
+    $editorRoot.Controls.Add($editorFooter,0,2)
+    $tip=New-Object System.Windows.Forms.Label
+    $tip.Text='Save edits here; click the profile on the dashboard to apply them.'
+    $tip.ForeColor=$MUTED
+    $tip.Dock='Fill'
+    $tip.AutoEllipsis=$true
+    $tip.Font=New-Object System.Drawing.Font('Segoe UI',9)
+    $editorFooter.Controls.Add($tip,0,0)
+    $editorFooter.SetColumnSpan($tip,3)
+
+    $status=New-Object System.Windows.Forms.Label
+    $status.Dock='Fill'
+    $status.AutoEllipsis=$true
+    $status.Font=New-Object System.Drawing.Font('Segoe UI',9,[System.Drawing.FontStyle]::Bold)
+    if ($script:PendingSync[$ProfileName]) {
+        $status.Text='Unsynced local edits - cloud refresh will not overwrite them.'
+        $status.ForeColor=[System.Drawing.Color]::FromArgb(255,190,105)
+    } else {
+        $status.Text='GitHub settings enabled; cached for offline use.'
+        $status.ForeColor=$MUTED
+    }
+    $editorFooter.Controls.Add($status,0,1)
+    $editorFooter.SetColumnSpan($status,3)
+
+    $saveLocal=New-Object System.Windows.Forms.Button
     $saveLocal.Text='Save Locally'
-    $saveLocal.Location=New-Object System.Drawing.Point(20,635)
-    $saveLocal.Size=New-Object System.Drawing.Size(155,40)
     $saveLocal.BackColor=$BLUE
     $saveLocal.ForeColor=$WHITE
     $saveLocal.FlatStyle='Flat'
-    $dialog.Controls.Add($saveLocal)
+    $saveLocal.Dock='Fill'
+    $editorFooter.Controls.Add($saveLocal,0,2)
 
-    $saveSync = New-Object System.Windows.Forms.Button
+    $saveSync=New-Object System.Windows.Forms.Button
     $saveSync.Text='Save & Sync to GitHub'
-    $saveSync.Location=New-Object System.Drawing.Point(184,635)
-    $saveSync.Size=New-Object System.Drawing.Size(219,40)
     $saveSync.BackColor=[System.Drawing.Color]::FromArgb(38,132,102)
     $saveSync.ForeColor=$WHITE
     $saveSync.FlatStyle='Flat'
-    $dialog.Controls.Add($saveSync)
+    $saveSync.Dock='Fill'
+    $editorFooter.Controls.Add($saveSync,1,2)
 
-    $cancel = New-Object System.Windows.Forms.Button
+    $cancel=New-Object System.Windows.Forms.Button
     $cancel.Text='Cancel'
-    $cancel.Location=New-Object System.Drawing.Point(413,635)
-    $cancel.Size=New-Object System.Drawing.Size(137,40)
+    $cancel.Dock='Fill'
     $cancel.DialogResult=[System.Windows.Forms.DialogResult]::Cancel
-    $dialog.Controls.Add($cancel)
+    $editorFooter.Controls.Add($cancel,2,2)
     $dialog.CancelButton=$cancel
 
     $saveEditorValues = {
