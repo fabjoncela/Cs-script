@@ -4,23 +4,22 @@ A portable Windows **CS2 internet-café setup launcher**. A single hybrid `cafe.
 
 [Technical architecture and maintenance notes](./context.md)
 
-> Documents the current main-branch launcher at **2026.10.13.11**. Some features depend on PC hardware, installed programs and user permissions.
+> Current production launcher: **2026.10.13.24**. Features depend on the PC's hardware, installed programs and user permissions.
 
-## Experimental UI preview — separate branch
+## Dashboard and tabbed editor (v2026.10.13.24)
 
-The `ui/dashboard-tabbed-editor-preview` branch is a **test-only** version of the same portable `cafe.bat`. Its redesigned interface has a profile dashboard, independent Apply / Play + Exec / Graphics / Edit controls, a Tools & Apps tab, selected-profile summary, manual live DPI, and collapsible logs. Each profile editor has Mouse, NVIDIA / Display, and CS2 / Apps tabs with table-layout fields to avoid label overlap.
+CafeLauncher now opens the **production dashboard**: five one-click player cards with independent **Apply**, **Play + Exec**, **Graphics**, and **Edit** actions; a selected-profile summary, the existing manual live DPI field, and collapsible live logs. Less-used shortcuts live on the **Tools & Apps** tab. Each profile editor has **Mouse**, **NVIDIA / Display**, and **CS2 / Apps** tabs with properly separated fields to avoid overlapped labels. The underlying profile and CS2 actions are the same as before.
 
-- **Test only the preview:** download `https://raw.githubusercontent.com/fabjoncela/Cs-script/ui/dashboard-tabbed-editor-preview/cafe.bat` directly. Save it as `cafe-preview.bat` and open that copy. Do **not** use Check for Updates from the production BAT to fetch the preview.
-- **Production untouched:** `main` is not modified by these UI changes, and this preview intentionally disables automatic/main-branch updater actions.
-- **Preview writes:** Save Locally still works. **Save & Sync to GitHub** now requires explicit confirmation before writing to production `main`; it saves the profile JSON, and if CS2 sensitivity is nonblank, updates only its matching `<profile>.cfg` sensitivity command. You must explicitly authorize the GitHub update with a fine-grained token. The redesigned GUI itself remains on its preview branch and is not merged.
-- **Validation:** CI runs Windows PowerShell 5.1 syntax and non-device checks. Test tab navigation, editor layout at your Windows scaling, DPI, profile Apply, Play + Exec and Apply Graphics on a machine before considering merge.
+**Save Locally** retains the existing local JSON behavior. **Save & Sync to GitHub** asks which files will be written, then requests a fine-grained GitHub token: it updates `profiles/<ProfileName>.json` and, if CS2 sensitivity is nonblank, updates **only the matching profile CFG's sensitivity command** on GitHub `main`. Binds, crosshairs, comments and other CFG commands are preserved. If the CFG succeeds but the JSON upload fails, the launcher shows **PARTIAL SYNC** and keeps the local profile marked unsynced for retry. Use this only on a trusted machine; never enter a token on a shared café PC.
+
+The production **Check for Updates** and startup update prompt are enabled again. Updating uses GitHub blob verification, a PowerShell syntax check and Windows CRLF normalization. No installation or administrator account is required to open the GUI.
 
 ## Quick start
 
 1. Download [cafe.bat](https://raw.githubusercontent.com/fabjoncela/Cs-script/main/cafe.bat) or open a previously downloaded Google Drive copy.
 2. Review/trust the script before double-clicking it. Windows may show a normal security warning on a downloaded BAT.
 3. Use **Detect PC** or check the automatic **LIVE LOGS** inventory.
-4. Click **FabMode**, **ArliMode**, **BrileMode**, **ArmlMode**, or **OliMode**. This applies that profile's mouse settings, optionally NVIDIA/display settings, installs its CS2 CFG, and optionally opens gaming apps **without starting Logitech G HUB**; live DPI is applied by the pinned better-logihub helper.
+4. Click **Apply FabMode**, **Apply ArliMode**, **Apply BrileMode**, **Apply ArmlMode**, or **Apply OliMode** on the dashboard. This applies that profile's mouse settings, optionally NVIDIA/display settings, installs its CS2 CFG, and optionally opens gaming apps **without starting Logitech G HUB**; live DPI is applied by the pinned better-logihub helper.
 5. A separate **Play + Exec** button now appears beside each profile. It downloads/installs that profile's latest CFG and requests a Steam CS2 launch with a one-time argument like `steam.exe -applaunch 730 +exec oli.cfg`. It does **not** alter Steam's saved launch options or restart Steam.
 
 **Important:** Clicking a profile button only applies settings and installs its CFG, without starting CS2 or editing Steam launch options. **Play + Exec** launches CS2 with the selected CFG; it does *not* apply mouse/NVIDIA profile settings on its own. If CS2 is already running, the button shows instructions to use the developer console (`exec oli`) or restart the game. Old `+exec` values saved by earlier CafeLauncher versions will **remain in Steam's Launch Options** until you remove them once in **Steam → Library → Counter-Strike 2 → Properties → General → Launch Options**; otherwise those older commands may conflict.
@@ -53,9 +52,9 @@ The graphics-only PowerShell module is downloaded only when needed, checked agai
 
 ## Logitech mouse DPI (v2026.10.13.19)
 
-The main-menu **Change DPI** control has a textbox (starting at `800` DPI). Type any whole-number DPI from `100` to `25600`, then click **Change DPI** or press Enter to apply it immediately. Invalid input displays a warning without changing the mouse. This manual control does not change the saved DPI value of any player profile. It uses the tested Windows executable from [fabjoncela/better-logihub v0.1.0-c54d.1](https://github.com/fabjoncela/better-logihub/releases/tag/v0.1.0-c54d.1), which supports the C54D LIGHTSPEED receiver and automatic host-mode DPI writes for the PRO X SUPERLIGHT 2. CafeLauncher downloads the version-pinned executable **asynchronously** on first use and validates its pinned SHA-256 before executing it. If the old upstream version (or another version) is cached, CafeLauncher downloads and verifies the new release before replacing the old file; an unverified cached executable is never launched. Other profile actions and the GUI remain responsive during download. Multiple clicks share one download; the most recently requested DPI is applied when download completes. The executable is cached in `%LOCALAPPDATA%\CafeLauncher\logihub`; a Deep Freeze reboot may clear that cache.
+The dashboard **Change DPI** control has a textbox (starting at `800` DPI). Type any whole-number DPI from `100` to `25600`, then click **Change DPI** or press Enter to apply it immediately. Invalid input displays a warning without changing the mouse. This manual control does not change the saved DPI value of any player profile. It uses the tested Windows executable from [fabjoncela/better-logihub v0.1.0-c54d.1](https://github.com/fabjoncela/better-logihub/releases/tag/v0.1.0-c54d.1), which supports the C54D LIGHTSPEED receiver and automatic host-mode DPI writes for the PRO X SUPERLIGHT 2. CafeLauncher downloads the version-pinned executable **asynchronously** on first use and validates its pinned SHA-256 before executing it. If the old upstream version (or another version) is cached, CafeLauncher downloads and verifies the new release before replacing the old file; an unverified cached executable is never launched. Other profile actions and the GUI remain responsive during download. Multiple clicks share one download; the most recently requested DPI is applied when download completes. The executable is cached in `%LOCALAPPDATA%\CafeLauncher\logihub`; a Deep Freeze reboot may clear that cache.
 
-**All five normal profile buttons** automatically attempt a *live* DPI setting using the individually editable `LogitechDPI` value (800 by default), preserving all other profile actions. Profile-triggered app launches **skip opening Logitech G HUB**, to avoid having G HUB reset the DPI when it starts. The standalone **Logitech G HUB** and **LAUNCH ALL** buttons still open G HUB when used directly; an already-running G HUB can still override DPI later. Change it in **Edit [Mode] settings**, then Save Locally or Save & Sync to GitHub. Play + Exec and Apply Graphics do not set DPI. The LIVE LOGS show G HUB detection, command output, and any failures. G HUB is not stopped and may override the result. The live DPI operation does **not** write onboard memory.
+**All five normal profile buttons** automatically attempt a *live* DPI setting using the individually editable `LogitechDPI` value (800 by default), preserving all other profile actions. Profile-triggered app launches **skip opening Logitech G HUB**, to avoid having G HUB reset the DPI when it starts. The standalone **Logitech G HUB** and **LAUNCH ALL** buttons still open G HUB when used directly; an already-running G HUB can still override DPI later. Change it in **Edit [Mode] settings**, then Save Locally or Save & Sync to GitHub. Play + Exec and Apply Graphics do not set DPI. The collapsible LIVE LOGS show G HUB detection, command output, and any failures. G HUB is not stopped and may override the result. The live DPI operation does **not** write onboard memory.
 
 The **Onboard button is currently commented out/disabled** pending hardware testing. Its implementation is retained in the source and would ask for confirmation, runs `onboard dump --out <backup>`, checks for a nonempty backup, then runs `onboard set-dpi 800 --default 1 --shift 800` and `onboard mode set on`. It writes to mouse memory, which Deep Freeze does **not** restore. Backups are stored in `%LOCALAPPDATA%\CafeLauncher\logihub\onboard-backups` and may themselves be erased by Deep Freeze; copy them to a safe place before reboot. Only use the onboard button with a verified supported mouse model and after confirming the backup is accessible. If G HUB competes with live DPI, review LIVE LOGS rather than forcing process termination.
 
@@ -73,9 +72,9 @@ The **Onboard button is currently commented out/disabled** pending hardware test
 
 ## Edit a profile
 
-**Profile editor visual fix (v2026.10.13.21):** Resolution width, resolution height, refresh rate, and Logitech DPI labels no longer overlap their neighboring labels or numeric input boxes. The **Launch Apps** checkbox explains that profile buttons skip G HUB.
+**Tabbed editor (v2026.10.13.24):** Mouse, NVIDIA / Display, and CS2 / Apps each have their own tab. The new layout prevents width, height, refresh rate and Logitech DPI labels overlapping their input boxes. Profiles still skip G HUB when launching other applications.
 
-Click **Edit ArliMode settings** (or the equivalent button for any other profile) to change:
+Click **Edit** on ArliMode's dashboard card (or any other profile) to change:
 
 - Windows pointer speed (1–20), mouse acceleration.
 - Requested resolution, refresh rate, NVIDIA Digital Vibrance.
@@ -85,7 +84,7 @@ Click **Edit ArliMode settings** (or the equivalent button for any other profile
 
 **Save Locally:** saves to `%LOCALAPPDATA%\CafeLauncher\profiles.json`. No GitHub login. Changes remain local and may be erased by Deep Freeze.
 
-**Save & Sync to GitHub:** saves locally, then asks for a **fine-grained GitHub personal access token** restricted to this repository with **Contents: Read and write**. On success, the launcher updates `profiles/<ProfileName>.json` on `main` and the matching `.cfg` sensitivity when provided; this operation writes to the production GitHub repository even when initiated from the GUI preview. It does not intentionally save the token. **Never enter a GitHub token on a shared café PC.**
+**Save & Sync to GitHub:** saves locally, then asks for a **fine-grained GitHub personal access token** restricted to this repository with **Contents: Read and write**. On success, the launcher updates `profiles/<ProfileName>.json` on `main` and the matching `.cfg` sensitivity when provided; you see a confirmation showing exactly which files will be updated. It does not intentionally save the token. **Never enter a GitHub token on a shared café PC.**
 
 The launcher fetches public cloud JSON when editing or applying a profile **unless it has unsynced local edits**. Those local edits take precedence until synced. Saving an edit does not immediately apply the PC settings: click the profile button to apply.
 
@@ -99,11 +98,11 @@ git commit -m "Update Arli config"
 git push origin main
 ```
 
-On the next ArliMode run with internet access, CafeLauncher fetches the latest public `arli.cfg` and installs it. No GitHub account/login is needed on that café PC. An optional JSON sensitivity override only changes the *installed copy*, not GitHub's source CFG.
+On the next ArliMode run with internet access, CafeLauncher fetches the latest public `arli.cfg` and installs it. No GitHub account/login is needed on that café PC. Saving locally applies sensitivity only to the *installed copy*; **Save & Sync** also changes the GitHub source CFG when sensitivity is nonblank.
 
 ## Additional features
 
-**Main-menu cleanup (v2026.10.13.20):** The legacy **Apply NVIDIA Settings** and **Install CS2 fab.cfg** shortcut buttons are commented out and hidden. Their code is retained. Profile buttons still run their configured NVIDIA actions (when enabled) and install the matching CS2 CFG; **NVIDIA Control Panel**, **Apply Graphics**, and **Play + Exec** are unchanged.
+**Tools & Apps organization (v2026.10.13.24):** The legacy **Apply NVIDIA Settings** and **Install CS2 fab.cfg** shortcut buttons remain commented out and hidden. Their code is retained. Profile buttons still run their configured NVIDIA actions (when enabled) and install the matching CS2 CFG; **NVIDIA Control Panel**, **Apply Graphics**, and **Play + Exec** are unchanged.
 
 - **Display fallback:** if exact width/height/Hz is not advertised, choose the highest advertised Hz at the preferred resolution; otherwise consider the current resolution. The launcher tests the candidate and logs whether it applied.
 - **NVIDIA:** request Digital Vibrance, driver performance/G-SYNC-related values, and GPU full-screen scaling. PhysX GPU selection, scaling override checkbox, and confirmation of NVIDIA GUI state may still need manual action.
