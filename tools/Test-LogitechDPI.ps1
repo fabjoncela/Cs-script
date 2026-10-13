@@ -48,8 +48,30 @@ if($functions['Export-ProfileValues'] -notmatch 'LogitechDPI=\[int\]\$p\.Logitec
    $functions['Import-ProfileValues'] -notmatch "'LogitechDPI'"){
     throw 'Logitech DPI must support local JSON and GitHub profile sync.'
 }
-if($source -notmatch 'c876fe0172bb3910c4c6cfee0ef5674ebde4c9d37069b412daffbdf7a2505635'){
-    throw 'Portable executable checksum pin missing.'
+$releaseUrl='https://github.com/fabjoncela/better-logihub/releases/download/v0.1.0-c54d.1/logihub.exe'
+$expectedSha='dc30e45d4ba1df7d043c7c9a0aacda4257e09f5f23bb980466b985b77aa7dda4'
+if($source -notmatch [regex]::Escape($releaseUrl) -or $source -notmatch [regex]::Escape($expectedSha)){
+    throw 'Pinned C54D helper URL or executable checksum missing.'
+}
+if($source -match [regex]::Escape('https://github.com/cUDGk/better-logihub/releases/download/v0.1.0/logihub.exe')){
+    throw 'Upstream helper URL must not be used by the launcher.'
+}
+if($functions['Get-LogihubExecutable'] -notmatch 'Get-FileHash' -or $functions['Get-LogihubExecutable'] -notmatch 'checksum mismatch'){
+    throw 'Cached helper must be SHA-256 verified before execution.'
+}
+$request=$functions['Request-LogitechLiveDPI']
+if($request -notmatch 'cacheReady' -or $request -notmatch 'checksum mismatch' -or $request -notmatch 'Start-LogihubAsyncDownload'){
+    throw 'Outdated cached helpers must trigger an async verified replacement.'
+}
+if($functions['Start-LogihubAsyncDownload'] -notmatch [regex]::Escape($releaseUrl) -or
+   $functions['Start-LogihubAsyncDownload'] -notmatch 'Downloaded Logitech helper SHA-256 verification failed'){
+    throw 'Async helper download must use pinned fork URL and verify its SHA-256.'
+}
+if($request -match 'Remove-Item\s+-LiteralPath\s+\$script:LogihubExe'){
+    throw 'Do not delete the existing helper before a replacement is verified.'
+}
+if($source -notmatch 'c54d'){
+    throw 'C54D helper integration is missing.'
 }
 foreach($name in @('FabMode','ArliMode','BrileMode','ArmlMode','OliMode')){
     $profile=Get-Content -LiteralPath (Join-Path $root ('profiles\'+$name+'.json')) -Raw | ConvertFrom-Json
