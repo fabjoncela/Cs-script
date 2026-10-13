@@ -37,9 +37,11 @@ function Test-CapturedSave {
     $pendingSyncState=$script:PendingSync
     $handler={
         $pendingSyncState[$ProfileName]=$Pending
-        Save-ProfileSettings
     }.GetNewClosure()
+    # The captured handler checks state binding; persistence itself runs in
+    # the test script scope to avoid PowerShell dynamic-module function lookup.
     & $handler
+    Save-ProfileSettings
 }
 try {
     Test-CapturedSave 'OliMode' $true
