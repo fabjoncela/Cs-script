@@ -73,7 +73,7 @@ if($psSource -notmatch '(?m)^#\s+\[void\]\(Install-AtCfg.*-CfgName ''fab\.cfg'''
 }
 if($psSource -notmatch 'function Apply-NvidiaGamingSettings' -or
    $psSource -notmatch 'function Install-AtCfg' -or
-   $psSource -notmatch "Install-AtCfg -Silent -CfgName \$profileCfgName" -or
+   $psSource -notmatch 'Install-AtCfg -Silent -CfgName \$profileCfgName' -or
    $psSource -notmatch 'Apply-NvidiaGamingSettings -Width'){
     throw 'Profile-level NVIDIA and CS2 CFG functions must remain accessible.'
 }
