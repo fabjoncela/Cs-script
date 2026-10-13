@@ -30,6 +30,24 @@ function Write-Log {
         elseif($Level -eq "WARN"){$script:StepScopeWarning=$true}
     }
     try { Add-Content -LiteralPath $script:LogPath -Value $line -Encoding UTF8 } catch {}
+    if($script:StatusLine -and -not $script:StatusLine.IsDisposed -and
+        $Level -in @('ERROR','WARN','RESULT','SUMMARY')){
+        try {
+            $messageForStatus=$Message
+            if($script:StatusLine.InvokeRequired){
+                [void]$script:StatusLine.BeginInvoke([Action]{
+                    $script:StatusLine.Text=$messageForStatus
+                })
+            }else{
+                $script:StatusLine.Text=$messageForStatus
+                $script:StatusLine.ForeColor=if($Level -eq 'ERROR'){
+                    [System.Drawing.Color]::FromArgb(255,128,128)
+                }elseif($Level -eq 'WARN'){
+                    [System.Drawing.Color]::FromArgb(255,190,105)
+                }else{$MUTED}
+            }
+        }catch{}
+    }
     if ($script:LogBox -and -not $script:LogBox.IsDisposed) {
         try {
             if ($script:LogBox.InvokeRequired) {
@@ -2582,7 +2600,7 @@ function Show-ProfileEditor {
     [void]$editorFooter.RowStyles.Add((New-Object System.Windows.Forms.RowStyle('Percent',100)))
     $editorRoot.Controls.Add($editorFooter,0,2)
     $tip=New-Object System.Windows.Forms.Label
-    $tip.Text='Save edits here; click the profile on the dashboard to apply them.'
+    $tip.Text='Save edits locally; click Apply to use them. Preview: GitHub sync is disabled.'
     $tip.ForeColor=$MUTED
     $tip.Dock='Fill'
     $tip.AutoEllipsis=$true
@@ -2619,6 +2637,11 @@ function Show-ProfileEditor {
     $saveSync.FlatStyle='Flat'
     $saveSync.Dock='Fill'
     $editorFooter.Controls.Add($saveSync,1,2)
+    if($script:PreviewBranch){
+        $saveSync.Enabled=$false
+        $saveSync.Text='Sync disabled in preview'
+        $saveSync.Tag='Production GitHub profile settings cannot be changed by this preview build.'
+    }
 
     $cancel=New-Object System.Windows.Forms.Button
     $cancel.Text='Cancel'
@@ -3428,6 +3451,7 @@ $logPane.Margin=New-Object System.Windows.Forms.Padding(15,0,15,0)
 [void]$logPane.RowStyles.Add((New-Object System.Windows.Forms.RowStyle('Percent',100)))
 $root.Controls.Add($logPane,0,2)
 $statusLine=New-CafeLabel -Text 'Ready - check logs for detailed operation results.' -FontSize 9
+$script:StatusLine=$statusLine
 $logPane.Controls.Add($statusLine,0,0)
 $logToggle=New-Object System.Windows.Forms.Button
 $logToggle.Text='Show Logs'
