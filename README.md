@@ -4,7 +4,7 @@ A portable Windows **CS2 internet-café setup launcher**. A single hybrid `cafe.
 
 [Technical architecture and maintenance notes](./context.md)
 
-> Documents the current main-branch launcher at **2026.10.13.8**. Some features depend on PC hardware, installed programs and user permissions.
+> Documents the current main-branch launcher at **2026.10.13.9**. Some features depend on PC hardware, installed programs and user permissions.
 
 ## Quick start
 
@@ -12,9 +12,9 @@ A portable Windows **CS2 internet-café setup launcher**. A single hybrid `cafe.
 2. Review/trust the script before double-clicking it. Windows may show a normal security warning on a downloaded BAT.
 3. Use **Detect PC** or check the automatic **LIVE LOGS** inventory.
 4. Click **FabMode**, **ArliMode**, **BrileMode**, **ArmlMode**, or **OliMode**. This applies that profile's mouse settings, optionally NVIDIA/display settings, installs its CS2 CFG, and optionally opens gaming apps.
-5. The launcher also attempts to set that Steam account's CS2 Launch Options to `+exec fab.cfg`, `+exec arli.cfg`, etc. Steam then loads the selected config when CS2 starts. The launcher does **not** start CS2 itself.
+5. A separate **Play + Exec** button now appears beside each profile. It downloads/installs that profile's latest CFG and requests a Steam CS2 launch with a one-time argument like `steam.exe -applaunch 730 +exec oli.cfg`. It does **not** alter Steam's saved launch options or restart Steam.
 
-**Steam safety:** If Steam is running and its launch options need changing, CafeLauncher asks permission to close and restart it first. It never silently shuts Steam down. If the logged-in account cannot be identified, it logs the manual option instead: **Steam → Library → Counter-Strike 2 → Properties → General → Launch Options**. You can still run `exec arli` in the developer console.
+**Important:** Clicking a profile button only applies settings and installs its CFG, without starting CS2 or editing Steam launch options. **Play + Exec** launches CS2 with the selected CFG; it does *not* apply mouse/NVIDIA profile settings on its own. If CS2 is already running, the button shows instructions to use the developer console (`exec oli`) or restart the game. Old `+exec` values saved by earlier CafeLauncher versions will **remain in Steam's Launch Options** until you remove them once in **Steam → Library → Counter-Strike 2 → Properties → General → Launch Options**; otherwise those older commands may conflict.
 
 ## Profile files
 
@@ -61,7 +61,7 @@ On the next ArliMode run with internet access, CafeLauncher fetches the latest p
 - **Display fallback:** if exact width/height/Hz is not advertised, choose the highest advertised Hz at the preferred resolution; otherwise consider the current resolution. The launcher tests the candidate and logs whether it applied.
 - **NVIDIA:** request Digital Vibrance, driver performance/G-SYNC-related values, and GPU full-screen scaling. PhysX GPU selection, scaling override checkbox, and confirmation of NVIDIA GUI state may still need manual action.
 - **Detected apps:** Steam and libraries, CS2 (app 730) CFG folder, FACEIT AC, G HUB, Chrome, NVIDIA Control Panel, GPUs, monitor modes, mouse settings.
-- **Steam Launch Options:** a successful CFG install attempts to replace the prior `+exec` flag for app 730 while preserving unrelated flags. Only the identified account's `userdata/<account-id>/config/localconfig.vdf` is changed; a timestamped backup is created. It skips modifying an ambiguous account or a running CS2 game.
+- **Play + Exec:** five independent green buttons beside the player profiles. Each button installs the current CFG then starts CS2 with `-applaunch 730 +exec <profile>.cfg`. No `localconfig.vdf` writes or Steam restart; persistent Steam launch options are never modified.
 - **LAUNCH ALL:** opens Steam, FACEIT AC, FACEIT matchmaking, Spotify, G HUB, and Mouse Pointer Options. It is *not* a guaranteed Steam/FACEIT readiness checker.
 - **Offline CFG fallback:** stored under `%LOCALAPPDATA%\CafeLauncher\cfg-cache`; also tries an adjacent or already installed CFG. FabMode can use bundled `at.cfg` content. First-time offline friend profiles without a cached CFG may be unable to install.
 
