@@ -4,7 +4,7 @@ start "" powershell.exe -NoProfile -ExecutionPolicy Bypass -STA -WindowStyle Hid
 exit /b
 
 # POWERSHELL_GUI
-# CAFE_RELEASE=2026.10.13.13
+# CAFE_RELEASE=2026.10.13.14
 
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
@@ -1195,6 +1195,57 @@ function Start-ColorWatch {
     Write-Log "Color Watch enabled: checks NVIDIA Digital Vibrance every 10 seconds and restores 75% only if the driver reports a different level. Active while this launcher is open."
 }
 
+
+# Read-only NVIDIA compatibility inventory; no automatic driver installation.
+function Get-NvidiaCompatibilityScan {
+    param([int]$Width=1920,[int]$Height=1080,[int]$RefreshHz=360)
+    $report=New-Object 'System.Collections.Generic.List[string]'
+    $result=[ordered]@{NVAPI=$false;DisplayHelper=$false;ExactMode=$false;Report=$report}
+    try {
+        $adapters=@(Get-CimInstance Win32_VideoController -ErrorAction Stop | Where-Object {$_.Name -match 'NVIDIA'})
+        if($adapters.Count -eq 0){$report.Add('No NVIDIA GPU reported by Windows.')}
+        foreach($gpu in $adapters){$report.Add(('GPU: '+$gpu.Name+' | NVIDIA driver: '+$gpu.DriverVersion))}
+    }catch{$report.Add('GPU / driver version inventory unavailable: '+$_.Exception.Message)}
+    $result.DisplayHelper=[bool]('FabDisplayNative' -as [type])
+    if($result.DisplayHelper){
+        try {
+            $result.ExactMode=[FabDisplayNative]::IsAdvertisedMode($Width,$Height,$RefreshHz)
+            $report.Add(('Requested '+$Width+'x'+$Height+' @'+$RefreshHz+'Hz: '+
+                $(if($result.ExactMode){'advertised'}else{'not advertised; existing safest available mode fallback will be used'})))
+            $report.Add([FabDisplayNative]::GetDisplayModesReport())
+        }catch{
+            $report.Add('Monitor mode enumeration unavailable: '+$_.Exception.Message)
+            $result.DisplayHelper=$false
+        }
+    }else{$report.Add('Windows display helper unavailable; resolution change skipped.')}
+    $apiDll=Join-Path $env:windir 'System32\nvapi64.dll'
+    $apiFile=Test-Path -LiteralPath $apiDll -PathType Leaf
+    $result.NVAPI=([bool]('FabNvApi' -as [type])) -and $apiFile
+    $report.Add(('NVAPI availability: '+$(if($result.NVAPI){'driver DLL and wrapper detected'}else{'not detected; NVIDIA-only operations skipped'})))
+    if($apiFile){
+        try{$report.Add('NVAPI DLL version: '+[Diagnostics.FileVersionInfo]::GetVersionInfo($apiDll).FileVersion)}
+        catch{$report.Add('NVAPI DLL version unavailable')}
+    }
+    try {
+        $paths=@(
+            (Join-Path $env:ProgramFiles 'NVIDIA Corporation\Control Panel Client\nvcplui.exe'),
+            (Join-Path ([Environment]::GetFolderPath('ProgramFilesX86')) 'NVIDIA Corporation\Control Panel Client\nvcplui.exe')
+        )
+        if(@($paths | Where-Object {Test-Path -LiteralPath $_ -PathType Leaf}).Count -gt 0){
+            $report.Add('NVIDIA Control Panel: classic desktop')
+        }elseif(@(Get-StartApps -ErrorAction Stop | Where-Object {$_.Name -match '^NVIDIA Control Panel$'}).Count -gt 0){
+            $report.Add('NVIDIA Control Panel: Microsoft Store / DCH')
+        }else{$report.Add('NVIDIA Control Panel not detected (NVAPI is independent)')}
+    }catch{$report.Add('NVIDIA Control Panel inventory unavailable')}
+    return [pscustomobject]$result
+}
+function Write-NvidiaCompatibilityScan {
+    param([int]$Width=1920,[int]$Height=1080,[int]$RefreshHz=360)
+    $scan=Get-NvidiaCompatibilityScan -Width $Width -Height $Height -RefreshHz $RefreshHz
+    foreach($line in $scan.Report){Write-Log ('NVIDIA compatibility: '+$line)}
+    return $scan
+}
+
 function Apply-NvidiaGamingSettings {
     param(
         [ValidateRange(640,7680)][int]$Width = 1920,
@@ -1203,9 +1254,12 @@ function Apply-NvidiaGamingSettings {
         [ValidateRange(0,100)][int]$Vibrance = 75
     )
     Write-Log "NVIDIA gaming-settings apply started (requested: ${Width}x${Height} @${RefreshHz}Hz, vibrance ${Vibrance}%)."
+    $compat=$null
+    try{$compat=Write-NvidiaCompatibilityScan -Width $Width -Height $Height -RefreshHz $RefreshHz}
+    catch{Write-Log ("NVIDIA preflight unavailable: "+$_.Exception.Message) "WARN"}
 
     Write-Log "Attempting Windows display 1: ${Width}x${Height} at $RefreshHz Hz."
-    if ("FabDisplayNative" -as [type]) {
+    if (("FabDisplayNative" -as [type]) -and ($null -eq $compat -or $compat.DisplayHelper)) {
         try {
             $displayReport = ""
             $displayOk = [FabDisplayNative]::TrySetDisplayMode($Width, $Height, $RefreshHz, [ref]$displayReport)
@@ -1221,7 +1275,7 @@ function Apply-NvidiaGamingSettings {
         Write-Log "Display resolution/refresh was not attempted because the Windows display helper is unavailable." "ERROR"
     }
 
-    if ("FabNvApi" -as [type]) {
+    if (("FabNvApi" -as [type]) -and ($null -eq $compat -or $compat.NVAPI)) {
         try {
             $vibranceReport = ""
             $vibranceOk = [FabNvApi]::TrySetDigitalVibrance($Vibrance, [ref]$vibranceReport)
@@ -1733,6 +1787,8 @@ function Start-DetectedSteam {
 
 function Get-PCDiagnostics {
     $lines = New-Object 'System.Collections.Generic.List[string]'
+    try{$scan=Get-NvidiaCompatibilityScan;foreach($line in $scan.Report){$lines.Add('NVIDIA: '+$line)}}
+    catch{$lines.Add('NVIDIA compatibility scan unavailable: '+$_.Exception.Message)}
     $lines.Add("Machine: $env:COMPUTERNAME")
     try {
         $gpus = @(Get-CimInstance -ClassName Win32_VideoController -ErrorAction Stop |
