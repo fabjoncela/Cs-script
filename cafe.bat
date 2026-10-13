@@ -4,11 +4,9 @@ start "" powershell.exe -NoProfile -ExecutionPolicy Bypass -STA -WindowStyle Hid
 exit /b
 
 # POWERSHELL_GUI
-# CAFE_RELEASE=2026.10.13.23
-# CAFE_PREVIEW_BRANCH=ui/dashboard-tabbed-editor-preview
+# CAFE_RELEASE=2026.10.13.24
 
 Add-Type -AssemblyName System.Windows.Forms
-$script:PreviewBranch='ui/dashboard-tabbed-editor-preview'
 Add-Type -AssemblyName System.Drawing
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
@@ -1965,14 +1963,6 @@ function Test-LauncherIsCurrent {
 
 function Check-CafeLauncherUpdates {
     param([switch]$Manual)
-    # A preview build must not download and overwrite itself with production main.
-    if($script:PreviewBranch){
-        Write-Log ('Preview branch '+$script:PreviewBranch+': production auto-update disabled.')
-        if($Manual){[void][System.Windows.Forms.MessageBox]::Show(
-            'Preview build: production updates are disabled here. Your test copy will stay on this branch.',
-            'CafeLauncher Preview','OK','Information')}
-        return
-    }
     $source=$env:CAFE_SCRIPT
     if ([string]::IsNullOrWhiteSpace($source)) {
         if ($Manual) { Write-Log 'Current BAT path not available for updater.' 'WARN' }
@@ -2711,9 +2701,7 @@ function Show-ProfileEditor {
     $saveSync.FlatStyle='Flat'
     $saveSync.Dock='Fill'
     $editorFooter.Controls.Add($saveSync,1,2)
-    if($script:PreviewBranch){
-        $saveSync.Tag='Save & Sync writes to live GitHub main; confirm before uploading.'
-    }
+    $saveSync.Tag='Sync this profile JSON and, if set, sensitivity in its matching CFG on GitHub.'
 
     $cancel=New-Object System.Windows.Forms.Button
     $cancel.Text='Cancel'
@@ -2764,27 +2752,26 @@ function Show-ProfileEditor {
         }
     }.GetNewClosure())
 
-    $isPreviewBuild=[bool]$script:PreviewBranch
     $syncTargetBranch=[string]$script:GithubBranch
     $saveSync.Add_Click({
         try {
             & $saveEditorValues
-            if($isPreviewBuild){
-                $changes=if($sens.Text.Trim()){
-                    "profiles/$ProfileName.json and $($p.ConfigFile)"
-                }else{
-                    "profiles/$ProfileName.json only (sensitivity blank)"
-                }
-                $newline=[Environment]::NewLine
-                $message="This preview writes to LIVE GitHub $syncTargetBranch :"+$newline+
-                    $changes+$newline+$newline+
-                    'The GUI preview itself stays on its own branch. Continue?'
-                $confirm=[System.Windows.Forms.MessageBox]::Show($message,
-                    'Confirm GitHub main update','YesNo','Warning')
-                if($confirm -ne [System.Windows.Forms.DialogResult]::Yes){
-                    $status.Text='Saved locally; GitHub sync canceled.'
-                    return
-                }
+            $changes=if($sens.Text.Trim()){
+                "profiles/$ProfileName.json AND $($p.ConfigFile) (sensitivity only)"
+            }else{
+                "profiles/$ProfileName.json only (CFG unchanged: sensitivity blank)"
+            }
+            $newline=[Environment]::NewLine
+            $message="Save these files to GitHub branch $syncTargetBranch?"+$newline+
+                $changes+$newline+$newline+
+                'Other CFG binds and graphics presets will not be changed.'
+            $confirm=[System.Windows.Forms.MessageBox]::Show(
+                $message,'Confirm GitHub sync','YesNo','Question')
+            if($confirm -ne [System.Windows.Forms.DialogResult]::Yes){
+                $status.Text='Saved locally; GitHub sync canceled.'
+                $status.ForeColor=[System.Drawing.Color]::FromArgb(255,190,105)
+                Write-Log "$ProfileName GitHub sync canceled; local edits preserved."
+                return
             }
             $token = Get-GitHubSyncToken -OwnerWindow $dialog
             if ([string]::IsNullOrWhiteSpace($token)) {
@@ -2799,7 +2786,7 @@ function Show-ProfileEditor {
                 Sync-ProfileToGitHub -ProfileName $ProfileName -Token $token
                 $pendingSyncState[$ProfileName] = $false
                 Save-ProfileSettings
-                [System.Windows.Forms.MessageBox]::Show("$ProfileName settings committed to GitHub and saved locally.`nOther PCs can now download the new settings without signing in.`nNonblank CS2 sensitivity was also synced into the matching .cfg; binds and other commands remain unchanged.", 'GitHub sync complete', 'OK', 'Information') | Out-Null
+                [System.Windows.Forms.MessageBox]::Show("$ProfileName settings committed to GitHub and saved locally.`nOther PCs can now download the new settings without signing in.`nIf CS2 sensitivity was set, it was also synced into the matching .cfg; binds and other commands remain unchanged.", 'GitHub sync complete', 'OK', 'Information') | Out-Null
                 $dialog.DialogResult=[System.Windows.Forms.DialogResult]::OK
                 $dialog.Close()
             } finally {
@@ -3215,9 +3202,9 @@ function Invoke-GraphicsOnly {
 # Backward-compatible entry point.
 function Invoke-FabModeFull { Invoke-GamingProfile -ProfileName 'FabMode' }
 
-# Modern dashboard preview. Production main is unchanged and preview auto-update is disabled.
+# Modern CafeLauncher dashboard. Profile actions remain separate and independently callable.
 $form=New-Object System.Windows.Forms.Form
-$form.Text='CafeLauncher | UI Preview'
+$form.Text='CafeLauncher | CS2 Setup Center'
 $form.ClientSize=New-Object System.Drawing.Size(1080,825)
 $form.MinimumSize=New-Object System.Drawing.Size(960,780)
 $form.StartPosition='CenterScreen'
@@ -3290,12 +3277,12 @@ $subtitle.Dock='None'
 $subtitle.Location=New-Object System.Drawing.Point(28,49)
 $subtitle.Size=New-Object System.Drawing.Size(600,25)
 $header.Controls.Add($subtitle)
-$preview=New-CafeLabel -Text 'PREVIEW  -  MAIN SAFE' -Strong
-$preview.Dock='Right'
-$preview.Width=215
-$preview.ForeColor=[System.Drawing.Color]::FromArgb(111,177,255)
-$preview.TextAlign='MiddleRight'
-$header.Controls.Add($preview)
+$versionTag=New-CafeLabel -Text 'v2026.10.13.24' -Strong
+$versionTag.Dock='Right'
+$versionTag.Width=185
+$versionTag.ForeColor=[System.Drawing.Color]::FromArgb(111,177,255)
+$versionTag.TextAlign='MiddleRight'
+$header.Controls.Add($versionTag)
 
 $tabs=New-Object System.Windows.Forms.TabControl
 $tabs.Dock='Fill'
@@ -3579,9 +3566,9 @@ $clearLogs.Add_Click({
     Write-Log 'Logs cleared.'
 })
 try {$script:LogBox.Text=Get-Content -LiteralPath $script:LogPath -Raw -ErrorAction Stop}catch{}
-Write-Log ('Preview dashboard ready. Log file: '+$script:LogPath)
+Write-Log ('CafeLauncher dashboard ready. Log file: '+$script:LogPath)
 Update-SelectedProfileCard -Name 'FabMode'
-$footer=New-CafeLabel -Text '  UI PREVIEW | main branch unchanged | auto-update disabled | %TEMP%\CafeLauncher.log' -FontSize 9
+$footer=New-CafeLabel -Text '  CAFE LAUNCHER | production dashboard | %TEMP%\CafeLauncher.log' -FontSize 9
 $root.Controls.Add($footer,0,3)
 
 $form.Add_FormClosed({
