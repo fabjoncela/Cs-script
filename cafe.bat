@@ -4,7 +4,7 @@ start "" powershell.exe -NoProfile -ExecutionPolicy Bypass -STA -WindowStyle Hid
 exit /b
 
 # POWERSHELL_GUI
-# CAFE_RELEASE=2026.10.13.22
+# CAFE_RELEASE=2026.10.13.23
 # CAFE_PREVIEW_BRANCH=ui/dashboard-tabbed-editor-preview
 
 Add-Type -AssemblyName System.Windows.Forms
@@ -2337,9 +2337,40 @@ function Get-GitHubSyncToken {
     }
 }
 
+# Replace the active CS2 sensitivity command without changing binds or comments.
+function Set-CS2CfgSensitivityText {
+    param([Parameter(Mandatory=$true)][string]$Content,
+          [Parameter(Mandatory=$true)][string]$Sensitivity)
+    $number=0.0
+    if($Sensitivity -notmatch '^(?:[0-9]+(?:\.[0-9]+)?)$' -or
+        -not [double]::TryParse($Sensitivity,[Globalization.NumberStyles]::Float,
+            [Globalization.CultureInfo]::InvariantCulture,[ref]$number) -or
+        $number -le 0 -or $number -gt 20){
+        throw 'CFG sensitivity must be greater than 0 and at most 20.'
+    }
+    $pattern='(?im)^(?<indent>[ \t]*)sensitivity[ \t]+(?:"[^"\r\n]*"|[0-9]+(?:\.[0-9]+)?)(?<tail>[ \t]*(?://[^\r\n]*)?)[ \t]*(?=\r?$)'
+    $matches=[regex]::Matches($Content,$pattern)
+    if($matches.Count -gt 1){throw 'Multiple active CFG sensitivity commands; please resolve them manually.'}
+    if($matches.Count -eq 1){
+        $m=$matches[0]
+        $line=$m.Groups['indent'].Value+'sensitivity "'+$Sensitivity+'"'+$m.Groups['tail'].Value
+        return $Content.Substring(0,$m.Index)+$line+$Content.Substring($m.Index+$m.Length)
+    }
+    $newline=if($Content.Contains(([string][char]13+[string][char]10))){
+        [string][char]13+[string][char]10
+    }else{[string][char]10}
+    $separator=if($Content.Length -eq 0 -or $Content.EndsWith([string][char]10)){''}else{$newline}
+    return $Content+$separator+'sensitivity "'+$Sensitivity+'"'+$newline
+}
+
 function Sync-ProfileToGitHub {
     param([Parameter(Mandatory=$true)][string]$ProfileName, [Parameter(Mandatory=$true)][string]$Token)
     if (-not $script:GamingProfiles.Contains($ProfileName)) { throw "Unknown profile: $ProfileName" }
+    $cfgName=[string]$script:GamingProfiles[$ProfileName].ConfigFile
+    $expectedCfg=(($ProfileName -replace 'Mode$','').ToLowerInvariant()+'.cfg')
+    if($cfgName -ne $expectedCfg -or $cfgName -notmatch '^[a-z0-9_-]+\.cfg$'){
+        throw ('Refusing to modify unexpected CFG filename: '+$cfgName)
+    }
     $path = "profiles/$ProfileName.json"
     $uri = "https://api.github.com/repos/$($script:GithubRepo)/contents/$path"
     $headers = @{
@@ -2349,6 +2380,9 @@ function Sync-ProfileToGitHub {
         'X-GitHub-Api-Version'='2022-11-28'
     }
     $existingSha = $null
+    $cfgBody=$null
+    $cfgUploaded=$false
+    $cfgStatus='left unchanged because sensitivity is blank'
     [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
     try {
         $current = Invoke-RestMethod -Uri ($uri + '?ref=' + $script:GithubBranch) -Method Get -Headers $headers -TimeoutSec 20 -MaximumRedirection 0 -ErrorAction Stop
@@ -2372,19 +2406,57 @@ function Sync-ProfileToGitHub {
         branch=$script:GithubBranch
     }
     if ($existingSha) { $body.sha = $existingSha }
+    # Stage a matching CFG update after validating its path, blob metadata, and SHA.
+    # Empty sensitivity means "use the CFG's value" and does not edit the CFG.
+    $sensValue=[string]$values['CS2Sensitivity']
+    if(-not [string]::IsNullOrWhiteSpace($sensValue)){
+        $cfgUri="https://api.github.com/repos/$($script:GithubRepo)/contents/$cfgName"
+        $cfgRemote=Invoke-RestMethod -Uri ($cfgUri+'?ref='+$script:GithubBranch) -Method Get -Headers $headers -TimeoutSec 20 -MaximumRedirection 0 -ErrorAction Stop
+        if($cfgRemote.type -ne 'file' -or $cfgRemote.path -ne $cfgName -or
+            $cfgRemote.encoding -ne 'base64' -or
+            [string]$cfgRemote.sha -notmatch '^[a-fA-F0-9]{40}$' -or
+            [string]::IsNullOrWhiteSpace([string]$cfgRemote.content) -or
+            [int64]$cfgRemote.size -gt 2097152){
+            throw ('Invalid GitHub CFG metadata, cannot safely sync '+$cfgName)
+        }
+        $cfgText=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String(([string]$cfgRemote.content -replace '\s','')))
+        $newCfgText=Set-CS2CfgSensitivityText -Content $cfgText -Sensitivity $sensValue
+        if($newCfgText -cne $cfgText){
+            $cfgBody=@{
+                message="Update $cfgName sensitivity from CafeLauncher"
+                content=[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($newCfgText))
+                branch=$script:GithubBranch
+                sha=[string]$cfgRemote.sha
+            }
+        }else{$cfgStatus='already has the requested sensitivity'}
+    }
     try {
+        if($cfgBody){
+            $cfgResponse=Invoke-RestMethod -Uri $cfgUri -Method Put -Headers $headers -ContentType 'application/json' -Body ($cfgBody | ConvertTo-Json -Depth 5 -Compress) -TimeoutSec 25 -MaximumRedirection 0 -ErrorAction Stop
+            if(-not $cfgResponse.commit.sha){throw ('CFG write was not confirmed for '+$cfgName)}
+            $cfgUploaded=$true
+            $cfgStatus="updated sensitivity to $sensValue"
+            Write-Log ("GitHub CFG sensitivity saved to "+$cfgName+"; commit="+$cfgResponse.commit.sha)
+        }
         $result = Invoke-RestMethod -Uri $uri -Method Put -Headers $headers -ContentType 'application/json' -Body ($body | ConvertTo-Json -Depth 5 -Compress) -TimeoutSec 25 -MaximumRedirection 0 -ErrorAction Stop
         if (-not $result.commit.sha) { throw 'GitHub did not return a successful commit.' }
-        Write-Log "$ProfileName settings synced to GitHub. Commit: $($result.commit.sha)"
+        Write-Log ("GitHub sync completed: "+$path+" updated; "+$cfgName+" "+$cfgStatus+"; commit="+$result.commit.sha)
     } catch {
         $status = $null
         if ($_.Exception.Response) { $status = [int]$_.Exception.Response.StatusCode }
-        if ($status -eq 401 -or $status -eq 403) { throw 'GitHub refused the token. Check repository access and Contents: Read and write permission.' }
-        if ($status -eq 409 -or $status -eq 422) { throw 'GitHub rejected the update due to a changed version or validation error. Retry syncing.' }
-        throw "GitHub upload failed (HTTP $status). Your settings remain saved locally."
+        $detail=if ($status -eq 401 -or $status -eq 403) {
+            'GitHub refused the token. Check Contents: Read and write permission.'
+        } elseif($status -eq 409 -or $status -eq 422) {
+            'GitHub file versions changed; reload and retry.'
+        } else { $_.Exception.Message }
+        if($cfgUploaded){
+            throw ("PARTIAL SYNC: "+$cfgName+" was updated, but "+$path+" was not confirmed saved. Retry Save & Sync. "+$detail)
+        }
+        throw ("GitHub sync failed; neither file was confirmed updated. "+$detail)
     } finally {
         $headers.Authorization = $null
         $body.content = $null
+        if($cfgBody){$cfgBody.content=$null}
     }
 }
 
@@ -2573,7 +2645,7 @@ function Show-ProfileEditor {
     Add-EditorTabField -Grid $cs2Grid -Title 'CS2 config filename (fixed)' -Control $cfgFile -Column 0 -Row 0
     $sens=New-Object System.Windows.Forms.TextBox
     $sens.Text=[string]$p.CS2Sensitivity
-    Add-EditorTabField -Grid $cs2Grid -Title 'CS2 sensitivity (blank = value from .cfg)' -Control $sens -Column 1 -Row 0
+    Add-EditorTabField -Grid $cs2Grid -Title 'CS2 sensitivity (sync updates .cfg)' -Control $sens -Column 1 -Row 0
     $url=New-Object System.Windows.Forms.TextBox
     $url.Text=[string]$p.CfgDownloadUrl
     $urlCell=Add-EditorTabField -Grid $cs2Grid -Title 'GitHub .cfg URL (FabMode default: fab.cfg)' -Control $url -Column 0 -Row 1
@@ -2600,7 +2672,7 @@ function Show-ProfileEditor {
     [void]$editorFooter.RowStyles.Add((New-Object System.Windows.Forms.RowStyle('Percent',100)))
     $editorRoot.Controls.Add($editorFooter,0,2)
     $tip=New-Object System.Windows.Forms.Label
-    $tip.Text='Save edits locally; click Apply to use them. Preview: GitHub sync is disabled.'
+    $tip.Text='Save locally or sync profile JSON + sensitivity to GitHub CFG. Click Apply to use edits.'
     $tip.ForeColor=$MUTED
     $tip.Dock='Fill'
     $tip.AutoEllipsis=$true
@@ -2638,9 +2710,7 @@ function Show-ProfileEditor {
     $saveSync.Dock='Fill'
     $editorFooter.Controls.Add($saveSync,1,2)
     if($script:PreviewBranch){
-        $saveSync.Enabled=$false
-        $saveSync.Text='Sync disabled in preview'
-        $saveSync.Tag='Production GitHub profile settings cannot be changed by this preview build.'
+        $saveSync.Tag='Save & Sync writes to live GitHub main; confirm before uploading.'
     }
 
     $cancel=New-Object System.Windows.Forms.Button
@@ -2692,9 +2762,28 @@ function Show-ProfileEditor {
         }
     }.GetNewClosure())
 
+    $isPreviewBuild=[bool]$script:PreviewBranch
+    $syncTargetBranch=[string]$script:GithubBranch
     $saveSync.Add_Click({
         try {
             & $saveEditorValues
+            if($isPreviewBuild){
+                $changes=if($sens.Text.Trim()){
+                    "profiles/$ProfileName.json and $($p.ConfigFile)"
+                }else{
+                    "profiles/$ProfileName.json only (sensitivity blank)"
+                }
+                $newline=[Environment]::NewLine
+                $message="This preview writes to LIVE GitHub $syncTargetBranch :"+$newline+
+                    $changes+$newline+$newline+
+                    'The GUI preview itself stays on its own branch. Continue?'
+                $confirm=[System.Windows.Forms.MessageBox]::Show($message,
+                    'Confirm GitHub main update','YesNo','Warning')
+                if($confirm -ne [System.Windows.Forms.DialogResult]::Yes){
+                    $status.Text='Saved locally; GitHub sync canceled.'
+                    return
+                }
+            }
             $token = Get-GitHubSyncToken -OwnerWindow $dialog
             if ([string]::IsNullOrWhiteSpace($token)) {
                 $status.Text='Saved locally. GitHub sync canceled; local edits preserved.'
@@ -2708,7 +2797,7 @@ function Show-ProfileEditor {
                 Sync-ProfileToGitHub -ProfileName $ProfileName -Token $token
                 $pendingSyncState[$ProfileName] = $false
                 Save-ProfileSettings
-                [System.Windows.Forms.MessageBox]::Show("$ProfileName settings committed to GitHub and saved locally.`nOther PCs can now download the new settings without signing in.`nThe .cfg bindings are still maintained separately on GitHub.", 'GitHub sync complete', 'OK', 'Information') | Out-Null
+                [System.Windows.Forms.MessageBox]::Show("$ProfileName settings committed to GitHub and saved locally.`nOther PCs can now download the new settings without signing in.`nNonblank CS2 sensitivity was also synced into the matching .cfg; binds and other commands remain unchanged.", 'GitHub sync complete', 'OK', 'Information') | Out-Null
                 $dialog.DialogResult=[System.Windows.Forms.DialogResult]::OK
                 $dialog.Close()
             } finally {
