@@ -1,6 +1,6 @@
 # CafeLauncher — Technical Context
 
-Maintainer / coding-assistant reference for [CafeLauncher](./README.md). This document reflects the `main` implementation of `cafe.bat` at **2026.10.13.7**. Read the actual source before editing; code is the ultimate source of truth.
+Maintainer / coding-assistant reference for [CafeLauncher](./README.md). This document reflects the `main` implementation of `cafe.bat` at **2026.10.13.8**. Read the actual source before editing; code is the ultimate source of truth.
 
 ## Repository structure
 
