@@ -4,7 +4,7 @@ start "" powershell.exe -NoProfile -ExecutionPolicy Bypass -STA -WindowStyle Hid
 exit /b
 
 # POWERSHELL_GUI
-# CAFE_RELEASE=2026.10.13.8
+# CAFE_RELEASE=2026.10.13.9
 
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
@@ -1717,151 +1717,6 @@ function Start-DetectedSteam {
     } else { Write-Log 'Steam executable not found.' 'WARN' }
 }
 
-# Manipulate only the active Steam account's CS2 LaunchOptions; no other games.
-function Update-CS2LaunchOptionsVdfText {
-    param([string]$Content,[string]$CfgName)
-    if ($CfgName -notmatch '^[a-zA-Z0-9_-]+\.cfg$') { throw 'Invalid CS2 config filename.' }
-    $path = New-Object 'System.Collections.Generic.List[string]'
-    $pending = $null; $gameEnd = -1; $appsEnd = -1
-    $gameCount = 0; $valueToken = $null; $current = ''
-    $appsPath = 'UserLocalConfigStore/Software/Valve/Steam/apps'
-    $gamePath = $appsPath + '/730'
-    foreach ($token in [regex]::Matches($Content,'(?s)"(?:\\.|[^"\\])*"|[{}]')) {
-        $part = $token.Value
-        if ($part[0] -eq '"') {
-            $v = $part.Substring(1,$part.Length-2)
-            if ($null -eq $pending) { $pending = $v } else {
-                if (($path -join '/') -ieq $gamePath -and $pending -ieq 'LaunchOptions') {
-                    if ($valueToken) { throw 'Duplicate CS2 LaunchOptions keys; not editing.' }
-                    $valueToken = $token
-                    $current = $v.Replace('\"','"').Replace('\\','\')
-                }
-                $pending = $null
-            }
-        } elseif ($part -eq '{') {
-            if ($null -eq $pending) { throw 'Steam config has malformed section syntax.' }
-            $path.Add($pending); $pending = $null
-            if (($path -join '/') -ieq $gamePath) { $gameCount++ }
-        } else {
-            $here = $path -join '/'
-            if ($here -ieq $gamePath) { $gameEnd = $token.Index }
-            if ($here -ieq $appsPath) { $appsEnd = $token.Index }
-            if ($path.Count -eq 0) { throw 'Steam config has unmatched closing brace.' }
-            $path.RemoveAt($path.Count-1); $pending = $null
-        }
-    }
-    if ($path.Count -ne 0 -or $null -ne $pending -or $appsEnd -lt 0 -or $gameCount -gt 1) {
-        throw 'Steam config structure unsupported; no launch options edited.'
-    }
-    $retained = [regex]::Replace($current,'(?i)(^|\s)\+exec\s+(?:"[^"]+"|[^\s]+)','$1').Trim()
-    $wanted = ($retained + ' +exec ' + $CfgName).Trim()
-    $quoted = '"' + $wanted.Replace('\','\\').Replace('"','\"') + '"'
-    if ($valueToken) { return $Content.Remove($valueToken.Index,$valueToken.Length).Insert($valueToken.Index,$quoted) }
-    $eol = if ($Content.Contains(([string][char]13 + [string][char]10))) { [string][char]13 + [string][char]10 } else { [string][char]10 }
-    $closeIndex = if ($gameEnd -ge 0) { $gameEnd } else { $appsEnd }
-    $lineStart = $Content.LastIndexOf([char]10,[Math]::Max(0,$closeIndex-1)) + 1
-    $indent = $Content.Substring($lineStart,$closeIndex-$lineStart)
-    if ($indent -notmatch '^[ \t]*$') { throw 'Steam VDF has unsupported inline braces.' }
-    $tab = [string][char]9
-    if ($gameEnd -ge 0) {
-        $addition = $indent + $tab + '"LaunchOptions"' + $tab + $quoted + $eol
-    } else {
-        $addition = $indent + '"730"' + $eol + $indent + '{' + $eol +
-                    $indent + $tab + '"LaunchOptions"' + $tab + $quoted + $eol + $indent + '}' + $eol
-    }
-    return $Content.Insert($lineStart,$addition)
-}
-
-function Get-ActiveCS2SteamConfigPath {
-    $exe = Get-SteamExecutable
-    if (-not $exe) { return $null }
-    $root = Split-Path -Parent $exe
-    $userdata = Join-Path $root 'userdata'
-    if (-not (Test-Path -LiteralPath $userdata -PathType Container)) { return $null }
-    $accounts = @(Get-ChildItem -LiteralPath $userdata -Directory -ErrorAction SilentlyContinue |
-        Where-Object { $_.Name -match '^[0-9]{1,10}$' -and (Test-Path -LiteralPath (Join-Path $_.FullName 'config\localconfig.vdf') -PathType Leaf) })
-    if ($accounts.Count -eq 0) { return $null }
-    try {
-        $id = [long](Get-ItemProperty -Path 'HKCU:\Software\Valve\Steam\ActiveProcess' -ErrorAction Stop).ActiveUser
-        if ($id -lt 0) { $id += 4294967296 }
-        $matches = @($accounts | Where-Object { $_.Name -eq [string]$id })
-        if ($matches.Count -eq 1 -and $id -gt 0) {
-            return (Join-Path $matches[0].FullName 'config\localconfig.vdf')
-        }
-    } catch {}
-    # With multiple accounts, never guess which person's launch options to alter.
-    if ($accounts.Count -eq 1) { return (Join-Path $accounts[0].FullName 'config\localconfig.vdf') }
-    return $null
-}
-
-function Set-CS2SteamLaunchOptions {
-    param([string]$CfgName)
-    if ($CfgName -notmatch '^[a-zA-Z0-9_-]+\.cfg$') { throw 'Invalid CS2 CFG name.' }
-    $path = Get-ActiveCS2SteamConfigPath
-    $wanted = '+exec ' + $CfgName
-    if (-not $path) {
-        Write-Log ("No unambiguous active Steam account found; set launch options manually: " + $wanted) 'WARN'
-        return $false
-    }
-    $exe = Get-SteamExecutable
-    $running = @(Get-Process steam -ErrorAction SilentlyContinue).Count -gt 0
-    $restart = $false
-    try {
-        $before = [IO.File]::ReadAllText($path)
-        $after = Update-CS2LaunchOptionsVdfText -Content $before -CfgName $CfgName
-        if ($after -ceq $before) { Write-Log ("CS2 launch options already set: " + $wanted); return $true }
-        if ($running) {
-            if (Get-Process cs2 -ErrorAction SilentlyContinue) {
-                Write-Log ("CS2 is running; launch options unchanged. Manually set: " + $wanted) 'WARN'
-                return $false
-            }
-            $prompt = ("Steam caches launch options and may undo changes while open." + [Environment]::NewLine +
-                      "Close and restart Steam now to set " + $wanted + "?" + [Environment]::NewLine +
-                      "Other launch options will be kept.")
-            $choice = [System.Windows.Forms.MessageBox]::Show($prompt,'CS2 Steam launch options','YesNo','Question')
-            if ($choice -ne [System.Windows.Forms.DialogResult]::Yes) {
-                Write-Log ("User skipped Steam restart. Set launch options manually: " + $wanted) 'WARN'
-                return $false
-            }
-            $restart = $true
-            Start-Process -FilePath $exe -ArgumentList '-shutdown' -ErrorAction Stop
-            for($i=0;$i -lt 60;$i++){
-                if(-not (Get-Process steam -ErrorAction SilentlyContinue)){break}
-                Start-Sleep -Milliseconds 250
-            }
-            if (Get-Process steam -ErrorAction SilentlyContinue) { throw 'Steam did not close within 15 seconds.' }
-            # Read again because Steam rewrites its localconfig on exit.
-            $before = [IO.File]::ReadAllText($path)
-            $after = Update-CS2LaunchOptionsVdfText -Content $before -CfgName $CfgName
-            if ($after -ceq $before) { return $true }
-        }
-        if (Get-Process steam -ErrorAction SilentlyContinue) { throw 'Steam started again before settings could be written.' }
-        $backup = $path + '.cafe-backup-' + (Get-Date -Format 'yyyyMMdd-HHmmss-fff')
-        $temp = Join-Path (Split-Path -Parent $path) ('localconfig.cafe-' + [guid]::NewGuid().ToString('N') + '.tmp')
-        try {
-            $data = [IO.File]::ReadAllBytes($path)
-            $bom = $data.Length -ge 3 -and $data[0] -eq 239 -and $data[1] -eq 187 -and $data[2] -eq 191
-            [IO.File]::WriteAllText($temp,$after,(New-Object System.Text.UTF8Encoding($bom)))
-            Copy-Item -LiteralPath $path -Destination $backup -ErrorAction Stop
-            Copy-Item -LiteralPath $temp -Destination $path -Force -ErrorAction Stop
-            if ([IO.File]::ReadAllText($path) -cne $after) {
-                Copy-Item -LiteralPath $backup -Destination $path -Force -ErrorAction SilentlyContinue
-                throw 'Steam launch option read-back failed; attempted to restore backup.'
-            }
-        } finally { Remove-Item -LiteralPath $temp -Force -ErrorAction SilentlyContinue }
-        Write-Log ("CS2 Steam launch options saved: " + $wanted + ". Backup: " + $backup)
-        return $true
-    } catch {
-        Write-Log ("Steam launch options not saved: " + $_.Exception.Message) 'WARN'
-        return $false
-    } finally {
-        if ($restart -and $exe) {
-            try { Start-Process -FilePath $exe -ErrorAction Stop; Write-Log 'Steam restarted after launch option update.' }
-            catch { Write-Log ("Steam restart failed: " + $_.Exception.Message) 'WARN' }
-        }
-    }
-}
-
 function Get-PCDiagnostics {
     $lines = New-Object 'System.Collections.Generic.List[string]'
     $lines.Add("Machine: $env:COMPUTERNAME")
@@ -2633,14 +2488,9 @@ function Invoke-GamingProfile {
         if ($ProfileName -eq 'FabMode' -and [string]::IsNullOrWhiteSpace($profileCfgUrl)) {
             $profileCfgUrl = $script:FabCfgCloudUrl
         }
-        $steps += @{ Name = "Install CS2 $profileCfgName + Steam launch options"; Action = {
-            $installed = Install-AtCfg -Silent -CfgName $profileCfgName -DownloadUrl $profileCfgUrl -CloudPreferred:([bool]$profileCfgUrl) -CS2Sensitivity ([string]$profile.CS2Sensitivity)
-            if ($installed -eq $true) {
-                $optionOk = Set-CS2SteamLaunchOptions -CfgName $profileCfgName
-                if (-not $optionOk) { Write-Log ("CS2 Steam launch options require manual setup: +exec " + $profileCfgName) 'WARN' }
-            } else {
-                Write-Log ("Steam launch options skipped because " + $profileCfgName + " could not be installed.") 'WARN'
-            }
+        # Profile Apply installs its CFG without editing any Steam launch options.
+        $steps += @{ Name = "Install CS2 $profileCfgName"; Action = {
+            [void](Install-AtCfg -Silent -CfgName $profileCfgName -DownloadUrl $profileCfgUrl -CloudPreferred:([bool]$profileCfgUrl) -CS2Sensitivity ([string]$profile.CS2Sensitivity)
         } }
     }
     if ($profile.LaunchApps) {
@@ -2656,6 +2506,58 @@ function Invoke-GamingProfile {
         }
     }
     Write-Log "$ProfileName full routine finished. Review logs for individual results."
+}
+
+# The separate Play + Exec action launches CS2 with a one-time +exec argument.
+# No writes to Steam userdata/config/localconfig.vdf and no Steam restart.
+function Get-CS2SteamLaunchArguments {
+    param([Parameter(Mandatory=$true)][string]$CfgName)
+    if ($CfgName -notmatch '^[A-Za-z0-9_-]+\.cfg$') { throw 'Invalid CFG filename for CS2.' }
+    return @('-applaunch', '730', '+exec', $CfgName)
+}
+
+function Start-CS2WithProfileCfg {
+    param([Parameter(Mandatory=$true)][string]$ProfileName)
+    if (-not $script:GamingProfiles.Contains($ProfileName)) { throw "Unknown CS2 profile: $ProfileName" }
+    if (Get-Process -Name 'cs2' -ErrorAction SilentlyContinue) {
+        $runningCfg = [string]$script:GamingProfiles[$ProfileName].ConfigFile
+        Write-Log "$ProfileName Play + Exec skipped; CS2 is already running. Use developer console: exec $runningCfg" 'WARN'
+        [System.Windows.Forms.MessageBox]::Show(
+            "CS2 is already running. Steam launch arguments work only when starting the game." +
+            [Environment]::NewLine + [Environment]::NewLine +
+            "In CS2, open the developer console and type: exec $runningCfg" +
+            [Environment]::NewLine + "Or close CS2 and click Play + Exec again.",
+            'CS2 Already Running', 'OK', 'Information'
+        ) | Out-Null
+        return
+    }
+    Refresh-ProfileFromGitHub -ProfileName $ProfileName
+    $profile = $script:GamingProfiles[$ProfileName]
+    $cfgName = [string]$profile.ConfigFile
+    if ($cfgName -notmatch '^[A-Za-z0-9_-]+\.cfg$') { throw "Invalid CFG filename for $ProfileName." }
+    $url = [string]$profile.CfgDownloadUrl
+    if ($ProfileName -eq 'FabMode' -and [string]::IsNullOrWhiteSpace($url)) {
+        $url = $script:FabCfgCloudUrl
+    }
+    Write-Log "$ProfileName Play + Exec: installing $cfgName before starting CS2."
+    $installed = Install-AtCfg -Silent -CfgName $cfgName -DownloadUrl $url -CloudPreferred:([bool]$url) -CS2Sensitivity ([string]$profile.CS2Sensitivity)
+    if ($installed -ne $true) {
+        Write-Log "$ProfileName Play + Exec cancelled: $cfgName installation did not succeed." 'ERROR'
+        [System.Windows.Forms.MessageBox]::Show(
+            "Unable to install $cfgName. CS2 was not started. Check LIVE LOGS.",
+            'CS2 CFG Installation Failed', 'OK', 'Warning'
+        ) | Out-Null
+        return
+    }
+    $steamExe = Get-SteamExecutable
+    if (-not $steamExe) {
+        Write-Log 'Steam was not detected. CFG installed, but CS2 not launched.' 'ERROR'
+        [System.Windows.Forms.MessageBox]::Show('Steam not found. CFG installed but CS2 was not launched.', 'Steam Not Found', 'OK', 'Warning') | Out-Null
+        return
+    }
+    $args = @(Get-CS2SteamLaunchArguments -CfgName $cfgName)
+    Start-Process -FilePath $steamExe -ArgumentList $args -ErrorAction Stop
+    Write-Log "$ProfileName requested CS2 launch via Steam: -applaunch 730 +exec $cfgName. Persistent Steam launch options unchanged."
 }
 
 # Backward-compatible entry point.
@@ -2713,7 +2615,8 @@ function New-Tile {
     $button.Text = $Text
     $button.Location = New-Object System.Drawing.Point($x,$y)
     if ($EditProfile) {
-        $button.Size = New-Object System.Drawing.Size(235,46)
+        # Split the profile tile into Apply and Play + Exec buttons.
+        $button.Size = New-Object System.Drawing.Size(136,46)
     } else {
         $button.Size = New-Object System.Drawing.Size(235,70)
     }
@@ -2742,6 +2645,30 @@ function New-Tile {
     }.GetNewClosure())
     $form.Controls.Add($button)
     if ($EditProfile) {
+        $selectedProfile = $EditProfile
+        $play = New-Object System.Windows.Forms.Button
+        $play.Text = 'Play + Exec'
+        $play.Location = New-Object System.Drawing.Point(($x + 141), $y)
+        $play.Size = New-Object System.Drawing.Size(94,46)
+        $play.FlatStyle = 'Flat'
+        $play.FlatAppearance.BorderSize = 0
+        $play.BackColor = [System.Drawing.Color]::FromArgb(38,132,102)
+        $play.ForeColor = $WHITE
+        $play.Font = New-Object System.Drawing.Font('Segoe UI',8,[System.Drawing.FontStyle]::Bold)
+        $play.Cursor = [System.Windows.Forms.Cursors]::Hand
+        $play.Add_Click({
+            Write-Log "Clicked: Play + Exec $selectedProfile"
+            try { Start-CS2WithProfileCfg -ProfileName $selectedProfile }
+            catch {
+                Write-Log ("Play + Exec failed for " + $selectedProfile + ": " + $_.Exception.Message + "; " + $_.ScriptStackTrace) 'ERROR'
+                [System.Windows.Forms.MessageBox]::Show(
+                    ("Unable to launch CS2 for " + $selectedProfile + ": " + $_.Exception.Message),
+                    'CS2 Launch Failed', 'OK', 'Error'
+                ) | Out-Null
+            }
+        }.GetNewClosure())
+        $form.Controls.Add($play)
+
         $edit = New-Object System.Windows.Forms.Button
         $edit.Text = "Edit $EditProfile settings"
         $edit.Location = [System.Drawing.Point]::new($x, ($y + 48))
@@ -2785,9 +2712,7 @@ New-Tile "Mouse Pointer Options" 11 { Open-MousePointerOptions }
 New-Tile "NVIDIA Control Panel" 12 { Open-NvidiaControlPanel }
 New-Tile "Apply NVIDIA Settings" 13 { Apply-NvidiaGamingSettings } -Primary
 New-Tile "Install CS2 fab.cfg" 14 {
-    if (Install-AtCfg -CfgName 'fab.cfg' -DownloadUrl $script:FabCfgCloudUrl -CloudPreferred) {
-        [void](Set-CS2SteamLaunchOptions -CfgName 'fab.cfg')
-    }
+    [void](Install-AtCfg -CfgName 'fab.cfg' -DownloadUrl $script:FabCfgCloudUrl -CloudPreferred)
 } -Primary
 New-Tile "Detect PC" 15 { Show-PCDiagnostics }
 New-Tile "Check for Updates" 16 { Check-CafeLauncherUpdates -Manual }
