@@ -65,7 +65,22 @@ foreach($name in $profileNames){
     if([int]$json.SchemaVersion -ne 1 -or $json.ProfileName -cne $name){throw 'Preset schema/name mismatch.'}
     $values=ConvertTo-VideoGraphicsSettings -Preset $json
     if($values.Count -lt 5){throw ('Too few actual video settings in '+$name+' preset.')}
-    if($values.Contains('Width') -or $values.Contains('RefreshHz')){throw 'Starter presets must preserve PC-specific display modes.'}
+    # FabMode deliberately requests its own CS2 1280x960 @ 360Hz mode.
+    # The graphics editor validates this against the actual monitor before writing;
+    # unlike other profiles, FabMode must not be forced to keep native resolution.
+    if($name -eq 'FabMode'){
+        if(-not $values.Contains('Width') -or -not $values.Contains('Height') -or
+           -not $values.Contains('RefreshHz') -or
+           [int]$values['Width'] -ne 1280 -or [int]$values['Height'] -ne 960 -or
+           [int]$values['RefreshHz'] -ne 360 -or
+           [int]$values['AspectRatioMode'] -ne 0 -or [int]$values['Fullscreen'] -ne 1){
+            throw 'FabMode must specify 1280x960, 4:3, fullscreen, 360Hz.'
+        }
+    }else{
+        if($values.Contains('Width') -or $values.Contains('Height') -or $values.Contains('RefreshHz')){
+            throw ($name + ' must preserve PC-specific display modes unless explicitly customized.')
+        }
+    }
 }
 $batText=[IO.File]::ReadAllText($bat)
 if($batText -notmatch '\$graphics\.Add_Click' -or $batText -notmatch 'Invoke-GraphicsOnly -ModeName \$selectedProfile'){
