@@ -4,7 +4,7 @@ start "" powershell.exe -NoProfile -ExecutionPolicy Bypass -STA -WindowStyle Hid
 exit /b
 
 # POWERSHELL_GUI
-# CAFE_RELEASE=2026.10.13.16
+# CAFE_RELEASE=2026.10.13.17
 
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
@@ -23,6 +23,10 @@ try { Set-Content -LiteralPath $script:LogPath -Value "" -Encoding UTF8 } catch 
 function Write-Log {
     param([string]$Message, [string]$Level = "INFO")
     $line = "{0} [{1}] {2}" -f (Get-Date -Format "HH:mm:ss"), $Level, $Message
+    if($script:StepScope){
+        if($Level -eq "ERROR"){$script:StepScopeError=$true}
+        elseif($Level -eq "WARN"){$script:StepScopeWarning=$true}
+    }
     try { Add-Content -LiteralPath $script:LogPath -Value $line -Encoding UTF8 } catch {}
     if ($script:LogBox -and -not $script:LogBox.IsDisposed) {
         try {
@@ -38,6 +42,47 @@ function Write-Log {
         } catch {}
     }
 }
+
+# Result records are separate from diagnostic INFO/WARN/ERROR logs.
+$script:StepResults=New-Object 'System.Collections.Generic.List[object]'
+$script:StepScope=$null
+$script:StepScopeError=$false
+$script:StepScopeWarning=$false
+$script:ActiveRunName=''
+function Set-StepResult {
+    param([string]$Run,[string]$Step,[ValidateSet('SUCCESS','SKIPPED','FAILED','PENDING')][string]$Status,[string]$Detail='')
+    foreach($old in @($script:StepResults | Where-Object {$_.Run -eq $Run -and $_.Step -eq $Step})){
+        [void]$script:StepResults.Remove($old)
+    }
+    $script:StepResults.Add([pscustomobject]@{Run=$Run;Step=$Step;Status=$Status;Detail=$Detail})
+    Write-Log ('RESULT '+$Run+' | '+$Step+' | '+$Status+$(if($Detail){' | '+$Detail}else{''})) 'RESULT'
+}
+function Start-StepScope {
+    param([string]$Run,[string]$Step)
+    $script:StepScope=[pscustomobject]@{Run=$Run;Step=$Step}
+    $script:StepScopeError=$false
+    $script:StepScopeWarning=$false
+}
+function Complete-StepScope {
+    param([string]$Detail='Step finished; consult detailed logs for verification.')
+    if(-not $script:StepScope){return}
+    $scope=$script:StepScope
+    $errorSeen=$script:StepScopeError
+    $warnSeen=$script:StepScopeWarning
+    $script:StepScope=$null
+    $state=if($errorSeen){'FAILED'}elseif($warnSeen){'SKIPPED'}else{'SUCCESS'}
+    if($errorSeen){$Detail='One or more errors reported. '+$Detail}
+    elseif($warnSeen){$Detail='One or more actions were skipped or warned. '+$Detail}
+    Set-StepResult -Run $scope.Run -Step $scope.Step -Status $state -Detail $Detail
+}
+function Write-RunSummary {
+    param([string]$Run)
+    $items=@($script:StepResults | Where-Object {$_.Run -eq $Run})
+    $counts=@{}
+    foreach($state in @('SUCCESS','SKIPPED','FAILED','PENDING')){$counts[$state]=@($items | Where-Object {$_.Status -eq $state}).Count}
+    Write-Log ('SUMMARY '+$Run+': '+$counts.SUCCESS+' SUCCESS, '+$counts.SKIPPED+' SKIPPED, '+$counts.FAILED+' FAILED, '+$counts.PENDING+' PENDING') 'RESULT'
+}
+
 Write-Log "Launcher starting."
 
 function Find-App {
@@ -2616,10 +2661,17 @@ try {
                 if($null -ne $script:LogihubRequestedDPI){
                     $dpi=[int]$script:LogihubRequestedDPI
                     $script:LogihubRequestedDPI=$null
+                    $run=$script:ActiveRunName
+                    Start-StepScope -Run $run -Step 'Logitech live DPI'
                     try{Set-LogitechLiveDPI -DPI $dpi}catch{Write-Log ('Delayed Logitech DPI failed: '+$_.Exception.Message) 'ERROR'}
+                    finally{Complete-StepScope -Detail 'Async DPI command finished; check read-back.';if($run){Write-RunSummary -Run $run}}
                 }
             } catch {
                 Write-Log $_.Exception.Message 'ERROR'
+                if($script:ActiveRunName){
+                    Set-StepResult -Run $script:ActiveRunName -Step 'Logitech live DPI' -Status FAILED -Detail $_.Exception.Message
+                    Write-RunSummary -Run $script:ActiveRunName
+                }
                 $script:LogihubRequestedDPI=$null
             } finally {
                 Remove-Item -LiteralPath $statusPath -Force -ErrorAction SilentlyContinue
@@ -2743,6 +2795,8 @@ function Invoke-GamingProfile {
         Write-Log "Unknown gaming profile: $ProfileName" 'ERROR'
         return
     }
+    $script:ActiveRunName=$ProfileName
+    $script:StepResults.Clear()
     Refresh-ProfileFromGitHub -ProfileName $ProfileName
     $profile = $script:GamingProfiles[$ProfileName]
     Write-Log "$ProfileName full routine started: mouse, NVIDIA, CS2 config, applications."
@@ -2774,13 +2828,20 @@ function Invoke-GamingProfile {
     $steps += @{ Name = 'Logitech live DPI'; Action = { Request-LogitechLiveDPI -DPI ([int]$profile.LogitechDPI) } }
     foreach ($step in $steps) {
         Write-Log ("$ProfileName step started: " + $step.Name)
+        Start-StepScope -Run $ProfileName -Step $step.Name
         try {
             & ($step.Action)
             Write-Log ("$ProfileName step returned: " + $step.Name + ". Check logs for individual success or errors.")
         } catch {
             Write-Log ("$ProfileName step failed: " + $step.Name + ": " + $_.Exception.Message) 'ERROR'
+        } finally {
+            if($step.Name -eq 'Logitech live DPI' -and $script:LogihubDownloadProcess -and -not $script:LogihubDownloadProcess.HasExited){
+                $script:StepScope=$null
+                Set-StepResult -Run $ProfileName -Step $step.Name -Status PENDING -Detail 'Helper downloading; live DPI not yet applied.'
+            }else{Complete-StepScope}
         }
     }
+    Write-RunSummary -Run $ProfileName
     Write-Log "$ProfileName full routine finished. Review logs for individual results."
 }
 
