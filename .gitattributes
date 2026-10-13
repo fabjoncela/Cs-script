@@ -1,0 +1,3 @@
+# Keep BAT files as Windows CRLF in GitHub for direct download and execution.
+# Git should not normalize their line endings to LF.
+*.bat -text
