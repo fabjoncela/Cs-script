@@ -4,7 +4,7 @@ start "" powershell.exe -NoProfile -ExecutionPolicy Bypass -STA -WindowStyle Hid
 exit /b
 
 # POWERSHELL_GUI
-# CAFE_RELEASE=2026.10.13.6
+# CAFE_RELEASE=2026.10.13.7
 
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
@@ -2265,6 +2265,13 @@ function Show-ProfileEditor {
     Refresh-ProfileFromGitHub -ProfileName $ProfileName
     $p = $script:GamingProfiles[$ProfileName]
     if (-not $p) { throw "Unknown profile: $ProfileName" }
+    # GetNewClosure() creates a new dynamic module scope. The script: scope
+    # inside a captured click handler is NOT the original launcher's script:
+    # scope. Capture a reference to the real pending-sync dictionary here.
+    $pendingSyncState = $script:PendingSync
+    if ($null -eq $pendingSyncState -or $pendingSyncState -isnot [System.Collections.IDictionary]) {
+        throw 'Profile sync state is missing; cannot safely edit this profile.'
+    }
 
     $dialog = New-Object System.Windows.Forms.Form
     $dialog.Text = "Edit $ProfileName"
@@ -2399,7 +2406,8 @@ function Show-ProfileEditor {
         $p.LaunchApps=[bool]$apps.Checked
         $p.CS2Sensitivity=$sensValue
         $p.CfgDownloadUrl=$cfgUrl
-        $script:PendingSync[$ProfileName] = $true
+        # Use the captured shared dictionary, not script: scope in this closure.
+        $pendingSyncState[$ProfileName] = $true
         Save-ProfileSettings
         Write-Log "$ProfileName edited locally: pointer=$($p.PointerSpeed), acceleration enabled=$(-not $p.DisableAcceleration), display=$($p.Width)x$($p.Height)@$($p.RefreshHz), vibrance=$($p.Vibrance)%, sensitivity=$sensValue."
     }.GetNewClosure()
@@ -2430,7 +2438,7 @@ function Show-ProfileEditor {
                 $saveSync.Enabled=$false
                 $dialog.Cursor=[System.Windows.Forms.Cursors]::WaitCursor
                 Sync-ProfileToGitHub -ProfileName $ProfileName -Token $token
-                $script:PendingSync[$ProfileName] = $false
+                $pendingSyncState[$ProfileName] = $false
                 Save-ProfileSettings
                 [System.Windows.Forms.MessageBox]::Show("$ProfileName settings committed to GitHub and saved locally.`nOther PCs can now download the new settings without signing in.`nThe .cfg bindings are still maintained separately on GitHub.", 'GitHub sync complete', 'OK', 'Information') | Out-Null
                 $dialog.DialogResult=[System.Windows.Forms.DialogResult]::OK
