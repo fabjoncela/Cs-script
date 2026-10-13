@@ -6,6 +6,7 @@ on:
       - 'cafe.bat'
       - 'tools/Test-CafeLauncher.ps1'
       - 'tools/Test-ProfileSave.ps1'
+      - 'tools/Test-CfgSensitivitySync.ps1'
       - 'tools/Test-SteamLaunchOptions.ps1'
       - 'tools/Test-Graphics.ps1'
       - 'tools/Test-NvidiaCompatibility.ps1'
@@ -20,6 +21,7 @@ on:
       - 'cafe.bat'
       - 'tools/Test-CafeLauncher.ps1'
       - 'tools/Test-ProfileSave.ps1'
+      - 'tools/Test-CfgSensitivitySync.ps1'
       - 'tools/Test-SteamLaunchOptions.ps1'
       - 'tools/Test-Graphics.ps1'
       - 'tools/Test-NvidiaCompatibility.ps1'
@@ -48,6 +50,10 @@ jobs:
         shell: powershell
         run: |
           & "$env:GITHUB_WORKSPACE\tools\Test-ProfileSave.ps1"
+      - name: Test GitHub CFG sensitivity and JSON sync (mocked)
+        shell: powershell
+        run: |
+          & "$env:GITHUB_WORKSPACE\tools\Test-CfgSensitivitySync.ps1"
       - name: Test CS2 Steam launch option VDF updater
         shell: powershell
         run: |
