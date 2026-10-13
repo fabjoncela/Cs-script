@@ -30,7 +30,7 @@ A portable Windows **CS2 internet-café setup launcher**. A single hybrid `cafe.
 
 ## Edit a profile
 
-Click **Edit <Profile> settings** to change:
+Click **Edit ArliMode settings** (or the equivalent button for any other profile) to change:
 
 - Windows pointer speed (1–20), mouse acceleration.
 - Requested resolution, refresh rate, NVIDIA Digital Vibrance.
