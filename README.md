@@ -42,6 +42,14 @@ The graphics-only PowerShell module is downloaded only when needed, checked agai
 
 **Graphics save fix (v2026.10.13.11):** Corrected a Windows PowerShell 5.1 file-replacement error (`The path is not of a legal form`). The graphics module now supplies a real same-directory backup path to `.NET File.Replace`, keeps the permanent CafeLauncher backup, verifies the result, and attempts restoration if replacement fails. Neither normal profile buttons nor Play + Exec changed.
 
+## Logitech mouse DPI (v2026.10.13.12)
+
+The two new buttons **Set DPI 800 (Live)** and **Set DPI 800 (Onboard)** use the portable [better-logihub](https://github.com/cUDGk/better-logihub) Windows executable. CafeLauncher downloads the pinned v0.1.0 executable on first use and validates its published SHA-256 before executing it. Nothing needs to be installed manually. The executable is cached in `%LOCALAPPDATA%\CafeLauncher\logihub`; a Deep Freeze reboot may clear that cache.
+
+**All five normal profile buttons** automatically attempt a *live* DPI setting using the individually editable `LogitechDPI` value (800 by default), preserving all other profile actions. Change it in **Edit [Mode] settings**, then Save Locally or Save & Sync to GitHub. Play + Exec and Apply Graphics do not set DPI. The LIVE LOGS show G HUB detection, command output, and any failures. G HUB is not stopped and may override the result. The live DPI operation does **not** write onboard memory.
+
+The **Onboard** button is separate: it asks for confirmation, runs `onboard dump --out <backup>`, checks for a nonempty backup, then runs `onboard set-dpi 800 --default 1 --shift 800` and `onboard mode set on`. It writes to mouse memory, which Deep Freeze does **not** restore. Backups are stored in `%LOCALAPPDATA%\CafeLauncher\logihub\onboard-backups` and may themselves be erased by Deep Freeze; copy them to a safe place before reboot. Only use the onboard button with a verified supported mouse model and after confirming the backup is accessible. If G HUB competes with live DPI, review LIVE LOGS rather than forcing process termination.
+
 ## Profile files
 
 | Profile button | Cloud settings JSON | GitHub CS2 config |
