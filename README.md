@@ -4,7 +4,7 @@ A portable Windows **CS2 internet-café setup launcher**. A single hybrid `cafe.
 
 [Technical architecture and maintenance notes](./context.md)
 
-> Documents the current main-branch launcher at **2026.10.13.7**. Some features depend on PC hardware, installed programs and user permissions.
+> Documents the current main-branch launcher at **2026.10.13.8**. Some features depend on PC hardware, installed programs and user permissions.
 
 ## Quick start
 
