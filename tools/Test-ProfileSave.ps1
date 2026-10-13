@@ -27,7 +27,7 @@ foreach($name in @('Export-ProfileValues','Save-ProfileSettings')){
     Invoke-Expression $found[0].Extent.Text
 }
 function Write-Log {param([string]$Message,[string]$Level='INFO');Write-Host $Message}
-$p=@{PointerSpeed=10;DisableAcceleration=$true;ApplyNvidia=$true;Width=1920;Height=1080;RefreshHz=360;Vibrance=75;CS2Sensitivity='';CfgDownloadUrl='';LaunchApps=$true}
+$p=@{PointerSpeed=10;LogitechDPI=800;DisableAcceleration=$true;ApplyNvidia=$true;Width=1920;Height=1080;RefreshHz=360;Vibrance=75;CS2Sensitivity='';CfgDownloadUrl='';LaunchApps=$true}
 $script:GamingProfiles=[ordered]@{FabMode=$p.Clone();OliMode=$p.Clone()}
 $script:PendingSync=@{FabMode=$false;OliMode=$false}
 $folder=Join-Path $env:TEMP ('CafeLauncher-SaveTest-'+[guid]::NewGuid().ToString('N'))
@@ -46,9 +46,10 @@ function Test-CapturedSave {
 try {
     Test-CapturedSave 'OliMode' $true
     $result=Get-Content -LiteralPath $script:ProfileSettingsPath -Raw | ConvertFrom-Json
-    if($result.OliMode.SyncPending -ne $true -or $result.OliMode.PointerSpeed -ne 10){throw 'Local save did not persist expected JSON.'}
+    if($result.OliMode.SyncPending -ne $true -or $result.OliMode.PointerSpeed -ne 10 -or $result.OliMode.LogitechDPI -ne 800){throw 'Local save did not persist expected JSON.'}
+    $script:GamingProfiles['OliMode']['LogitechDPI']=1600
     Test-CapturedSave 'OliMode' $false
     $result=Get-Content -LiteralPath $script:ProfileSettingsPath -Raw | ConvertFrom-Json
-    if($result.OliMode.SyncPending -ne $false){throw 'Synced-state save did not persist.'}
+    if($result.OliMode.SyncPending -ne $false -or $result.OliMode.LogitechDPI -ne 1600){throw 'Synced-state save or edited DPI did not persist.'}
     Write-Host 'PASS: captured profile editor save state and JSON persistence.'
 }finally{Remove-Item -LiteralPath $folder -Force -Recurse -ErrorAction SilentlyContinue}

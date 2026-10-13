@@ -4,7 +4,7 @@ start "" powershell.exe -NoProfile -ExecutionPolicy Bypass -STA -WindowStyle Hid
 exit /b
 
 # POWERSHELL_GUI
-# CAFE_RELEASE=2026.10.13.11
+# CAFE_RELEASE=2026.10.13.12
 
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
@@ -1974,27 +1974,27 @@ $script:GithubBranch = 'main'
 $script:FabCfgCloudUrl = 'https://raw.githubusercontent.com/fabjoncela/Cs-script/main/fab.cfg'
 $script:GamingProfiles = [ordered]@{
     FabMode = @{
-        PointerSpeed=10; DisableAcceleration=$true; ApplyNvidia=$true
+        PointerSpeed=10; LogitechDPI=800; DisableAcceleration=$true; ApplyNvidia=$true
         Width=1920; Height=1080; RefreshHz=360; Vibrance=75
         CS2Sensitivity=''; ConfigFile='fab.cfg'; CfgDownloadUrl=$script:FabCfgCloudUrl; LaunchApps=$true
     }
     ArliMode = @{
-        PointerSpeed=10; DisableAcceleration=$true; ApplyNvidia=$true
+        PointerSpeed=10; LogitechDPI=800; DisableAcceleration=$true; ApplyNvidia=$true
         Width=1920; Height=1080; RefreshHz=360; Vibrance=75
         CS2Sensitivity=''; ConfigFile='arli.cfg'; CfgDownloadUrl='https://raw.githubusercontent.com/fabjoncela/Cs-script/main/arli.cfg'; LaunchApps=$true
     }
     BrileMode = @{
-        PointerSpeed=10; DisableAcceleration=$true; ApplyNvidia=$true
+        PointerSpeed=10; LogitechDPI=800; DisableAcceleration=$true; ApplyNvidia=$true
         Width=1920; Height=1080; RefreshHz=360; Vibrance=75
         CS2Sensitivity=''; ConfigFile='brile.cfg'; CfgDownloadUrl='https://raw.githubusercontent.com/fabjoncela/Cs-script/main/brile.cfg'; LaunchApps=$true
     }
     ArmlMode = @{
-        PointerSpeed=10; DisableAcceleration=$true; ApplyNvidia=$true
+        PointerSpeed=10; LogitechDPI=800; DisableAcceleration=$true; ApplyNvidia=$true
         Width=1920; Height=1080; RefreshHz=360; Vibrance=75
         CS2Sensitivity=''; ConfigFile='arml.cfg'; CfgDownloadUrl='https://raw.githubusercontent.com/fabjoncela/Cs-script/main/arml.cfg'; LaunchApps=$true
     }
     OliMode = @{
-        PointerSpeed=10; DisableAcceleration=$true; ApplyNvidia=$true
+        PointerSpeed=10; LogitechDPI=800; DisableAcceleration=$true; ApplyNvidia=$true
         Width=1920; Height=1080; RefreshHz=360; Vibrance=75
         CS2Sensitivity=''; ConfigFile='oli.cfg'; CfgDownloadUrl='https://raw.githubusercontent.com/fabjoncela/Cs-script/main/oli.cfg'; LaunchApps=$true
     }
@@ -2006,13 +2006,14 @@ foreach ($name in @($script:GamingProfiles.Keys)) { $script:PendingSync[$name] =
 function Import-ProfileValues {
     param([string]$ProfileName, $SavedProfile, [string]$SourceLabel = 'local')
     if (-not $script:GamingProfiles.Contains($ProfileName) -or -not $SavedProfile) { return }
-    foreach ($setting in @('PointerSpeed','DisableAcceleration','ApplyNvidia','Width','Height','RefreshHz','Vibrance','CS2Sensitivity','CfgDownloadUrl','LaunchApps')) {
+    foreach ($setting in @('PointerSpeed','LogitechDPI','DisableAcceleration','ApplyNvidia','Width','Height','RefreshHz','Vibrance','CS2Sensitivity','CfgDownloadUrl','LaunchApps')) {
         $saved = $SavedProfile.PSObject.Properties[$setting]
         if (-not $saved) { continue }
         $value = $saved.Value
         try {
             switch ($setting) {
                 'PointerSpeed' { $value=[int]$value; if ($value -lt 1 -or $value -gt 20) { throw 'range' } }
+                'LogitechDPI' { $value=[int]$value; if ($value -lt 100 -or $value -gt 25600) { throw 'range' } }
                 'Width'        { $value=[int]$value; if ($value -lt 640 -or $value -gt 7680) { throw 'range' } }
                 'Height'       { $value=[int]$value; if ($value -lt 480 -or $value -gt 4320) { throw 'range' } }
                 'RefreshHz'    { $value=[int]$value; if ($value -lt 30 -or $value -gt 600) { throw 'range' } }
@@ -2068,7 +2069,7 @@ function Export-ProfileValues {
     $p = $script:GamingProfiles[$ProfileName]
     if (-not $p) { throw "Unknown profile: $ProfileName" }
     $profileValues = [ordered]@{
-        PointerSpeed=[int]$p.PointerSpeed; DisableAcceleration=[bool]$p.DisableAcceleration
+        PointerSpeed=[int]$p.PointerSpeed; LogitechDPI=[int]$p.LogitechDPI; DisableAcceleration=[bool]$p.DisableAcceleration
         ApplyNvidia=[bool]$p.ApplyNvidia; Width=[int]$p.Width; Height=[int]$p.Height
         RefreshHz=[int]$p.RefreshHz; Vibrance=[int]$p.Vibrance
         CS2Sensitivity=[string]$p.CS2Sensitivity; CfgDownloadUrl=[string]$p.CfgDownloadUrl
@@ -2357,13 +2358,16 @@ function Show-ProfileEditor {
     $apps.Size=New-Object System.Drawing.Size(550,26)
     $dialog.Controls.Add($apps)
 
-    $dialog.ClientSize = New-Object System.Drawing.Size(590,665)
-    $tip = New-EditorLabel $dialog 'Local edits stay on this PC. GitHub sync shares ALL profile settings; CFG binds remain separate.' 20 504 550
+    $dialog.ClientSize = New-Object System.Drawing.Size(590,725)
+    New-EditorLabel $dialog 'Logitech DPI (live, per profile)' 20 495 400 | Out-Null
+    $logitechDpi = New-EditorNumber $dialog 405 493 100 25600 ([int]$p.LogitechDPI) 145
+    $logitechDpi.Increment = 50
+    $tip = New-EditorLabel $dialog 'Local edits stay on this PC. GitHub sync shares ALL profile settings; CFG binds remain separate.' 20 538 550
     $tip.ForeColor=$MUTED
     $tip.Font=New-Object System.Drawing.Font('Segoe UI',8)
     $tip.Size=New-Object System.Drawing.Size(550,37)
 
-    $status = New-EditorLabel $dialog '' 20 538 550
+    $status = New-EditorLabel $dialog '' 20 582 550
     $status.Font=New-Object System.Drawing.Font('Segoe UI',8,[System.Drawing.FontStyle]::Bold)
     $status.Size=New-Object System.Drawing.Size(550,23)
     if ($script:PendingSync[$ProfileName]) {
@@ -2376,7 +2380,7 @@ function Show-ProfileEditor {
 
     $saveLocal = New-Object System.Windows.Forms.Button
     $saveLocal.Text='Save Locally'
-    $saveLocal.Location=New-Object System.Drawing.Point(20,585)
+    $saveLocal.Location=New-Object System.Drawing.Point(20,635)
     $saveLocal.Size=New-Object System.Drawing.Size(155,40)
     $saveLocal.BackColor=$BLUE
     $saveLocal.ForeColor=$WHITE
@@ -2385,7 +2389,7 @@ function Show-ProfileEditor {
 
     $saveSync = New-Object System.Windows.Forms.Button
     $saveSync.Text='Save & Sync to GitHub'
-    $saveSync.Location=New-Object System.Drawing.Point(184,585)
+    $saveSync.Location=New-Object System.Drawing.Point(184,635)
     $saveSync.Size=New-Object System.Drawing.Size(219,40)
     $saveSync.BackColor=[System.Drawing.Color]::FromArgb(38,132,102)
     $saveSync.ForeColor=$WHITE
@@ -2394,7 +2398,7 @@ function Show-ProfileEditor {
 
     $cancel = New-Object System.Windows.Forms.Button
     $cancel.Text='Cancel'
-    $cancel.Location=New-Object System.Drawing.Point(413,585)
+    $cancel.Location=New-Object System.Drawing.Point(413,635)
     $cancel.Size=New-Object System.Drawing.Size(137,40)
     $cancel.DialogResult=[System.Windows.Forms.DialogResult]::Cancel
     $dialog.Controls.Add($cancel)
@@ -2413,6 +2417,8 @@ function Show-ProfileEditor {
         $cfgUrl=$url.Text.Trim()
         if ($cfgUrl) { Assert-ConfigUrl $cfgUrl }
         $p.PointerSpeed=[int]$pointer.Value
+        $p.LogitechDPI=[int]$logitechDpi.Value
+        Assert-LogitechDPI $p.LogitechDPI
         $p.DisableAcceleration= -not $accel.Checked
         $p.Width=[int]$width.Value
         $p.Height=[int]$height.Value
@@ -2425,7 +2431,7 @@ function Show-ProfileEditor {
         # Use the captured shared dictionary, not script: scope in this closure.
         $pendingSyncState[$ProfileName] = $true
         Save-ProfileSettings
-        Write-Log "$ProfileName edited locally: pointer=$($p.PointerSpeed), acceleration enabled=$(-not $p.DisableAcceleration), display=$($p.Width)x$($p.Height)@$($p.RefreshHz), vibrance=$($p.Vibrance)%, sensitivity=$sensValue."
+        Write-Log "$ProfileName edited locally: pointer=$($p.PointerSpeed), acceleration enabled=$(-not $p.DisableAcceleration), display=$($p.Width)x$($p.Height)@$($p.RefreshHz), vibrance=$($p.Vibrance)%, LogitechDPI=$($p.LogitechDPI), sensitivity=$sensValue."
     }.GetNewClosure()
 
     $saveLocal.Add_Click({
@@ -2478,6 +2484,81 @@ function Show-ProfileEditor {
     $dialog.Dispose()
 }
 
+
+# Portable Logitech HID++ CLI, downloaded only from a SHA-256 pinned official release.
+function Assert-LogitechDPI {
+    param([int]$DPI)
+    if($DPI -lt 100 -or $DPI -gt 25600){throw 'Logitech DPI must be 100 to 25600.'}
+}
+function Get-LogihubExecutable {
+    $dir=Join-Path $env:LOCALAPPDATA 'CafeLauncher\logihub'
+    $exe=Join-Path $dir 'logihub.exe'
+    $sha='c876fe0172bb3910c4c6cfee0ef5674ebde4c9d37069b412daffbdf7a2505635'
+    if(Test-Path -LiteralPath $exe -PathType Leaf){
+        if((Get-FileHash -LiteralPath $exe -Algorithm SHA256).Hash.ToLowerInvariant() -eq $sha){return $exe}
+        throw 'Cached logihub.exe checksum mismatch; refusing to execute.'
+    }
+    [void](New-Item -ItemType Directory -Path $dir -Force -ErrorAction Stop)
+    $temp=Join-Path $dir ('logihub-'+[guid]::NewGuid().ToString('N')+'.tmp')
+    try {
+        [Net.ServicePointManager]::SecurityProtocol=[Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+        Invoke-WebRequest -Uri 'https://github.com/cUDGk/better-logihub/releases/download/v0.1.0/logihub.exe' -OutFile $temp -UseBasicParsing -TimeoutSec 30 -ErrorAction Stop
+        if((Get-FileHash -LiteralPath $temp -Algorithm SHA256).Hash.ToLowerInvariant() -ne $sha){throw 'Downloaded logihub.exe checksum mismatch.'}
+        Move-Item -LiteralPath $temp -Destination $exe -ErrorAction Stop
+        Write-Log 'Verified and cached better-logihub v0.1.0.'
+        return $exe
+    } finally {Remove-Item -LiteralPath $temp -Force -ErrorAction SilentlyContinue}
+}
+function Invoke-Logihub {
+    param([string[]]$Arguments)
+    $exe=Get-LogihubExecutable
+    $output=(& $exe @Arguments 2>&1 | Out-String).Trim()
+    $code=$LASTEXITCODE
+    if($output){Write-Log ('logihub '+($Arguments -join ' ')+': '+$output)}
+    if($code -ne 0){throw ('logihub exited '+$code+': '+$output)}
+    return $output
+}
+function Set-LogitechLiveDPI {
+    param([int]$DPI=800)
+    Assert-LogitechDPI $DPI
+    if(@(Get-Process -Name lghub,lghub_agent -ErrorAction SilentlyContinue).Count -gt 0){
+        Write-Log 'G HUB detected; leaving it running. It may override the DPI later.' 'WARN'
+    }
+    [void](Invoke-Logihub -Arguments @('dpi','set',([string]$DPI)))
+    $read=Invoke-Logihub -Arguments @('dpi','get')
+    Write-Log ('Requested Logitech live DPI '+$DPI+'; read-back: '+$read)
+}
+function Set-LogitechOnboardDPI {
+    param([int]$DPI=800)
+    Assert-LogitechDPI $DPI
+    $answer=[System.Windows.Forms.MessageBox]::Show(
+        ('This WRITES mouse onboard memory (survives Deep Freeze/reboot).'+[Environment]::NewLine+
+        'Back up existing memory, set DPI '+$DPI+' and enable onboard mode?'),
+        'Confirm Onboard DPI Write','YesNo','Warning')
+    if($answer -ne [System.Windows.Forms.DialogResult]::Yes){Write-Log 'Onboard DPI cancelled.';return}
+    $folder=Join-Path $env:LOCALAPPDATA 'CafeLauncher\logihub\onboard-backups'
+    [void](New-Item -ItemType Directory -Path $folder -Force -ErrorAction Stop)
+    $backup=Join-Path $folder ('onboard-'+(Get-Date -Format 'yyyyMMdd-HHmmss-fff')+'.bin')
+    [void](Invoke-Logihub -Arguments @('onboard','dump','--out',$backup))
+    if(-not (Test-Path -LiteralPath $backup -PathType Leaf) -or (Get-Item -LiteralPath $backup).Length -le 0){
+        throw 'Onboard backup is missing/empty; no memory changes attempted.'
+    }
+    Write-Log ('Onboard backup: '+$backup)
+    [void](Invoke-Logihub -Arguments @('onboard','set-dpi',([string]$DPI),'--default','1','--shift',([string]$DPI)))
+    [void](Invoke-Logihub -Arguments @('onboard','mode','set','on'))
+    Write-Log ('Onboard DPI '+$DPI+' command completed. Backup: '+$backup)
+}
+function Invoke-LogitechDpiButton {
+    param([switch]$Onboard)
+    try {
+        if($Onboard){Set-LogitechOnboardDPI -DPI 800}
+        else{Set-LogitechLiveDPI -DPI 800}
+    } catch {
+        Write-Log ('Logitech DPI failed: '+$_.Exception.Message) 'ERROR'
+        [void][System.Windows.Forms.MessageBox]::Show($_.Exception.Message,'Logitech DPI','OK','Warning')
+    }
+}
+
 function Invoke-GamingProfile {
     param([Parameter(Mandatory=$true)][string]$ProfileName)
     if (-not $script:GamingProfiles.Contains($ProfileName)) {
@@ -2510,6 +2591,9 @@ function Invoke-GamingProfile {
     if ($profile.LaunchApps) {
         $steps += @{ Name = 'Launch All (including Mouse Pointer Options)'; Action = { Launch-All } }
     }
+    # Live DPI LAST: Launch All may start Logitech G HUB, which can otherwise
+    # overwrite a DPI set early in the profile routine. Never write onboard here.
+    $steps += @{ Name = 'Logitech live DPI'; Action = { Set-LogitechLiveDPI -DPI ([int]$profile.LogitechDPI) } }
     foreach ($step in $steps) {
         Write-Log ("$ProfileName step started: " + $step.Name)
         try {
@@ -2611,7 +2695,7 @@ function Invoke-FabModeFull { Invoke-GamingProfile -ProfileName 'FabMode' }
 # Main window
 $form = New-Object System.Windows.Forms.Form
 $form.Text = "Cafe Launcher"
-$form.Size = New-Object System.Drawing.Size(800,950)
+$form.Size = New-Object System.Drawing.Size(800,1050)
 $form.StartPosition = "CenterScreen"
 $form.FormBorderStyle = "FixedSingle"
 $form.MaximizeBox = $false
@@ -2785,11 +2869,13 @@ New-Tile "Install CS2 fab.cfg" 14 {
 New-Tile "Detect PC" 15 { Show-PCDiagnostics }
 New-Tile "Check for Updates" 16 { Check-CafeLauncherUpdates -Manual }
 New-Tile "Exit" 17 { $form.Close() }
+New-Tile "Set DPI 800 (Live)" 18 { Invoke-LogitechDpiButton }
+New-Tile "Set DPI 800 (Onboard)" 19 { Invoke-LogitechDpiButton -Onboard }
 
 # Live diagnostic log panel (visible only while the launcher is open)
 $logTitle = New-Object System.Windows.Forms.Label
 $logTitle.Text = "LIVE LOGS  |  Errors and button activity"
-$logTitle.Location = New-Object System.Drawing.Point(28,663)
+$logTitle.Location = New-Object System.Drawing.Point(28,755)
 $logTitle.Size = New-Object System.Drawing.Size(500,22)
 $logTitle.Font = New-Object System.Drawing.Font("Segoe UI",9,[System.Drawing.FontStyle]::Bold)
 $logTitle.ForeColor = $WHITE
@@ -2797,7 +2883,7 @@ $form.Controls.Add($logTitle)
 
 $clearLogs = New-Object System.Windows.Forms.Button
 $clearLogs.Text = "Clear Logs"
-$clearLogs.Location = New-Object System.Drawing.Point(670,659)
+$clearLogs.Location = New-Object System.Drawing.Point(670,751)
 $clearLogs.Size = New-Object System.Drawing.Size(100,27)
 $clearLogs.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
 $clearLogs.FlatAppearance.BorderSize = 0
@@ -2811,7 +2897,7 @@ $clearLogs.Add_Click({
 $form.Controls.Add($clearLogs)
 
 $script:LogBox = New-Object System.Windows.Forms.TextBox
-$script:LogBox.Location = New-Object System.Drawing.Point(28,690)
+$script:LogBox.Location = New-Object System.Drawing.Point(28,782)
 $script:LogBox.Size = New-Object System.Drawing.Size(742,168)
 $script:LogBox.Multiline = $true
 $script:LogBox.ReadOnly = $true
@@ -2831,7 +2917,7 @@ Write-Log "Launcher ready. Log file: $script:LogPath"
 # Footer
 $footer = New-Object System.Windows.Forms.Label
 $footer.Text = "GAMING CAFE  |  WINDOWS TOOLKIT  |  LOG: %TEMP%\CafeLauncher.log"
-$footer.Location = New-Object System.Drawing.Point(28,878)
+$footer.Location = New-Object System.Drawing.Point(28,970)
 $footer.Size = New-Object System.Drawing.Size(740,22)
 $footer.Font = New-Object System.Drawing.Font("Segoe UI",8)
 $footer.ForeColor = $MUTED
