@@ -158,24 +158,29 @@ if($grid.ColumnCount -ne 2 -or $n1.Value -ne 1920 -or $n2.Value -ne 1080){
     throw 'Tabbed editor layout or numeric values were not built correctly.'
 }
 $page.Dispose()
-$dashboardSource=$psSource.Substring($psSource.IndexOf('# Modern dashboard preview.'))
+$dashboardSource=$psSource.Substring($psSource.IndexOf('# Modern CafeLauncher dashboard.'))
 if($dashboardSource -notmatch 'New-Object System.Windows.Forms.TabControl' -or
    $dashboardSource -notmatch 'Update-SelectedProfileCard' -or
    $dashboardSource -notmatch 'Show Logs' -or
    $dashboardSource -notmatch 'Tools & Apps'){
     throw 'Main dashboard, profile summary, tools, or collapsible logs are missing.'
 }
-if($psSource -notmatch 'CAFE_PREVIEW_BRANCH=ui/dashboard-tabbed-editor-preview' -or
-   $definitions['Check-CafeLauncherUpdates'] -notmatch 'if\(\$script:PreviewBranch\)'){
-    throw 'Preview builds must not auto-update to production main.'
+if($psSource -match 'CAFE_PREVIEW_BRANCH|\$script:PreviewBranch|UI PREVIEW' -or
+   $definitions['Check-CafeLauncherUpdates'] -notmatch 'GitHub main release is' -or
+   $definitions['Check-CafeLauncherUpdates'] -notmatch 'CafeLauncher Update Available'){
+    throw 'Production dashboard must use normal verified main-branch updates without preview restrictions.'
+}
+if($editorSource -notmatch 'Sync-ProfileToGitHub -ProfileName \$ProfileName -Token \$token' -or
+   $editorSource -notmatch 'Confirm GitHub sync'){
+    throw 'Production editor must retain confirmed JSON and CFG GitHub synchronization.'
 }
 
-# Construct the preview main dashboard in memory. No GUI is shown and none
+# Construct the production dashboard in memory. No GUI is shown and none
 # of the profile / tool button actions are clicked, so no devices are changed.
-$dashboardStart=$psSource.IndexOf('# Modern dashboard preview.')
+$dashboardStart=$psSource.IndexOf('# Modern CafeLauncher dashboard.')
 $dashboardEnd=$psSource.IndexOf('# On first display, automatically inventory the machine',$dashboardStart)
 if($dashboardStart -lt 0 -or $dashboardEnd -le $dashboardStart){
-    throw 'Preview dashboard code region not found.'
+    throw 'Production dashboard code region not found.'
 }
 $BG=[System.Drawing.Color]::FromArgb(20,23,30)
 $PANEL=[System.Drawing.Color]::FromArgb(31,36,46)
@@ -185,7 +190,7 @@ $script:GamingProfiles=[ordered]@{}
 foreach($name in @('FabMode','ArliMode','BrileMode','ArmlMode','OliMode')){
     $script:GamingProfiles[$name]=@{LogitechDPI=800;PointerSpeed=10;Width=1920;Height=1080;RefreshHz=360;ConfigFile=($name.ToLower()+'.cfg')}
 }
-$script:LogPath=Join-Path $env:TEMP ('CafeLauncher-preview-CI-'+[Guid]::NewGuid().ToString('N')+'.log')
+$script:LogPath=Join-Path $env:TEMP ('CafeLauncher-dashboard-CI-'+[Guid]::NewGuid().ToString('N')+'.log')
 try {
     Invoke-Expression $psSource.Substring($dashboardStart,$dashboardEnd-$dashboardStart)
     if($tabs.TabPages.Count -ne 2 -or $profilesGrid.Controls.Count -ne 6){
