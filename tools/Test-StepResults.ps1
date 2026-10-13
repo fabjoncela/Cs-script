@@ -35,9 +35,10 @@ Set-StepResult -Run FabMode -Step DPI -Status SUCCESS
 Write-RunSummary -Run FabMode
 $statuses=@{}
 foreach($entry in $script:StepResults){$statuses[$entry.Step]=$entry.Status}
-if($statuses.Mouse -ne 'SUCCESS' -or $statuses.NVIDIA -ne 'SKIPPED' -or $statuses.Config -ne 'FAILED' -or $statuses.DPI -ne 'SUCCESS'){throw 'Incorrect status'}
+if($statuses.Mouse -ne 'SUCCESS' -or $statuses.NVIDIA -ne 'PARTIAL' -or $statuses.Config -ne 'FAILED' -or $statuses.DPI -ne 'SUCCESS'){throw 'Incorrect status'}
 if($script:StepResults.Count -ne 4){throw 'Pending result not replaced'}
-if(($script:messages -join ' ') -notmatch '1 FAILED'){throw 'Summary missing failure'}
+if(($script:messages -join ' ') -notmatch '1 PARTIAL, 0 SKIPPED, 1 FAILED'){throw 'Summary missing failure'}
+if(($script:messages -join ' ') -match '\[RESULT\] RESULT '){throw 'Duplicate RESULT prefix'}
 if($functions['Invoke-GamingProfile'] -notmatch 'Start-StepScope' -or $functions['Invoke-GamingProfile'] -notmatch 'PENDING'){throw 'Profile not instrumented'}
 if($functions['Invoke-GraphicsOnly'] -notmatch 'Complete-StepScope'){throw 'Graphics not instrumented'}
-Write-Host 'PASS: status tracking, errors, skips, summary, pending resolution, profile and graphics instrumentation.'
+Write-Host 'PASS: status tracking, errors, partial warnings, summary, pending resolution, profile and graphics instrumentation.'
