@@ -114,30 +114,59 @@ if($script:TestGHubCalls -ne 0){throw 'Profile launch unexpectedly starts G HUB.
 Launch-All
 if($script:TestGHubCalls -ne 1){throw 'Standalone Launch All must still open G HUB.'}
 
-# Opaque WinForms label backgrounds must not overlap the next input/label.
+# Preview UI: fixed-coordinate label overlays have been replaced by isolated
+# table cells on distinct tabs, so labels cannot cover neighboring inputs.
 $editorSource=$definitions['Show-ProfileEditor']
-function Get-EditorLabelBounds {
-    param([string]$Caption)
-    $pattern='New-EditorLabel \$dialog '''+[regex]::Escape($Caption)+''' (\d+) (\d+) (\d+)'
-    $match=[regex]::Match($editorSource,$pattern)
-    if(-not $match.Success){throw ('Missing profile editor label: '+$Caption)}
-    return [pscustomobject]@{X=[int]$match.Groups[1].Value;Y=[int]$match.Groups[2].Value;Width=[int]$match.Groups[3].Value}
+foreach($tabLabel in @('Mouse','NVIDIA / Display','CS2 / Apps')){
+    if(-not $editorSource.Contains("'"+$tabLabel+"'")){
+        throw ('Profile editor tab missing: '+$tabLabel)
+    }
 }
-$widthLabel=Get-EditorLabelBounds -Caption 'Resolution width'
-$heightLabel=Get-EditorLabelBounds -Caption 'Resolution height'
-$refreshLabel=Get-EditorLabelBounds -Caption 'Refresh rate (Hz)'
-$dpiLabel=Get-EditorLabelBounds -Caption 'Logitech DPI (live, per profile)'
-if($widthLabel.Y -ne $heightLabel.Y -or $heightLabel.Y -ne $refreshLabel.Y){
-    throw 'Resolution labels must stay on a common row.'
+foreach($field in @('Resolution width','Resolution height','Refresh rate (Hz)',
+    'Logitech DPI (live, per profile)','GitHub .cfg URL')){
+    if(-not $editorSource.Contains($field)){throw ('Editor field missing: '+$field)}
 }
-if(($widthLabel.X+$widthLabel.Width) -ge $heightLabel.X -or
-   ($heightLabel.X+$heightLabel.Width) -ge $refreshLabel.X){
-    throw 'Resolution labels overlap, hiding first letters of their neighbors.'
+if($editorSource -notmatch 'New-EditorTabGrid' -or
+   $editorSource -notmatch 'New-EditorTabNumber' -or
+   $editorSource -notmatch 'SetColumnSpan' -or
+   $editorSource -notmatch 'New-EditorTabField'){
+    throw 'Tab layout must use separate responsive table-layout field cells.'
 }
-$dpiInput=[regex]::Match($editorSource,'\$logitechDpi = New-EditorNumber \$dialog (\d+) (\d+)')
-if(-not $dpiInput.Success){throw 'Profile Logitech DPI numeric input not found.'}
-if(($dpiLabel.X+$dpiLabel.Width) -ge [int]$dpiInput.Groups[1].Value){
-    throw 'Logitech DPI label overlaps the numeric input.'
+if($editorSource -match 'New-EditorLabel \$dialog ''Resolution (?:width|height)'''){
+    throw 'Old overlapping absolute-positioned resolution labels are still present.'
+}
+if($editorSource -notmatch '\$saveEditorValues = \{' -or
+   $editorSource -notmatch 'Save-ProfileSettings' -or
+   $editorSource -notmatch 'Sync-ProfileToGitHub'){
+    throw 'Tab redesign must preserve existing profile Save Locally and GitHub Sync.'
+}
+foreach($fn in @('New-EditorTabGrid','Add-EditorTabField','New-EditorTabNumber','Add-EditorTabWide')){
+    if(-not $definitions.ContainsKey($fn)){throw ('Tab layout helper missing: '+$fn)}
+}
+# Construct the field layout without opening CafeLauncher or touching devices.
+Add-Type -AssemblyName System.Windows.Forms
+foreach($fn in @('New-EditorTabGrid','Add-EditorTabField','New-EditorTabNumber','Add-EditorTabWide')){
+    Invoke-Expression $definitions[$fn]
+}
+$page=New-Object System.Windows.Forms.TabPage
+$page.Size=New-Object System.Drawing.Size(660,330)
+$grid=New-EditorTabGrid -Page $page -Rows 2
+$n1=New-EditorTabNumber -Grid $grid -Title 'Resolution width' -Column 0 -Row 0 -Min 640 -Max 7680 -Value 1920
+$n2=New-EditorTabNumber -Grid $grid -Title 'Resolution height' -Column 1 -Row 0 -Min 480 -Max 4320 -Value 1080
+if($grid.ColumnCount -ne 2 -or $n1.Value -ne 1920 -or $n2.Value -ne 1080){
+    throw 'Tabbed editor layout or numeric values were not built correctly.'
+}
+$page.Dispose()
+$dashboardSource=$psSource.Substring($psSource.IndexOf('# Modern dashboard preview.'))
+if($dashboardSource -notmatch 'New-Object System.Windows.Forms.TabControl' -or
+   $dashboardSource -notmatch 'Update-SelectedProfileCard' -or
+   $dashboardSource -notmatch 'Show Logs' -or
+   $dashboardSource -notmatch 'Tools & Apps'){
+    throw 'Main dashboard, profile summary, tools, or collapsible logs are missing.'
+}
+if($psSource -notmatch 'CAFE_PREVIEW_BRANCH=ui/dashboard-tabbed-editor-preview' -or
+   $definitions['Check-CafeLauncherUpdates'] -notmatch 'if\(\$script:PreviewBranch\)'){
+    throw 'Preview builds must not auto-update to production main.'
 }
 
 # Sanity check: this test must reject the precise interpolation bug that broke
