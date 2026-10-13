@@ -2570,7 +2570,6 @@ function Invoke-GamingProfile {
     Write-Log "$ProfileName full routine started: mouse, NVIDIA, CS2 config, applications."
 
     $steps = @(
-        @{ Name = 'Logitech live DPI'; Action = { Set-LogitechLiveDPI -DPI ([int]$profile.LogitechDPI) } }
         @{ Name = 'Windows mouse speed/acceleration'; Action = {
             Apply-ProfileMouse -ProfileName $ProfileName -PointerSpeed ([int]$profile.PointerSpeed) -DisableAcceleration ([bool]$profile.DisableAcceleration) -SkipPointerOptions
         } }
@@ -2592,6 +2591,9 @@ function Invoke-GamingProfile {
     if ($profile.LaunchApps) {
         $steps += @{ Name = 'Launch All (including Mouse Pointer Options)'; Action = { Launch-All } }
     }
+    # Live DPI LAST: Launch All may start Logitech G HUB, which can otherwise
+    # overwrite a DPI set early in the profile routine. Never write onboard here.
+    $steps += @{ Name = 'Logitech live DPI'; Action = { Set-LogitechLiveDPI -DPI ([int]$profile.LogitechDPI) } }
     foreach ($step in $steps) {
         Write-Log ("$ProfileName step started: " + $step.Name)
         try {
