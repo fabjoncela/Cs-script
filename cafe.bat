@@ -4,7 +4,7 @@ start "" powershell.exe -NoProfile -ExecutionPolicy Bypass -STA -WindowStyle Hid
 exit /b
 
 # POWERSHELL_GUI
-# CAFE_RELEASE=2026.10.13.2
+# CAFE_RELEASE=2026.10.13.3
 
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
@@ -1572,6 +1572,13 @@ function Install-AtCfg {
                 if (-not $CloudPreferred) { throw }
                 Write-Log "Could not download latest ${CfgName}: $($_.Exception.Message)" 'WARN'
                 $sourcePath = Get-FriendConfigFallback -CfgName $CfgName -CfgDirectory $cfgDirectory
+                if (-not $sourcePath -and $CfgName -eq 'fab.cfg') {
+                    # FabMode has the original at.cfg embedded for first-run offline use.
+                    # The installed filename is still fab.cfg, not at.cfg.
+                    [IO.File]::WriteAllBytes($downloaded, [Convert]::FromBase64String($script:EmbeddedAtCfgBase64))
+                    $sourcePath = $downloaded
+                    Write-Log 'GitHub unavailable; using embedded at.cfg content as offline fab.cfg fallback.' 'WARN'
+                }
                 if (-not $sourcePath) {
                     throw "GitHub download unavailable and no cached/local $CfgName exists. Skipping this config; other profile steps can continue."
                 }
@@ -1918,11 +1925,12 @@ function Launch-All {
 # ==============================================================
 $script:GithubRepo = 'fabjoncela/Cs-script'
 $script:GithubBranch = 'main'
+$script:FabCfgCloudUrl = 'https://raw.githubusercontent.com/fabjoncela/Cs-script/main/fab.cfg'
 $script:GamingProfiles = [ordered]@{
     FabMode = @{
         PointerSpeed=10; DisableAcceleration=$true; ApplyNvidia=$true
         Width=1920; Height=1080; RefreshHz=360; Vibrance=75
-        CS2Sensitivity=''; ConfigFile='at.cfg'; CfgDownloadUrl=''; LaunchApps=$true
+        CS2Sensitivity=''; ConfigFile='fab.cfg'; CfgDownloadUrl=$script:FabCfgCloudUrl; LaunchApps=$true
     }
     ArliMode = @{
         PointerSpeed=10; DisableAcceleration=$true; ApplyNvidia=$true
@@ -1968,7 +1976,14 @@ function Import-ProfileValues {
                     if ($value -and $value -notmatch '^(?:[0-9]+(?:\.[0-9]+)?)$') { throw 'invalid sensitivity' }
                     if ($value -and ([double]::Parse($value,[Globalization.CultureInfo]::InvariantCulture) -le 0 -or [double]::Parse($value,[Globalization.CultureInfo]::InvariantCulture) -gt 20)) { throw 'range' }
                 }
-                'CfgDownloadUrl' { $value=[string]$value; if ($value) { Assert-ConfigUrl $value } }
+                'CfgDownloadUrl' {
+                    $value = [string]$value
+                    if ($ProfileName -eq 'FabMode' -and [string]::IsNullOrWhiteSpace($value)) {
+                        $value = $script:FabCfgCloudUrl
+                        Write-Log 'Migrated old FabMode empty CFG URL to GitHub fab.cfg.'
+                    }
+                    if ($value) { Assert-ConfigUrl $value }
+                }
                 default {
                     if ($setting -in @('DisableAcceleration','ApplyNvidia','LaunchApps')) {
                         if ($value -isnot [bool]) { throw 'boolean expected' }
@@ -2016,10 +2031,19 @@ function Export-ProfileValues {
 }
 
 function Save-ProfileSettings {
+    # Build a full independent snapshot before writing to disk. Do NOT index
+    # $settings[$name] immediately after assignment: in some Windows PowerShell
+    # hosts a missing/empty pipeline output caused a null-array exception here.
     $settings = [ordered]@{}
     foreach ($name in @($script:GamingProfiles.Keys)) {
-        $settings[$name] = Export-ProfileValues -ProfileName $name
-        $settings[$name]['SyncPending'] = [bool]$script:PendingSync[$name]
+        $values = Export-ProfileValues -ProfileName $name
+        if ($null -eq $values -or $values -isnot [System.Collections.IDictionary]) {
+            throw "Cannot save $name: the profile exporter did not return a settings dictionary."
+        }
+        $snapshot = [ordered]@{}
+        foreach ($key in @($values.Keys)) { $snapshot[$key] = $values[$key] }
+        $snapshot['SyncPending'] = [bool]$script:PendingSync[$name]
+        $settings[$name] = $snapshot
     }
     $dir = Split-Path -Parent $script:ProfileSettingsPath
     if (-not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Path $dir -Force -ErrorAction Stop | Out-Null }
@@ -2154,6 +2178,9 @@ function Sync-ProfileToGitHub {
 
     $payload = [ordered]@{ SchemaVersion=1; ProfileName=$ProfileName }
     $values = Export-ProfileValues -ProfileName $ProfileName
+    if ($null -eq $values -or $values -isnot [System.Collections.IDictionary]) {
+        throw "Cannot sync $ProfileName: the profile exporter returned no valid settings."
+    }
     foreach ($key in @($values.Keys)) { $payload[$key] = $values[$key] }
     $json = $payload | ConvertTo-Json -Depth 5
     $body = @{
@@ -2254,7 +2281,7 @@ function Show-ProfileEditor {
     $cfgFile.Size=New-Object System.Drawing.Size(530,29)
     $dialog.Controls.Add($cfgFile)
 
-    New-EditorLabel $dialog 'GitHub .cfg URL (blank = bundled/local config)' 20 355 540 | Out-Null
+    New-EditorLabel $dialog 'GitHub .cfg URL (FabMode default: fab.cfg)' 20 355 540 | Out-Null
     $url = New-Object System.Windows.Forms.TextBox
     $url.Text=[string]$p.CfgDownloadUrl
     $url.Location=New-Object System.Drawing.Point(20,380)
@@ -2352,7 +2379,8 @@ function Show-ProfileEditor {
             $dialog.DialogResult=[System.Windows.Forms.DialogResult]::OK
             $dialog.Close()
         } catch {
-            [System.Windows.Forms.MessageBox]::Show("Could not save ${ProfileName}:`n$($_.Exception.Message)", 'Profile Editor', 'OK', 'Error') | Out-Null
+            Write-Log "Save Locally failed for ${ProfileName}: $($_.Exception.Message); $($_.ScriptStackTrace)" 'ERROR'
+            [System.Windows.Forms.MessageBox]::Show("Could not save ${ProfileName}:`n$($_.Exception.Message)`n`nSee LIVE LOGS for the failing line.", 'Profile Editor', 'OK', 'Error') | Out-Null
         }
     }.GetNewClosure())
 
@@ -2383,7 +2411,7 @@ function Show-ProfileEditor {
                 }
             }
         } catch {
-            Write-Log "$ProfileName GitHub sync failed; local settings kept. $($_.Exception.Message)" 'WARN'
+            Write-Log "$ProfileName GitHub sync failed; local settings kept. $($_.Exception.Message); $($_.ScriptStackTrace)" 'WARN'
             $status.Text='Cloud sync failed; settings are saved locally. Retry Save & Sync.'
             $status.ForeColor=[System.Drawing.Color]::FromArgb(255,190,105)
             [System.Windows.Forms.MessageBox]::Show("$ProfileName saved locally, but GitHub sync failed:`n$($_.Exception.Message)", 'GitHub sync', 'OK', 'Warning') | Out-Null
@@ -2416,10 +2444,10 @@ function Invoke-GamingProfile {
     if (-not [string]::IsNullOrWhiteSpace($profileCfgName)) {
         $profileCfgUrl = [string]$profile.CfgDownloadUrl
         if ($ProfileName -eq 'FabMode' -and [string]::IsNullOrWhiteSpace($profileCfgUrl)) {
-            $profileCfgUrl = $script:AtCfgDownloadUrl
+            $profileCfgUrl = $script:FabCfgCloudUrl
         }
         $steps += @{ Name = "Install CS2 $profileCfgName"; Action = {
-            Install-AtCfg -Silent -CfgName $profileCfgName -DownloadUrl $profileCfgUrl -CloudPreferred:($ProfileName -ne 'FabMode') -CS2Sensitivity ([string]$profile.CS2Sensitivity)
+            Install-AtCfg -Silent -CfgName $profileCfgName -DownloadUrl $profileCfgUrl -CloudPreferred:([bool]$profileCfgUrl) -CS2Sensitivity ([string]$profile.CS2Sensitivity)
         } }
     }
     if ($profile.LaunchApps) {
@@ -2563,7 +2591,7 @@ New-Tile "OliMode" 10 { Invoke-GamingProfile -ProfileName 'OliMode' } -Primary -
 New-Tile "Mouse Pointer Options" 11 { Open-MousePointerOptions }
 New-Tile "NVIDIA Control Panel" 12 { Open-NvidiaControlPanel }
 New-Tile "Apply NVIDIA Settings" 13 { Apply-NvidiaGamingSettings } -Primary
-New-Tile "Install CS2 at.cfg" 14 { Install-AtCfg } -Primary
+New-Tile "Install CS2 fab.cfg" 14 { Install-AtCfg -CfgName 'fab.cfg' -DownloadUrl $script:FabCfgCloudUrl -CloudPreferred } -Primary
 New-Tile "Detect PC" 15 { Show-PCDiagnostics }
 New-Tile "Check for Updates" 16 { Check-CafeLauncherUpdates -Manual }
 New-Tile "Exit" 17 { $form.Close() }
