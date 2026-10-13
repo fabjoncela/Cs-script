@@ -50,12 +50,12 @@ $script:StepScopeError=$false
 $script:StepScopeWarning=$false
 $script:ActiveRunName=''
 function Set-StepResult {
-    param([string]$Run,[string]$Step,[ValidateSet('SUCCESS','SKIPPED','FAILED','PENDING')][string]$Status,[string]$Detail='')
+    param([string]$Run,[string]$Step,[ValidateSet('SUCCESS','PARTIAL','SKIPPED','FAILED','PENDING')][string]$Status,[string]$Detail='')
     foreach($old in @($script:StepResults | Where-Object {$_.Run -eq $Run -and $_.Step -eq $Step})){
         [void]$script:StepResults.Remove($old)
     }
     $script:StepResults.Add([pscustomobject]@{Run=$Run;Step=$Step;Status=$Status;Detail=$Detail})
-    Write-Log ('RESULT '+$Run+' | '+$Step+' | '+$Status+$(if($Detail){' | '+$Detail}else{''})) 'RESULT'
+    Write-Log ($Run+' | '+$Step+' | '+$Status+$(if($Detail){' | '+$Detail}else{''})) 'RESULT'
 }
 function Start-StepScope {
     param([string]$Run,[string]$Step)
@@ -70,17 +70,17 @@ function Complete-StepScope {
     $errorSeen=$script:StepScopeError
     $warnSeen=$script:StepScopeWarning
     $script:StepScope=$null
-    $state=if($errorSeen){'FAILED'}elseif($warnSeen){'SKIPPED'}else{'SUCCESS'}
+    $state=if($errorSeen){'FAILED'}elseif($warnSeen){'PARTIAL'}else{'SUCCESS'}
     if($errorSeen){$Detail='One or more errors reported. '+$Detail}
-    elseif($warnSeen){$Detail='One or more actions were skipped or warned. '+$Detail}
+    elseif($warnSeen){$Detail='One or more warnings were reported; step may be partially applied. '+$Detail}
     Set-StepResult -Run $scope.Run -Step $scope.Step -Status $state -Detail $Detail
 }
 function Write-RunSummary {
     param([string]$Run)
     $items=@($script:StepResults | Where-Object {$_.Run -eq $Run})
     $counts=@{}
-    foreach($state in @('SUCCESS','SKIPPED','FAILED','PENDING')){$counts[$state]=@($items | Where-Object {$_.Status -eq $state}).Count}
-    Write-Log ('SUMMARY '+$Run+': '+$counts.SUCCESS+' SUCCESS, '+$counts.SKIPPED+' SKIPPED, '+$counts.FAILED+' FAILED, '+$counts.PENDING+' PENDING') 'RESULT'
+    foreach($state in @('SUCCESS','PARTIAL','SKIPPED','FAILED','PENDING')){$counts[$state]=@($items | Where-Object {$_.Status -eq $state}).Count}
+    Write-Log ($Run+': '+$counts.SUCCESS+' SUCCESS, '+$counts.PARTIAL+' PARTIAL, '+$counts.SKIPPED+' SKIPPED, '+$counts.FAILED+' FAILED, '+$counts.PENDING+' PENDING') 'SUMMARY'
 }
 
 Write-Log "Launcher starting."
@@ -2661,16 +2661,19 @@ try {
                 if($null -ne $script:LogihubRequestedDPI){
                     $dpi=[int]$script:LogihubRequestedDPI
                     $script:LogihubRequestedDPI=$null
-                    $run=$script:ActiveRunName
+                    $run=$script:LogihubRequestedRun
+                    if(-not $run){$run='Manual DPI'}
                     Start-StepScope -Run $run -Step 'Logitech live DPI'
                     try{Set-LogitechLiveDPI -DPI $dpi}catch{Write-Log ('Delayed Logitech DPI failed: '+$_.Exception.Message) 'ERROR'}
-                    finally{Complete-StepScope -Detail 'Async DPI command finished; check read-back.';if($run){Write-RunSummary -Run $run}}
+                    finally{Complete-StepScope -Detail 'Async DPI command finished; review read-back verification.';Write-RunSummary -Run $run}
                 }
             } catch {
                 Write-Log $_.Exception.Message 'ERROR'
-                if($script:ActiveRunName){
-                    Set-StepResult -Run $script:ActiveRunName -Step 'Logitech live DPI' -Status FAILED -Detail $_.Exception.Message
-                    Write-RunSummary -Run $script:ActiveRunName
+                if($null -ne $script:LogihubRequestedDPI){
+                    $run=$script:LogihubRequestedRun
+                    if(-not $run){$run='Manual DPI'}
+                    Set-StepResult -Run $run -Step 'Logitech live DPI' -Status FAILED -Detail $_.Exception.Message
+                    Write-RunSummary -Run $run
                 }
                 $script:LogihubRequestedDPI=$null
             } finally {
@@ -2687,14 +2690,19 @@ function Request-LogitechLiveDPI {
     Assert-LogitechDPI $DPI
     # Latest-click-wins: a later profile changes the target DPI, not the download.
     $script:LogihubRequestedDPI=$DPI
+    $script:LogihubRequestedRun=if($script:StepScope){$script:StepScope.Run}else{'Manual DPI'}
     if(Test-Path -LiteralPath $script:LogihubExe -PathType Leaf){
-        try {
-            [void](Get-LogihubExecutable)
-            $dpi=[int]$script:LogihubRequestedDPI
+        try {[void](Get-LogihubExecutable)}
+        catch {
             $script:LogihubRequestedDPI=$null
-            Set-LogitechLiveDPI -DPI $dpi
-            return
-        } catch {Write-Log ('Logitech helper cache invalid: '+$_.Exception.Message) 'ERROR';$script:LogihubRequestedDPI=$null;return}
+            throw ('Logitech helper integrity or cache verification failed: '+$_.Exception.Message)
+        }
+        $dpi=[int]$script:LogihubRequestedDPI
+        $script:LogihubRequestedDPI=$null
+        Write-Log 'Logitech helper cache verified successfully.'
+        # Device discovery and DPI errors must propagate separately to the step result.
+        Set-LogitechLiveDPI -DPI $dpi
+        return
     }
     if($script:LogihubDownloadProcess -and -not $script:LogihubDownloadProcess.HasExited){
         Write-Log ('Logitech download pending; latest requested live DPI = '+$DPI)
@@ -2755,7 +2763,17 @@ function Set-LogitechLiveDPI {
     $target=Get-SelectedSuperlight
     [void](Invoke-Logihub -Arguments @('dpi','set',([string]$DPI),'--device',([string]$target.Index)))
     $read=Invoke-Logihub -Arguments @('dpi','get','--device',([string]$target.Index))
-    Write-Log ('Requested Logitech live DPI '+$DPI+'; read-back: '+$read)
+    $deviceIndex=[int]$target.Index
+    $readValue=$null
+    foreach($line in @($read -split '\r?\n' | Where-Object {$_ -match '\S'})){
+        if($line -match ('^\s*'+$deviceIndex+'\s+.+?\s+(\d+)\s*$')){
+            $readValue=[int]$Matches[1]
+            break
+        }
+    }
+    if($null -eq $readValue){throw ('Logitech DPI read-back cannot be parsed for device '+$deviceIndex+': '+$read)}
+    if($readValue -ne $DPI){throw ('Logitech DPI verification failed: requested '+$DPI+' but mouse reports '+$readValue)}
+    Write-Log ('Logitech live DPI verified: requested '+$DPI+'; read-back '+$readValue+' (device '+$deviceIndex+').')
 }
 function Set-LogitechOnboardDPI {
     param([int]$DPI=800)
