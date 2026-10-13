@@ -4,7 +4,7 @@ start "" powershell.exe -NoProfile -ExecutionPolicy Bypass -STA -WindowStyle Hid
 exit /b
 
 # POWERSHELL_GUI
-# CAFE_RELEASE=2026.10.13.20
+# CAFE_RELEASE=2026.10.13.21
 
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
@@ -2050,6 +2050,7 @@ function Check-CafeLauncherUpdates {
 }
 
 function Launch-All {
+    param([switch]$SkipGHub)
     Start-DetectedSteam
 
     Launch-App -Name "FACEIT Anti-Cheat" -Paths @(
@@ -2059,7 +2060,11 @@ function Launch-All {
 
     Open-FaceitMatchmaking
     Open-Spotify
-    Open-GHub
+    if(-not $SkipGHub){
+        Open-GHub
+    }else{
+        Write-Log 'Profile app launch: skipping Logitech G HUB; mouse DPI is handled by better-logihub.'
+    }
     Write-Log "Launch All: opening Mouse Pointer Options."
     Open-MousePointerOptions
 }
@@ -2416,9 +2421,9 @@ function Show-ProfileEditor {
     $accel.Size=New-Object System.Drawing.Size(500,27)
     $dialog.Controls.Add($accel)
 
-    New-EditorLabel $dialog 'Resolution width' 20 122 210 | Out-Null
-    New-EditorLabel $dialog 'Resolution height' 205 122 210 | Out-Null
-    New-EditorLabel $dialog 'Refresh rate (Hz)' 390 122 190 | Out-Null
+    New-EditorLabel $dialog 'Resolution width' 20 122 160 | Out-Null
+    New-EditorLabel $dialog 'Resolution height' 205 122 160 | Out-Null
+    New-EditorLabel $dialog 'Refresh rate (Hz)' 390 122 160 | Out-Null
     $width = New-EditorNumber $dialog 20 147 640 7680 ([int]$p.Width) 165
     $height = New-EditorNumber $dialog 205 147 480 4320 ([int]$p.Height) 165
     $hz = New-EditorNumber $dialog 390 147 30 600 ([int]$p.RefreshHz) 160
@@ -2453,14 +2458,14 @@ function Show-ProfileEditor {
     $dialog.Controls.Add($nv)
 
     $apps = New-Object System.Windows.Forms.CheckBox
-    $apps.Text='Launch Steam, FACEIT, Spotify, G HUB, Mouse Options'
+    $apps.Text='Launch Steam, FACEIT, Spotify, Mouse Options (no G HUB)'
     $apps.Checked=[bool]$p.LaunchApps
     $apps.Location=New-Object System.Drawing.Point(20,461)
     $apps.Size=New-Object System.Drawing.Size(550,26)
     $dialog.Controls.Add($apps)
 
     $dialog.ClientSize = New-Object System.Drawing.Size(590,725)
-    New-EditorLabel $dialog 'Logitech DPI (live, per profile)' 20 495 400 | Out-Null
+    New-EditorLabel $dialog 'Logitech DPI (live, per profile)' 20 495 330 | Out-Null
     $logitechDpi = New-EditorNumber $dialog 405 493 100 25600 ([int]$p.LogitechDPI) 145
     $logitechDpi.Increment = 50
     $tip = New-EditorLabel $dialog 'Local edits stay on this PC. GitHub sync shares ALL profile settings; CFG binds remain separate.' 20 538 550
@@ -2861,10 +2866,10 @@ function Invoke-GamingProfile {
         } }
     }
     if ($profile.LaunchApps) {
-        $steps += @{ Name = 'Launch All (including Mouse Pointer Options)'; Action = { Launch-All } }
+        $steps += @{ Name = 'Launch apps (without G HUB; including Mouse Pointer Options)'; Action = { Launch-All -SkipGHub } }
     }
-    # Live DPI LAST: Launch All may start Logitech G HUB, which can otherwise
-    # overwrite a DPI set early in the profile routine. Never write onboard here.
+    # Profile launch never starts G HUB, which can overwrite the requested mouse DPI.
+    # Apply live DPI last via our better-logihub helper. Never write onboard here.
     $steps += @{ Name = 'Logitech live DPI'; Action = { Request-LogitechLiveDPI -DPI ([int]$profile.LogitechDPI) } }
     foreach ($step in $steps) {
         Write-Log ("$ProfileName step started: " + $step.Name)

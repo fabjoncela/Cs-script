@@ -43,7 +43,7 @@ if ($versions.Count -ne 1) { throw 'Expected exactly one valid # CAFE_RELEASE=YY
 $psSource = [string]::Join([Environment]::NewLine, [string[]]$lines[($marker + 1)..($lines.Length - 1)])
 $parseTokens = $null
 $parseErrors = $null
-[void][System.Management.Automation.Language.Parser]::ParseInput(
+$psAst=[System.Management.Automation.Language.Parser]::ParseInput(
     $psSource, [ref]$parseTokens, [ref]$parseErrors
 )
 if (@($parseErrors).Count -gt 0) {
@@ -76,6 +76,68 @@ if($psSource -notmatch 'function Apply-NvidiaGamingSettings' -or
    $psSource -notmatch 'Install-AtCfg -Silent -CfgName \$profileCfgName' -or
    $psSource -notmatch 'Apply-NvidiaGamingSettings -Width'){
     throw 'Profile-level NVIDIA and CS2 CFG functions must remain accessible.'
+}
+
+# Launch All button should still start G HUB, but every player-profile
+# LaunchApps path must skip it so the external DPI helper stays in control.
+$definitions=@{}
+foreach($def in $psAst.FindAll({
+    param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst]
+},$true)){
+    $definitions[$def.Name]=$def.Extent.Text
+}
+if(-not $definitions.ContainsKey('Launch-All') -or -not $definitions.ContainsKey('Invoke-GamingProfile') -or -not $definitions.ContainsKey('Show-ProfileEditor')){
+    throw 'Missing expected launcher and editor functions.'
+}
+if($definitions['Invoke-GamingProfile'] -notmatch 'Launch-All -SkipGHub' -or
+   $definitions['Invoke-GamingProfile'] -notmatch 'Request-LogitechLiveDPI -DPI'){
+    throw 'Profile actions must skip G HUB while retaining custom live DPI.'
+}
+if($psSource -notmatch '(?m)^New-Tile "LAUNCH ALL" 0 \{ Launch-All \}' -or
+   $psSource -notmatch '(?m)^New-Tile "Logitech G HUB" 5 \{ Open-GHub \}'){
+    throw 'Standalone Launch All and G HUB buttons must remain unchanged.'
+}
+if($definitions['Show-ProfileEditor'] -notmatch 'Mouse Options \(no G HUB\)'){
+    throw 'Profile editor must explain that Launch Apps skips G HUB.'
+}
+$script:TestGHubCalls=0
+function Start-DetectedSteam {}
+function Launch-App {param([string]$Name,[string[]]$Paths)}
+function Open-FaceitMatchmaking {}
+function Open-Spotify {}
+function Open-GHub {$script:TestGHubCalls++}
+function Open-MousePointerOptions {}
+function Write-Log {param([string]$Message,[string]$Level='INFO')}
+Invoke-Expression $definitions['Launch-All']
+Launch-All -SkipGHub
+if($script:TestGHubCalls -ne 0){throw 'Profile launch unexpectedly starts G HUB.'}
+Launch-All
+if($script:TestGHubCalls -ne 1){throw 'Standalone Launch All must still open G HUB.'}
+
+# Opaque WinForms label backgrounds must not overlap the next input/label.
+$editorSource=$definitions['Show-ProfileEditor']
+function Get-EditorLabelBounds {
+    param([string]$Caption)
+    $pattern='New-EditorLabel \$dialog '''+[regex]::Escape($Caption)+''' (\d+) (\d+) (\d+)'
+    $match=[regex]::Match($editorSource,$pattern)
+    if(-not $match.Success){throw ('Missing profile editor label: '+$Caption)}
+    return [pscustomobject]@{X=[int]$match.Groups[1].Value;Y=[int]$match.Groups[2].Value;Width=[int]$match.Groups[3].Value}
+}
+$widthLabel=Get-EditorLabelBounds -Caption 'Resolution width'
+$heightLabel=Get-EditorLabelBounds -Caption 'Resolution height'
+$refreshLabel=Get-EditorLabelBounds -Caption 'Refresh rate (Hz)'
+$dpiLabel=Get-EditorLabelBounds -Caption 'Logitech DPI (live, per profile)'
+if($widthLabel.Y -ne $heightLabel.Y -or $heightLabel.Y -ne $refreshLabel.Y){
+    throw 'Resolution labels must stay on a common row.'
+}
+if(($widthLabel.X+$widthLabel.Width) -ge $heightLabel.X -or
+   ($heightLabel.X+$heightLabel.Width) -ge $refreshLabel.X){
+    throw 'Resolution labels overlap, hiding first letters of their neighbors.'
+}
+$dpiInput=[regex]::Match($editorSource,'\$logitechDpi = New-EditorNumber \$dialog (\d+) (\d+)')
+if(-not $dpiInput.Success){throw 'Profile Logitech DPI numeric input not found.'}
+if(($dpiLabel.X+$dpiLabel.Width) -ge [int]$dpiInput.Groups[1].Value){
+    throw 'Logitech DPI label overlaps the numeric input.'
 }
 
 # Sanity check: this test must reject the precise interpolation bug that broke
