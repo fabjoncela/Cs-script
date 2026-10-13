@@ -1655,10 +1655,13 @@ function Launch-All {
 }
 
 # ==============================================================
-# PROFILE DEFAULTS - EDIT IN GUI (saved to %LOCALAPPDATA%\CafeLauncher\profiles.json)
-# The four friend configs load directly from your GitHub MAIN branch.
-# Local editor changes are per-PC. To share them, copy profiles.json to other PCs.
+# PROFILE DEFAULTS - Edit in GUI, save locally or sync via GitHub
+# Cloud profile settings: profiles/<ProfileName>.json (public read).
+# CS2 .cfg files remain separately managed on GitHub.
+# Local unsynced edits ALWAYS win over downloaded cloud settings.
 # ==============================================================
+$script:GithubRepo = 'fabjoncela/Cs-script'
+$script:GithubBranch = 'main'
 $script:GamingProfiles = [ordered]@{
     FabMode = @{
         PointerSpeed=10; DisableAcceleration=$true; ApplyNvidia=$true
@@ -1687,6 +1690,39 @@ $script:GamingProfiles = [ordered]@{
     }
 }
 $script:ProfileSettingsPath = Join-Path $env:LOCALAPPDATA 'CafeLauncher\profiles.json'
+$script:PendingSync = @{}
+foreach ($name in @($script:GamingProfiles.Keys)) { $script:PendingSync[$name] = $false }
+
+function Import-ProfileValues {
+    param([string]$ProfileName, $SavedProfile, [string]$SourceLabel = 'local')
+    if (-not $script:GamingProfiles.Contains($ProfileName) -or -not $SavedProfile) { return }
+    foreach ($setting in @('PointerSpeed','DisableAcceleration','ApplyNvidia','Width','Height','RefreshHz','Vibrance','CS2Sensitivity','CfgDownloadUrl','LaunchApps')) {
+        $saved = $SavedProfile.PSObject.Properties[$setting]
+        if (-not $saved) { continue }
+        $value = $saved.Value
+        try {
+            switch ($setting) {
+                'PointerSpeed' { $value=[int]$value; if ($value -lt 1 -or $value -gt 20) { throw 'range' } }
+                'Width'        { $value=[int]$value; if ($value -lt 640 -or $value -gt 7680) { throw 'range' } }
+                'Height'       { $value=[int]$value; if ($value -lt 480 -or $value -gt 4320) { throw 'range' } }
+                'RefreshHz'    { $value=[int]$value; if ($value -lt 30 -or $value -gt 600) { throw 'range' } }
+                'Vibrance'     { $value=[int]$value; if ($value -lt 0 -or $value -gt 100) { throw 'range' } }
+                'CS2Sensitivity' {
+                    $value=[string]$value
+                    if ($value -and $value -notmatch '^(?:[0-9]+(?:\.[0-9]+)?)$') { throw 'invalid sensitivity' }
+                    if ($value -and ([double]::Parse($value,[Globalization.CultureInfo]::InvariantCulture) -le 0 -or [double]::Parse($value,[Globalization.CultureInfo]::InvariantCulture) -gt 20)) { throw 'range' }
+                }
+                'CfgDownloadUrl' { $value=[string]$value; if ($value) { Assert-ConfigUrl $value } }
+                default {
+                    if ($setting -in @('DisableAcceleration','ApplyNvidia','LaunchApps')) {
+                        if ($value -isnot [bool]) { throw 'boolean expected' }
+                    }
+                }
+            }
+            $script:GamingProfiles[$ProfileName][$setting] = $value
+        } catch { Write-Log "Ignored invalid $SourceLabel $ProfileName/$setting value." 'WARN' }
+    }
+}
 
 function Load-ProfileSettings {
     if (-not (Test-Path -LiteralPath $script:ProfileSettingsPath -PathType Leaf)) { return }
@@ -1695,50 +1731,39 @@ function Load-ProfileSettings {
         foreach ($name in @($script:GamingProfiles.Keys)) {
             $savedProfile = $settings.PSObject.Properties[$name]
             if (-not $savedProfile -or -not $savedProfile.Value) { continue }
-            foreach ($setting in @('PointerSpeed','DisableAcceleration','ApplyNvidia','Width','Height','RefreshHz','Vibrance','CS2Sensitivity','CfgDownloadUrl','LaunchApps')) {
-                $saved = $savedProfile.Value.PSObject.Properties[$setting]
-                if (-not $saved) { continue }
-                $value = $saved.Value
-                try {
-                    switch ($setting) {
-                        'PointerSpeed' { $value=[int]$value; if ($value -lt 1 -or $value -gt 20) { throw 'range' } }
-                        'Width'        { $value=[int]$value; if ($value -lt 640 -or $value -gt 7680) { throw 'range' } }
-                        'Height'       { $value=[int]$value; if ($value -lt 480 -or $value -gt 4320) { throw 'range' } }
-                        'RefreshHz'    { $value=[int]$value; if ($value -lt 30 -or $value -gt 600) { throw 'range' } }
-                        'Vibrance'     { $value=[int]$value; if ($value -lt 0 -or $value -gt 100) { throw 'range' } }
-                        'CS2Sensitivity' {
-                            $value=[string]$value
-                            if ($value -and $value -notmatch '^(?:[0-9]+(?:\.[0-9]+)?)$') { throw 'invalid sensitivity' }
-                            if ($value -and ([double]::Parse($value,[Globalization.CultureInfo]::InvariantCulture) -le 0 -or [double]::Parse($value,[Globalization.CultureInfo]::InvariantCulture) -gt 20)) { throw 'range' }
-                        }
-                        'CfgDownloadUrl' { $value=[string]$value; if ($value) { Assert-ConfigUrl $value } }
-                        default {
-                            if ($setting -in @('DisableAcceleration','ApplyNvidia','LaunchApps')) {
-                                if ($value -isnot [bool]) { throw 'boolean expected' }
-                            }
-                        }
-                    }
-                    $script:GamingProfiles[$name][$setting] = $value
-                } catch { Write-Log "Ignored invalid saved $name/$setting value." 'WARN' }
+            Import-ProfileValues -ProfileName $name -SavedProfile $savedProfile.Value -SourceLabel 'local'
+            $dirty = $savedProfile.Value.PSObject.Properties['SyncPending']
+            # Old versions saved ONLY locally: protect edits from being replaced by cloud defaults.
+            if ($dirty -and $dirty.Value -is [bool]) {
+                $script:PendingSync[$name] = [bool]$dirty.Value
+            } else {
+                $script:PendingSync[$name] = $true
             }
         }
-        Write-Log "Loaded profile settings from $script:ProfileSettingsPath."
+        Write-Log "Loaded local profile settings from $script:ProfileSettingsPath."
     } catch {
         Write-Log "Profile settings JSON could not be read; using defaults: $($_.Exception.Message)" 'WARN'
+    }
+}
+
+function Export-ProfileValues {
+    param([string]$ProfileName)
+    $p = $script:GamingProfiles[$ProfileName]
+    if (-not $p) { throw "Unknown profile: $ProfileName" }
+    return [ordered]@{
+        PointerSpeed=[int]$p.PointerSpeed; DisableAcceleration=[bool]$p.DisableAcceleration
+        ApplyNvidia=[bool]$p.ApplyNvidia; Width=[int]$p.Width; Height=[int]$p.Height
+        RefreshHz=[int]$p.RefreshHz; Vibrance=[int]$p.Vibrance
+        CS2Sensitivity=[string]$p.CS2Sensitivity; CfgDownloadUrl=[string]$p.CfgDownloadUrl
+        LaunchApps=[bool]$p.LaunchApps
     }
 }
 
 function Save-ProfileSettings {
     $settings = [ordered]@{}
     foreach ($name in @($script:GamingProfiles.Keys)) {
-        $p = $script:GamingProfiles[$name]
-        $settings[$name] = [ordered]@{
-            PointerSpeed=[int]$p.PointerSpeed; DisableAcceleration=[bool]$p.DisableAcceleration
-            ApplyNvidia=[bool]$p.ApplyNvidia; Width=[int]$p.Width; Height=[int]$p.Height
-            RefreshHz=[int]$p.RefreshHz; Vibrance=[int]$p.Vibrance
-            CS2Sensitivity=[string]$p.CS2Sensitivity; CfgDownloadUrl=[string]$p.CfgDownloadUrl
-            LaunchApps=[bool]$p.LaunchApps
-        }
+        $settings[$name] = Export-ProfileValues -ProfileName $name
+        $settings[$name]['SyncPending'] = [bool]$script:PendingSync[$name]
     }
     $dir = Split-Path -Parent $script:ProfileSettingsPath
     if (-not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Path $dir -Force -ErrorAction Stop | Out-Null }
@@ -1749,10 +1774,153 @@ function Save-ProfileSettings {
     } finally {
         if (Test-Path -LiteralPath $tmp) { Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue }
     }
-    Write-Log "Profile settings saved: $script:ProfileSettingsPath"
+    Write-Log "Profile settings saved locally: $script:ProfileSettingsPath"
 }
 
 Load-ProfileSettings
+
+function Refresh-ProfileFromGitHub {
+    param([Parameter(Mandatory=$true)][string]$ProfileName)
+    if (-not $script:GamingProfiles.Contains($ProfileName)) { throw "Unknown profile: $ProfileName" }
+    if ($script:PendingSync[$ProfileName]) {
+        Write-Log "$ProfileName has local edits not synced to GitHub; keeping local settings." 'INFO'
+        return
+    }
+    $url = "https://raw.githubusercontent.com/$($script:GithubRepo)/$($script:GithubBranch)/profiles/$ProfileName.json"
+    try {
+        [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+        # GitHub content is JSON data only; no code is executed from remote profiles.
+        $remote = Invoke-RestMethod -Uri $url -Method Get -Headers @{'Cache-Control'='no-cache'} -TimeoutSec 8 -ErrorAction Stop
+        if ($remote.ProfileName -ne $ProfileName -or [int]$remote.SchemaVersion -ne 1) {
+            throw "Unexpected profile JSON schema for $ProfileName."
+        }
+        Import-ProfileValues -ProfileName $ProfileName -SavedProfile $remote -SourceLabel 'GitHub'
+        try { Save-ProfileSettings } catch { Write-Log "Unable to cache cloud settings: $($_.Exception.Message)" 'WARN' }
+        Write-Log "$ProfileName settings downloaded from GitHub (no login needed)."
+    } catch {
+        Write-Log "Could not refresh $ProfileName settings from GitHub; using cached/local values. $($_.Exception.Message)" 'WARN'
+    }
+}
+
+function Get-GitHubSyncToken {
+    param($OwnerWindow)
+    $authForm = New-Object System.Windows.Forms.Form
+    $authForm.Text = 'Authorize GitHub Sync'
+    $authForm.ClientSize = New-Object System.Drawing.Size(590,286)
+    $authForm.StartPosition='CenterParent'
+    $authForm.FormBorderStyle='FixedDialog'
+    $authForm.MaximizeBox=$false
+    $authForm.MinimizeBox=$false
+    $authForm.BackColor=$PANEL
+    $authForm.ForeColor=$WHITE
+    $authForm.Font=New-Object System.Drawing.Font('Segoe UI',10)
+
+    $instructions = New-Object System.Windows.Forms.Label
+    $instructions.Text = "Paste a fine-grained GitHub access token for $($script:GithubRepo).`r`nPermissions: Contents = Read and write (only this repo).`r`nCreate a short-lived token and revoke it when finished."
+    $instructions.Location=New-Object System.Drawing.Point(20,18)
+    $instructions.Size=New-Object System.Drawing.Size(550,75)
+    $authForm.Controls.Add($instructions)
+
+    $secretBox = New-Object System.Windows.Forms.TextBox
+    $secretBox.Location=New-Object System.Drawing.Point(20,106)
+    $secretBox.Size=New-Object System.Drawing.Size(545,30)
+    $secretBox.UseSystemPasswordChar=$true
+    $authForm.Controls.Add($secretBox)
+
+    $warning = New-Object System.Windows.Forms.Label
+    $warning.Text='Never paste a GitHub token on an untrusted/shared cafe PC. Tokens are not saved by CafeLauncher.'
+    $warning.ForeColor=[System.Drawing.Color]::FromArgb(255,190,105)
+    $warning.Location=New-Object System.Drawing.Point(20,147)
+    $warning.Size=New-Object System.Drawing.Size(550,46)
+    $authForm.Controls.Add($warning)
+
+    $create = New-Object System.Windows.Forms.Button
+    $create.Text='Create a GitHub token...'
+    $create.Location=New-Object System.Drawing.Point(20,213)
+    $create.Size=New-Object System.Drawing.Size(200,36)
+    $create.Add_Click({ Start-Process 'https://github.com/settings/personal-access-tokens/new' })
+    $authForm.Controls.Add($create)
+
+    $ok=New-Object System.Windows.Forms.Button
+    $ok.Text='Authorize & Upload'
+    $ok.Location=New-Object System.Drawing.Point(267,213)
+    $ok.Size=New-Object System.Drawing.Size(162,36)
+    $ok.BackColor=$BLUE
+    $ok.ForeColor=$WHITE
+    $authForm.Controls.Add($ok)
+    $cancel=New-Object System.Windows.Forms.Button
+    $cancel.Text='Cancel'
+    $cancel.Location=New-Object System.Drawing.Point(439,213)
+    $cancel.Size=New-Object System.Drawing.Size(125,36)
+    $cancel.DialogResult=[System.Windows.Forms.DialogResult]::Cancel
+    $authForm.Controls.Add($cancel)
+    $authForm.CancelButton=$cancel
+
+    $ok.Add_Click({
+        if ($secretBox.Text.Trim().Length -lt 20) {
+            [System.Windows.Forms.MessageBox]::Show('Paste a valid GitHub token before uploading.', 'GitHub authorization', 'OK', 'Warning') | Out-Null
+            return
+        }
+        $authForm.DialogResult=[System.Windows.Forms.DialogResult]::OK
+        $authForm.Close()
+    }.GetNewClosure())
+    try {
+        $result=$authForm.ShowDialog($OwnerWindow)
+        if ($result -ne [System.Windows.Forms.DialogResult]::OK) { return $null }
+        return $secretBox.Text.Trim()
+    } finally {
+        $secretBox.Clear()
+        $authForm.Dispose()
+    }
+}
+
+function Sync-ProfileToGitHub {
+    param([Parameter(Mandatory=$true)][string]$ProfileName, [Parameter(Mandatory=$true)][string]$Token)
+    if (-not $script:GamingProfiles.Contains($ProfileName)) { throw "Unknown profile: $ProfileName" }
+    $path = "profiles/$ProfileName.json"
+    $uri = "https://api.github.com/repos/$($script:GithubRepo)/contents/$path"
+    $headers = @{
+        'Authorization'="Bearer $Token"
+        'Accept'='application/vnd.github+json'
+        'User-Agent'='CafeLauncher-ProfileSync'
+        'X-GitHub-Api-Version'='2022-11-28'
+    }
+    $existingSha = $null
+    [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+    try {
+        $current = Invoke-RestMethod -Uri ($uri + '?ref=' + $script:GithubBranch) -Method Get -Headers $headers -TimeoutSec 20 -MaximumRedirection 0 -ErrorAction Stop
+        $existingSha = [string]$current.sha
+    } catch {
+        $status = $null
+        if ($_.Exception.Response) { $status = [int]$_.Exception.Response.StatusCode }
+        if ($status -ne 404) { throw "GitHub authorization or file read failed (HTTP $status)." }
+    }
+
+    $payload = [ordered]@{ SchemaVersion=1; ProfileName=$ProfileName }
+    $values = Export-ProfileValues -ProfileName $ProfileName
+    foreach ($key in @($values.Keys)) { $payload[$key] = $values[$key] }
+    $json = $payload | ConvertTo-Json -Depth 5
+    $body = @{
+        message="Update $ProfileName settings from CafeLauncher"
+        content=[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($json + "`n"))
+        branch=$script:GithubBranch
+    }
+    if ($existingSha) { $body.sha = $existingSha }
+    try {
+        $result = Invoke-RestMethod -Uri $uri -Method Put -Headers $headers -ContentType 'application/json' -Body ($body | ConvertTo-Json -Depth 5 -Compress) -TimeoutSec 25 -MaximumRedirection 0 -ErrorAction Stop
+        if (-not $result.commit.sha) { throw 'GitHub did not return a successful commit.' }
+        Write-Log "$ProfileName settings synced to GitHub. Commit: $($result.commit.sha)"
+    } catch {
+        $status = $null
+        if ($_.Exception.Response) { $status = [int]$_.Exception.Response.StatusCode }
+        if ($status -eq 401 -or $status -eq 403) { throw 'GitHub refused the token. Check repository access and Contents: Read and write permission.' }
+        if ($status -eq 409 -or $status -eq 422) { throw 'GitHub rejected the update due to a changed version or validation error. Retry syncing.' }
+        throw "GitHub upload failed (HTTP $status). Your settings remain saved locally."
+    } finally {
+        $headers.Authorization = $null
+        $body.content = $null
+    }
+}
 
 function New-EditorLabel {
     param($Window, [string]$Caption, [int]$X, [int]$Y, [int]$Width=200)
@@ -1779,6 +1947,7 @@ function New-EditorNumber {
 
 function Show-ProfileEditor {
     param([Parameter(Mandatory=$true)][string]$ProfileName)
+    Refresh-ProfileFromGitHub -ProfileName $ProfileName
     $p = $script:GamingProfiles[$ProfileName]
     if (-not $p) { throw "Unknown profile: $ProfileName" }
 
@@ -1850,57 +2019,118 @@ function Show-ProfileEditor {
     $apps.Size=New-Object System.Drawing.Size(550,26)
     $dialog.Controls.Add($apps)
 
-    $tip = New-EditorLabel $dialog 'Saving here changes THIS Windows PC only; GitHub .cfg files update separately.' 20 507 550
+    $dialog.ClientSize = New-Object System.Drawing.Size(590,665)
+    $tip = New-EditorLabel $dialog 'Local edits stay on this PC. GitHub sync shares ALL profile settings; CFG binds remain separate.' 20 504 550
     $tip.ForeColor=$MUTED
     $tip.Font=New-Object System.Drawing.Font('Segoe UI',8)
     $tip.Size=New-Object System.Drawing.Size(550,37)
 
-    $save = New-Object System.Windows.Forms.Button
-    $save.Text='Save Profile'
-    $save.Location=New-Object System.Drawing.Point(290,568)
-    $save.Size=New-Object System.Drawing.Size(130,36)
-    $save.BackColor=$BLUE
-    $save.ForeColor=$WHITE
-    $save.FlatStyle='Flat'
-    $dialog.Controls.Add($save)
+    $status = New-EditorLabel $dialog '' 20 538 550
+    $status.Font=New-Object System.Drawing.Font('Segoe UI',8,[System.Drawing.FontStyle]::Bold)
+    $status.Size=New-Object System.Drawing.Size(550,23)
+    if ($script:PendingSync[$ProfileName]) {
+        $status.Text='Unsynced local edits - cloud download will not overwrite them.'
+        $status.ForeColor=[System.Drawing.Color]::FromArgb(255,190,105)
+    } else {
+        $status.Text='GitHub settings enabled - saved locally and cached for offline use.'
+        $status.ForeColor=$MUTED
+    }
+
+    $saveLocal = New-Object System.Windows.Forms.Button
+    $saveLocal.Text='Save Locally'
+    $saveLocal.Location=New-Object System.Drawing.Point(20,585)
+    $saveLocal.Size=New-Object System.Drawing.Size(155,40)
+    $saveLocal.BackColor=$BLUE
+    $saveLocal.ForeColor=$WHITE
+    $saveLocal.FlatStyle='Flat'
+    $dialog.Controls.Add($saveLocal)
+
+    $saveSync = New-Object System.Windows.Forms.Button
+    $saveSync.Text='Save & Sync to GitHub'
+    $saveSync.Location=New-Object System.Drawing.Point(184,585)
+    $saveSync.Size=New-Object System.Drawing.Size(219,40)
+    $saveSync.BackColor=[System.Drawing.Color]::FromArgb(38,132,102)
+    $saveSync.ForeColor=$WHITE
+    $saveSync.FlatStyle='Flat'
+    $dialog.Controls.Add($saveSync)
 
     $cancel = New-Object System.Windows.Forms.Button
     $cancel.Text='Cancel'
-    $cancel.Location=New-Object System.Drawing.Point(430,568)
-    $cancel.Size=New-Object System.Drawing.Size(120,36)
+    $cancel.Location=New-Object System.Drawing.Point(413,585)
+    $cancel.Size=New-Object System.Drawing.Size(137,40)
     $cancel.DialogResult=[System.Windows.Forms.DialogResult]::Cancel
     $dialog.Controls.Add($cancel)
     $dialog.CancelButton=$cancel
 
-    $save.Add_Click({
-        try {
-            $sensValue=$sens.Text.Trim()
-            if ($sensValue) {
-                $number=0.0
-                if (-not [double]::TryParse($sensValue,[Globalization.NumberStyles]::Float,[Globalization.CultureInfo]::InvariantCulture,[ref]$number) -or
-                    [double]::IsNaN($number) -or $number -le 0 -or $number -gt 20) {
-                    throw 'Sensitivity must be blank or between 0 and 20, using a decimal point (e.g. 1.2).'
-                }
-                $sensValue=$number.ToString('0.####',[Globalization.CultureInfo]::InvariantCulture)
+    $saveEditorValues = {
+        $sensValue=$sens.Text.Trim()
+        if ($sensValue) {
+            $number=0.0
+            if (-not [double]::TryParse($sensValue,[Globalization.NumberStyles]::Float,[Globalization.CultureInfo]::InvariantCulture,[ref]$number) -or
+                [double]::IsNaN($number) -or $number -le 0 -or $number -gt 20) {
+                throw 'Sensitivity must be blank or between 0 and 20, using a decimal point (e.g. 1.2).'
             }
-            $cfgUrl=$url.Text.Trim()
-            if ($cfgUrl) { Assert-ConfigUrl $cfgUrl }
-            $p.PointerSpeed=[int]$pointer.Value
-            $p.DisableAcceleration= -not $accel.Checked
-            $p.Width=[int]$width.Value
-            $p.Height=[int]$height.Value
-            $p.RefreshHz=[int]$hz.Value
-            $p.Vibrance=[int]$vibrance.Value
-            $p.ApplyNvidia=$nv.Checked
-            $p.LaunchApps=$apps.Checked
-            $p.CS2Sensitivity=$sensValue
-            $p.CfgDownloadUrl=$cfgUrl
-            Save-ProfileSettings
-            Write-Log "$ProfileName edited: pointer=$($p.PointerSpeed), acceleration enabled=$(-not $p.DisableAcceleration), display=$($p.Width)x$($p.Height)@$($p.RefreshHz), vibrance=$($p.Vibrance)%, sensitivity=$sensValue."
+            $sensValue=$number.ToString('0.####',[Globalization.CultureInfo]::InvariantCulture)
+        }
+        $cfgUrl=$url.Text.Trim()
+        if ($cfgUrl) { Assert-ConfigUrl $cfgUrl }
+        $p.PointerSpeed=[int]$pointer.Value
+        $p.DisableAcceleration= -not $accel.Checked
+        $p.Width=[int]$width.Value
+        $p.Height=[int]$height.Value
+        $p.RefreshHz=[int]$hz.Value
+        $p.Vibrance=[int]$vibrance.Value
+        $p.ApplyNvidia=[bool]$nv.Checked
+        $p.LaunchApps=[bool]$apps.Checked
+        $p.CS2Sensitivity=$sensValue
+        $p.CfgDownloadUrl=$cfgUrl
+        $script:PendingSync[$ProfileName] = $true
+        Save-ProfileSettings
+        Write-Log "$ProfileName edited locally: pointer=$($p.PointerSpeed), acceleration enabled=$(-not $p.DisableAcceleration), display=$($p.Width)x$($p.Height)@$($p.RefreshHz), vibrance=$($p.Vibrance)%, sensitivity=$sensValue."
+    }.GetNewClosure()
+
+    $saveLocal.Add_Click({
+        try {
+            & $saveEditorValues
+            [System.Windows.Forms.MessageBox]::Show("$ProfileName saved locally. No GitHub login required.`nChanges on a Deep Freeze PC may disappear after restart.", 'Saved locally', 'OK', 'Information') | Out-Null
             $dialog.DialogResult=[System.Windows.Forms.DialogResult]::OK
             $dialog.Close()
         } catch {
             [System.Windows.Forms.MessageBox]::Show("Could not save ${ProfileName}:`n$($_.Exception.Message)", 'Profile Editor', 'OK', 'Error') | Out-Null
+        }
+    }.GetNewClosure())
+
+    $saveSync.Add_Click({
+        try {
+            & $saveEditorValues
+            $token = Get-GitHubSyncToken -OwnerWindow $dialog
+            if ([string]::IsNullOrWhiteSpace($token)) {
+                $status.Text='Saved locally. GitHub sync canceled; local edits preserved.'
+                $status.ForeColor=[System.Drawing.Color]::FromArgb(255,190,105)
+                Write-Log "$ProfileName GitHub sync canceled; local changes preserved."
+                return
+            }
+            try {
+                $saveSync.Enabled=$false
+                $dialog.Cursor=[System.Windows.Forms.Cursors]::WaitCursor
+                Sync-ProfileToGitHub -ProfileName $ProfileName -Token $token
+                $script:PendingSync[$ProfileName] = $false
+                Save-ProfileSettings
+                [System.Windows.Forms.MessageBox]::Show("$ProfileName settings committed to GitHub and saved locally.`nOther PCs can now download the new settings without signing in.`nThe .cfg bindings are still maintained separately on GitHub.", 'GitHub sync complete', 'OK', 'Information') | Out-Null
+                $dialog.DialogResult=[System.Windows.Forms.DialogResult]::OK
+                $dialog.Close()
+            } finally {
+                $token = $null
+                if (-not $dialog.IsDisposed) {
+                    $saveSync.Enabled=$true
+                    $dialog.Cursor=[System.Windows.Forms.Cursors]::Default
+                }
+            }
+        } catch {
+            Write-Log "$ProfileName GitHub sync failed; local settings kept. $($_.Exception.Message)" 'WARN'
+            $status.Text='Cloud sync failed; settings are saved locally. Retry Save & Sync.'
+            $status.ForeColor=[System.Drawing.Color]::FromArgb(255,190,105)
+            [System.Windows.Forms.MessageBox]::Show("$ProfileName saved locally, but GitHub sync failed:`n$($_.Exception.Message)", 'GitHub sync', 'OK', 'Warning') | Out-Null
         }
     }.GetNewClosure())
 
@@ -1914,6 +2144,7 @@ function Invoke-GamingProfile {
         Write-Log "Unknown gaming profile: $ProfileName" 'ERROR'
         return
     }
+    Refresh-ProfileFromGitHub -ProfileName $ProfileName
     $profile = $script:GamingProfiles[$ProfileName]
     Write-Log "$ProfileName full routine started: mouse, NVIDIA, CS2 config, applications."
 
