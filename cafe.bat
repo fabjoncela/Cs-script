@@ -4,7 +4,7 @@ start "" powershell.exe -NoProfile -ExecutionPolicy Bypass -STA -WindowStyle Hid
 exit /b
 
 # POWERSHELL_GUI
-# CAFE_RELEASE=2026.10.13.5
+# CAFE_RELEASE=2026.10.13.6
 
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
@@ -2070,7 +2070,7 @@ function Save-ProfileSettings {
     foreach ($name in @($script:GamingProfiles.Keys)) {
         $values = Export-ProfileValues -ProfileName $name
         if ($null -eq $values -or $values -isnot [System.Collections.IDictionary]) {
-            throw "Cannot save $name: the profile exporter did not return a settings dictionary."
+            throw "Cannot save ${name}: the profile exporter did not return a settings dictionary."
         }
         $snapshot = [ordered]@{}
         foreach ($key in @($values.Keys)) { $snapshot[$key] = $values[$key] }
@@ -2211,7 +2211,7 @@ function Sync-ProfileToGitHub {
     $payload = [ordered]@{ SchemaVersion=1; ProfileName=$ProfileName }
     $values = Export-ProfileValues -ProfileName $ProfileName
     if ($null -eq $values -or $values -isnot [System.Collections.IDictionary]) {
-        throw "Cannot sync $ProfileName: the profile exporter returned no valid settings."
+        throw "Cannot sync ${ProfileName}: the profile exporter returned no valid settings."
     }
     foreach ($key in @($values.Keys)) { $payload[$key] = $values[$key] }
     $json = $payload | ConvertTo-Json -Depth 5
