@@ -129,7 +129,7 @@ foreach($field in @('Resolution width','Resolution height','Refresh rate (Hz)',
 if($editorSource -notmatch 'New-EditorTabGrid' -or
    $editorSource -notmatch 'New-EditorTabNumber' -or
    $editorSource -notmatch 'SetColumnSpan' -or
-   $editorSource -notmatch 'New-EditorTabField'){
+   $editorSource -notmatch 'Add-EditorTabField'){
     throw 'Tab layout must use separate responsive table-layout field cells.'
 }
 if($editorSource -match 'New-EditorLabel \$dialog ''Resolution (?:width|height)'''){
