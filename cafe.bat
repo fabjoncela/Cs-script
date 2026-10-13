@@ -2490,7 +2490,7 @@ function Invoke-GamingProfile {
         }
         # Profile Apply installs its CFG without editing any Steam launch options.
         $steps += @{ Name = "Install CS2 $profileCfgName"; Action = {
-            [void](Install-AtCfg -Silent -CfgName $profileCfgName -DownloadUrl $profileCfgUrl -CloudPreferred:([bool]$profileCfgUrl) -CS2Sensitivity ([string]$profile.CS2Sensitivity)
+            [void](Install-AtCfg -Silent -CfgName $profileCfgName -DownloadUrl $profileCfgUrl -CloudPreferred:([bool]$profileCfgUrl) -CS2Sensitivity ([string]$profile.CS2Sensitivity))
         } }
     }
     if ($profile.LaunchApps) {
