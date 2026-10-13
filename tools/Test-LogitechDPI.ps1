@@ -16,11 +16,11 @@ $functions=@{}
 foreach($def in $ast.FindAll({param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst]},$true)){
     $functions[$def.Name]=$def.Extent.Text
 }
-foreach($name in @('Get-LogihubExecutable','Invoke-Logihub','Set-LogitechLiveDPI','Set-LogitechOnboardDPI','Invoke-GamingProfile','Show-ProfileEditor','Import-ProfileValues','Export-ProfileValues')){
+foreach($name in @('Start-LogihubAsyncDownload','Request-LogitechLiveDPI','Get-LogihubExecutable','Invoke-Logihub','Set-LogitechLiveDPI','Set-LogitechOnboardDPI','Invoke-GamingProfile','Show-ProfileEditor','Import-ProfileValues','Export-ProfileValues')){
     if(-not $functions.ContainsKey($name)){throw ('Missing function: '+$name)}
 }
 $apply=$functions['Invoke-GamingProfile']
-if($apply -notmatch 'Set-LogitechLiveDPI\s+-DPI\s+\(\[int\]\$profile\.LogitechDPI\)'){
+if($apply -notmatch 'Request-LogitechLiveDPI\s+-DPI\s+\(\[int\]\$profile\.LogitechDPI\)'){
     throw 'Profiles must apply their own saved LIVE DPI.'
 }
 if($apply -match 'Set-LogitechOnboardDPI|onboard.*set-dpi'){throw 'Profile apply must NEVER write onboard memory.'}
@@ -35,8 +35,11 @@ if($onboard.IndexOf("'onboard','dump'",[StringComparison]::Ordinal) -ge
    $onboard.IndexOf("'onboard','set-dpi'",[StringComparison]::Ordinal)){
     throw 'Onboard backup must happen before any onboard write.'
 }
-if($source -notmatch 'Set DPI 800 \(Live\)' -or $source -notmatch 'Set DPI 800 \(Onboard\)'){
-    throw 'Manual DPI buttons missing.'
+if($source -notmatch 'New-Tile "Set DPI 800 \\(Live\\)" 18' -or $source -notmatch '(?m)^# New-Tile "Set DPI 800 \\(Onboard\\)" 19'){
+    throw 'Live button must be active; onboard button must be commented out.'
+}
+if($functions['Start-LogihubAsyncDownload'] -notmatch 'Start-Process' -or $functions['Start-LogihubAsyncDownload'] -notmatch 'LogihubDownloadTimer' -or $functions['Request-LogitechLiveDPI'] -notmatch 'LogihubRequestedDPI'){
+    throw 'Hybrid async download or latest DPI pending state missing.'
 }
 if($functions['Show-ProfileEditor'] -notmatch '\$p\.LogitechDPI=\[int\]\$logitechDpi\.Value'){
     throw 'Profile editor must save Logitech DPI.'
@@ -45,11 +48,11 @@ if($functions['Export-ProfileValues'] -notmatch 'LogitechDPI=\[int\]\$p\.Logitec
    $functions['Import-ProfileValues'] -notmatch "'LogitechDPI'"){
     throw 'Logitech DPI must support local JSON and GitHub profile sync.'
 }
-if($functions['Get-LogihubExecutable'] -notmatch 'c876fe0172bb3910c4c6cfee0ef5674ebde4c9d37069b412daffbdf7a2505635'){
+if($source -notmatch 'c876fe0172bb3910c4c6cfee0ef5674ebde4c9d37069b412daffbdf7a2505635'){
     throw 'Portable executable checksum pin missing.'
 }
 foreach($name in @('FabMode','ArliMode','BrileMode','ArmlMode','OliMode')){
     $profile=Get-Content -LiteralPath (Join-Path $root ('profiles\'+$name+'.json')) -Raw | ConvertFrom-Json
     if([int]$profile.LogitechDPI -ne 800){throw ($name+' must default to 800 DPI.')}
 }
-Write-Host 'PASS: Logitech DPI presets, local/cloud editor persistence, auto LIVE apply, manual onboard backup and consent.'
+Write-Host 'PASS: Logitech DPI presets, local/cloud editor persistence, auto LIVE apply, async shared helper, onboard button disabled.'
