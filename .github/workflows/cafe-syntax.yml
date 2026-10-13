@@ -1,0 +1,31 @@
+name: CafeLauncher syntax check
+
+on:
+  pull_request:
+    paths:
+      - 'cafe.bat'
+      - 'tools/Test-CafeLauncher.ps1'
+      - '.github/workflows/cafe-syntax.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'cafe.bat'
+      - 'tools/Test-CafeLauncher.ps1'
+      - '.github/workflows/cafe-syntax.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate-bat-powershell:
+    name: Validate CafeLauncher (PowerShell 5.1)
+    runs-on: windows-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Check embedded PowerShell syntax and Windows line endings
+        shell: powershell
+        run: |
+          & "$env:GITHUB_WORKSPACE\tools\Test-CafeLauncher.ps1"
