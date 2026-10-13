@@ -86,7 +86,7 @@ if($batText -match 'Invoke-GamingProfile.+Invoke-GraphicsOnly'){
 $begin=$batText.IndexOf('Add-Type -ErrorAction Stop @"',[StringComparison]::Ordinal)
 if($begin -lt 0){throw 'Embedded C# display helper not found.'}
 $csharpStart=$batText.IndexOf([char]10,$begin)+1
-$csharpEnd=$batText.IndexOf('\"@',$csharpStart,[StringComparison]::Ordinal)
+$csharpEnd=$batText.IndexOf('"@',$csharpStart,[StringComparison]::Ordinal)
 if($csharpEnd -lt $csharpStart){throw 'Could not extract C# helper.'}
 $csharp=$batText.Substring($csharpStart,$csharpEnd-$csharpStart)
 Add-Type -TypeDefinition $csharp -ErrorAction Stop
