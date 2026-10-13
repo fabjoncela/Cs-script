@@ -12,8 +12,8 @@ $select=@($defs | Where-Object Name -eq 'Select-SuperlightDevice')
 if($select.Count -ne 1){throw 'Superlight selector function not found'}
 Invoke-Expression $select[0].Extent.Text
 function Test-Select([string]$Model,[int]$Index){
-    $json=@(@{index=0;type='receiver';model_id=$null;display_name='receiver';status='ok'},
-            @{index=$Index;type='wireless device';model_id=$Model;display_name='PRO X SUPERLIGHT';status='ok'}) | ConvertTo-Json
+    $json=@(@{index=0;type='receiver';model_id=$null;display_name='receiver';status='connected'},
+            @{index=$Index;type='wireless device';model_id=$Model;display_name='PRO X SUPERLIGHT';status='connected'}) | ConvertTo-Json
     $v=Select-SuperlightDevice -Json $json
     if($v.Index -ne $Index -or $v.Model -ne $Model){throw "Wrong selected mouse $Model"}
 }
@@ -38,8 +38,8 @@ try {
 
 try {
     [void](Select-SuperlightDevice -Json ((@(
-        @{index=1;type='wireless device';model_id='pro_x_wireless_mouse';display_name='PRO X SUPERLIGHT';status='ok'},
-        @{index=2;type='wireless device';model_id='pro_x_2_wireless_mouse';display_name='PRO X SUPERLIGHT 2';status='ok'}
+        @{index=1;type='wireless device';model_id='pro_x_wireless_mouse';display_name='PRO X SUPERLIGHT';status='connected'},
+        @{index=2;type='wireless device';model_id='pro_x_2_wireless_mouse';display_name='PRO X SUPERLIGHT 2';status='connected'}
     )) | ConvertTo-Json))
     throw 'Expected refusal for two connected mice'
 }catch{
