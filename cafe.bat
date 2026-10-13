@@ -50,12 +50,12 @@ $script:StepScopeError=$false
 $script:StepScopeWarning=$false
 $script:ActiveRunName=''
 function Set-StepResult {
-    param([string]$Run,[string]$Step,[ValidateSet('SUCCESS','SKIPPED','FAILED','PENDING')][string]$Status,[string]$Detail='')
+    param([string]$Run,[string]$Step,[ValidateSet('SUCCESS','PARTIAL','SKIPPED','FAILED','PENDING')][string]$Status,[string]$Detail='')
     foreach($old in @($script:StepResults | Where-Object {$_.Run -eq $Run -and $_.Step -eq $Step})){
         [void]$script:StepResults.Remove($old)
     }
     $script:StepResults.Add([pscustomobject]@{Run=$Run;Step=$Step;Status=$Status;Detail=$Detail})
-    Write-Log ('RESULT '+$Run+' | '+$Step+' | '+$Status+$(if($Detail){' | '+$Detail}else{''})) 'RESULT'
+    Write-Log ($Run+' | '+$Step+' | '+$Status+$(if($Detail){' | '+$Detail}else{''})) 'RESULT'
 }
 function Start-StepScope {
     param([string]$Run,[string]$Step)
@@ -70,17 +70,17 @@ function Complete-StepScope {
     $errorSeen=$script:StepScopeError
     $warnSeen=$script:StepScopeWarning
     $script:StepScope=$null
-    $state=if($errorSeen){'FAILED'}elseif($warnSeen){'SKIPPED'}else{'SUCCESS'}
+    $state=if($errorSeen){'FAILED'}elseif($warnSeen){'PARTIAL'}else{'SUCCESS'}
     if($errorSeen){$Detail='One or more errors reported. '+$Detail}
-    elseif($warnSeen){$Detail='One or more actions were skipped or warned. '+$Detail}
+    elseif($warnSeen){$Detail='One or more warnings were reported; step may be partially applied. '+$Detail}
     Set-StepResult -Run $scope.Run -Step $scope.Step -Status $state -Detail $Detail
 }
 function Write-RunSummary {
     param([string]$Run)
     $items=@($script:StepResults | Where-Object {$_.Run -eq $Run})
     $counts=@{}
-    foreach($state in @('SUCCESS','SKIPPED','FAILED','PENDING')){$counts[$state]=@($items | Where-Object {$_.Status -eq $state}).Count}
-    Write-Log ('SUMMARY '+$Run+': '+$counts.SUCCESS+' SUCCESS, '+$counts.SKIPPED+' SKIPPED, '+$counts.FAILED+' FAILED, '+$counts.PENDING+' PENDING') 'RESULT'
+    foreach($state in @('SUCCESS','PARTIAL','SKIPPED','FAILED','PENDING')){$counts[$state]=@($items | Where-Object {$_.Status -eq $state}).Count}
+    Write-Log ($Run+': '+$counts.SUCCESS+' SUCCESS, '+$counts.PARTIAL+' PARTIAL, '+$counts.SKIPPED+' SKIPPED, '+$counts.FAILED+' FAILED, '+$counts.PENDING+' PENDING') 'SUMMARY'
 }
 
 Write-Log "Launcher starting."
@@ -2661,16 +2661,19 @@ try {
                 if($null -ne $script:LogihubRequestedDPI){
                     $dpi=[int]$script:LogihubRequestedDPI
                     $script:LogihubRequestedDPI=$null
-                    $run=$script:ActiveRunName
+                    $run=$script:LogihubRequestedRun
+                    if(-not $run){$run='Manual DPI'}
                     Start-StepScope -Run $run -Step 'Logitech live DPI'
                     try{Set-LogitechLiveDPI -DPI $dpi}catch{Write-Log ('Delayed Logitech DPI failed: '+$_.Exception.Message) 'ERROR'}
-                    finally{Complete-StepScope -Detail 'Async DPI command finished; check read-back.';if($run){Write-RunSummary -Run $run}}
+                    finally{Complete-StepScope -Detail 'Async DPI command finished; review read-back verification.';Write-RunSummary -Run $run}
                 }
             } catch {
                 Write-Log $_.Exception.Message 'ERROR'
-                if($script:ActiveRunName){
-                    Set-StepResult -Run $script:ActiveRunName -Step 'Logitech live DPI' -Status FAILED -Detail $_.Exception.Message
-                    Write-RunSummary -Run $script:ActiveRunName
+                if($null -ne $script:LogihubRequestedDPI){
+                    $run=$script:LogihubRequestedRun
+                    if(-not $run){$run='Manual DPI'}
+                    Set-StepResult -Run $run -Step 'Logitech live DPI' -Status FAILED -Detail $_.Exception.Message
+                    Write-RunSummary -Run $run
                 }
                 $script:LogihubRequestedDPI=$null
             } finally {
@@ -2687,14 +2690,19 @@ function Request-LogitechLiveDPI {
     Assert-LogitechDPI $DPI
     # Latest-click-wins: a later profile changes the target DPI, not the download.
     $script:LogihubRequestedDPI=$DPI
+    $script:LogihubRequestedRun=if($script:StepScope){$script:StepScope.Run}else{'Manual DPI'}
     if(Test-Path -LiteralPath $script:LogihubExe -PathType Leaf){
-        try {
-            [void](Get-LogihubExecutable)
-            $dpi=[int]$script:LogihubRequestedDPI
+        try {[void](Get-LogihubExecutable)}
+        catch {
             $script:LogihubRequestedDPI=$null
-            Set-LogitechLiveDPI -DPI $dpi
-            return
-        } catch {Write-Log ('Logitech helper cache invalid: '+$_.Exception.Message) 'ERROR';$script:LogihubRequestedDPI=$null;return}
+            throw ('Logitech helper integrity or cache verification failed: '+$_.Exception.Message)
+        }
+        $dpi=[int]$script:LogihubRequestedDPI
+        $script:LogihubRequestedDPI=$null
+        Write-Log 'Logitech helper cache verified successfully.'
+        # Device discovery and DPI errors must propagate separately to the step result.
+        Set-LogitechLiveDPI -DPI $dpi
+        return
     }
     if($script:LogihubDownloadProcess -and -not $script:LogihubDownloadProcess.HasExited){
         Write-Log ('Logitech download pending; latest requested live DPI = '+$DPI)
@@ -2755,7 +2763,464 @@ function Set-LogitechLiveDPI {
     $target=Get-SelectedSuperlight
     [void](Invoke-Logihub -Arguments @('dpi','set',([string]$DPI),'--device',([string]$target.Index)))
     $read=Invoke-Logihub -Arguments @('dpi','get','--device',([string]$target.Index))
-    Write-Log ('Requested Logitech live DPI '+$DPI+'; read-back: '+$read)
+    $lines=@($read -split '\r?\n' | Where-Object {$_ -match '\S'})
+    $deviceIndex=[int]$target.Index
+    $readValue=$null
+    foreach($line in $lines){
+        if($line -match ('^\s*'+$deviceIndex+'\s+.+?\s+(\d+)\s*
+}
+function Set-LogitechOnboardDPI {
+    param([int]$DPI=800)
+    Assert-LogitechDPI $DPI
+    $answer=[System.Windows.Forms.MessageBox]::Show(
+        ('This WRITES mouse onboard memory (survives Deep Freeze/reboot).'+[Environment]::NewLine+
+        'Back up existing memory, set DPI '+$DPI+' and enable onboard mode?'),
+        'Confirm Onboard DPI Write','YesNo','Warning')
+    if($answer -ne [System.Windows.Forms.DialogResult]::Yes){Write-Log 'Onboard DPI cancelled.';return}
+    $target=Get-SelectedSuperlight
+    $folder=Join-Path $env:LOCALAPPDATA 'CafeLauncher\logihub\onboard-backups'
+    [void](New-Item -ItemType Directory -Path $folder -Force -ErrorAction Stop)
+    $backup=Join-Path $folder ('onboard-'+(Get-Date -Format 'yyyyMMdd-HHmmss-fff')+'.bin')
+    [void](Invoke-Logihub -Arguments @('onboard','dump','--out',$backup,'--device',([string]$target.Index)))
+    if(-not (Test-Path -LiteralPath $backup -PathType Leaf) -or (Get-Item -LiteralPath $backup).Length -le 0){
+        throw 'Onboard backup is missing/empty; no memory changes attempted.'
+    }
+    Write-Log ('Onboard backup: '+$backup)
+    [void](Invoke-Logihub -Arguments @('onboard','set-dpi',([string]$DPI),'--default','1','--shift',([string]$DPI),'--device',([string]$target.Index)))
+    [void](Invoke-Logihub -Arguments @('onboard','mode','set','on','--device',([string]$target.Index)))
+    Write-Log ('Onboard DPI '+$DPI+' command completed. Backup: '+$backup)
+}
+function Invoke-LogitechDpiButton {
+    param([switch]$Onboard)
+    Start-StepScope -Run 'Manual DPI' -Step 'Logitech live DPI'
+    try {
+        if($Onboard){Set-LogitechOnboardDPI -DPI 800}
+        else{Request-LogitechLiveDPI -DPI 800}
+    } catch {
+        Write-Log ('Logitech DPI failed: '+$_.Exception.Message) 'ERROR'
+        [void][System.Windows.Forms.MessageBox]::Show($_.Exception.Message,'Logitech DPI','OK','Warning')
+    } finally {
+        if($script:LogihubDownloadProcess -and -not $script:LogihubDownloadProcess.HasExited){
+            $script:StepScope=$null
+            Set-StepResult -Run 'Manual DPI' -Step 'Logitech live DPI' -Status PENDING -Detail 'Verified helper download is pending; DPI has not been applied.'
+        } else {Complete-StepScope -Detail 'Manual DPI command returned; verification is required for SUCCESS.'}
+        Write-RunSummary -Run 'Manual DPI'
+    }
+}
+
+function Invoke-GamingProfile {
+    param([Parameter(Mandatory=$true)][string]$ProfileName)
+    if (-not $script:GamingProfiles.Contains($ProfileName)) {
+        Write-Log "Unknown gaming profile: $ProfileName" 'ERROR'
+        return
+    }
+    $script:ActiveRunName=$ProfileName
+    $script:StepResults.Clear()
+    Refresh-ProfileFromGitHub -ProfileName $ProfileName
+    $profile = $script:GamingProfiles[$ProfileName]
+    Write-Log "$ProfileName full routine started: mouse, NVIDIA, CS2 config, applications."
+
+    $steps = @(
+        @{ Name = 'Windows mouse speed/acceleration'; Action = {
+            Apply-ProfileMouse -ProfileName $ProfileName -PointerSpeed ([int]$profile.PointerSpeed) -DisableAcceleration ([bool]$profile.DisableAcceleration) -SkipPointerOptions
+        } }
+    )
+    if ($profile.ApplyNvidia) {
+        $steps += @{ Name = 'NVIDIA settings'; Action = { Apply-NvidiaGamingSettings -Width ([int]$profile.Width) -Height ([int]$profile.Height) -RefreshHz ([int]$profile.RefreshHz) -Vibrance ([int]$profile.Vibrance) } }
+    }
+    $profileCfgName = [string]$profile.ConfigFile
+    if (-not [string]::IsNullOrWhiteSpace($profileCfgName)) {
+        $profileCfgUrl = [string]$profile.CfgDownloadUrl
+        if ($ProfileName -eq 'FabMode' -and [string]::IsNullOrWhiteSpace($profileCfgUrl)) {
+            $profileCfgUrl = $script:FabCfgCloudUrl
+        }
+        # Profile Apply installs its CFG without editing any Steam launch options.
+        $steps += @{ Name = "Install CS2 $profileCfgName"; Action = {
+            [void](Install-AtCfg -Silent -CfgName $profileCfgName -DownloadUrl $profileCfgUrl -CloudPreferred:([bool]$profileCfgUrl) -CS2Sensitivity ([string]$profile.CS2Sensitivity))
+        } }
+    }
+    if ($profile.LaunchApps) {
+        $steps += @{ Name = 'Launch All (including Mouse Pointer Options)'; Action = { Launch-All } }
+    }
+    # Live DPI LAST: Launch All may start Logitech G HUB, which can otherwise
+    # overwrite a DPI set early in the profile routine. Never write onboard here.
+    $steps += @{ Name = 'Logitech live DPI'; Action = { Request-LogitechLiveDPI -DPI ([int]$profile.LogitechDPI) } }
+    foreach ($step in $steps) {
+        Write-Log ("$ProfileName step started: " + $step.Name)
+        Start-StepScope -Run $ProfileName -Step $step.Name
+        try {
+            & ($step.Action)
+            Write-Log ("$ProfileName step returned: " + $step.Name + ". Check logs for individual success or errors.")
+        } catch {
+            Write-Log ("$ProfileName step failed: " + $step.Name + ": " + $_.Exception.Message) 'ERROR'
+        } finally {
+            if($step.Name -eq 'Logitech live DPI' -and $script:LogihubDownloadProcess){
+                $script:StepScope=$null
+                Set-StepResult -Run $ProfileName -Step $step.Name -Status PENDING -Detail 'Helper downloading; live DPI not yet applied.'
+            }else{Complete-StepScope}
+        }
+    }
+    Write-RunSummary -Run $ProfileName
+    Write-Log "$ProfileName full routine finished. Review logs for individual results."
+}
+
+# The separate Play + Exec action launches CS2 with a one-time +exec argument.
+# No writes to Steam userdata/config/localconfig.vdf and no Steam restart.
+function Get-CS2SteamLaunchArguments {
+    param([Parameter(Mandatory=$true)][string]$CfgName)
+    if ($CfgName -notmatch '^[A-Za-z0-9_-]+\.cfg$') { throw 'Invalid CFG filename for CS2.' }
+    return @('-applaunch', '730', '+exec', $CfgName)
+}
+
+function Start-CS2WithProfileCfg {
+    param([Parameter(Mandatory=$true)][string]$ProfileName)
+    if (-not $script:GamingProfiles.Contains($ProfileName)) { throw "Unknown CS2 profile: $ProfileName" }
+    if (Get-Process -Name 'cs2' -ErrorAction SilentlyContinue) {
+        $runningCfg = [string]$script:GamingProfiles[$ProfileName].ConfigFile
+        Write-Log "$ProfileName Play + Exec skipped; CS2 is already running. Use developer console: exec $runningCfg" 'WARN'
+        [System.Windows.Forms.MessageBox]::Show(
+            "CS2 is already running. Steam launch arguments work only when starting the game." +
+            [Environment]::NewLine + [Environment]::NewLine +
+            "In CS2, open the developer console and type: exec $runningCfg" +
+            [Environment]::NewLine + "Or close CS2 and click Play + Exec again.",
+            'CS2 Already Running', 'OK', 'Information'
+        ) | Out-Null
+        return
+    }
+    Refresh-ProfileFromGitHub -ProfileName $ProfileName
+    $profile = $script:GamingProfiles[$ProfileName]
+    $cfgName = [string]$profile.ConfigFile
+    if ($cfgName -notmatch '^[A-Za-z0-9_-]+\.cfg$') { throw "Invalid CFG filename for $ProfileName." }
+    $url = [string]$profile.CfgDownloadUrl
+    if ($ProfileName -eq 'FabMode' -and [string]::IsNullOrWhiteSpace($url)) {
+        $url = $script:FabCfgCloudUrl
+    }
+    Write-Log "$ProfileName Play + Exec: installing $cfgName before starting CS2."
+    $installed = Install-AtCfg -Silent -CfgName $cfgName -DownloadUrl $url -CloudPreferred:([bool]$url) -CS2Sensitivity ([string]$profile.CS2Sensitivity)
+    if ($installed -ne $true) {
+        Write-Log "$ProfileName Play + Exec cancelled: $cfgName installation did not succeed." 'ERROR'
+        [System.Windows.Forms.MessageBox]::Show(
+            "Unable to install $cfgName. CS2 was not started. Check LIVE LOGS.",
+            'CS2 CFG Installation Failed', 'OK', 'Warning'
+        ) | Out-Null
+        return
+    }
+    $steamExe = Get-SteamExecutable
+    if (-not $steamExe) {
+        Write-Log 'Steam was not detected. CFG installed, but CS2 not launched.' 'ERROR'
+        [System.Windows.Forms.MessageBox]::Show('Steam not found. CFG installed but CS2 was not launched.', 'Steam Not Found', 'OK', 'Warning') | Out-Null
+        return
+    }
+    $args = @(Get-CS2SteamLaunchArguments -CfgName $cfgName)
+    Start-Process -FilePath $steamExe -ArgumentList $args -ErrorAction Stop
+    Write-Log "$ProfileName requested CS2 launch via Steam: -applaunch 730 +exec $cfgName. Persistent Steam launch options unchanged."
+}
+
+# Independent CS2 graphics module; loaded ONLY when Apply Graphics is clicked.
+# Strict hash pin prevents executing unreviewed modified remote module code.
+function Invoke-GraphicsOnly {
+    param([Parameter(Mandatory=$true)][string]$ModeName)
+    Start-StepScope -Run ('Graphics '+$ModeName) -Step 'Apply Graphics'
+    try {
+    $expected='f6dbb6d21ceeecc32166c73a14e0d8d2e9066971'
+    $source='https://raw.githubusercontent.com/fabjoncela/Cs-script/main/graphics/ApplyGraphics.ps1'
+    $cache=Join-Path $env:LOCALAPPDATA 'CafeLauncher\graphics-module.ps1'
+    $parent=Split-Path -Parent $cache
+    if(-not (Test-Path -LiteralPath $parent)){[void](New-Item -Path $parent -ItemType Directory -Force)}
+    $temp=Join-Path $env:TEMP ('CafeLauncher-graphics-module-'+[guid]::NewGuid().ToString('N')+'.ps1')
+    try{
+        [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+        Invoke-WebRequest -Uri $source -OutFile $temp -UseBasicParsing -TimeoutSec 12 -ErrorAction Stop
+        $bytes=[IO.File]::ReadAllBytes($temp)
+        if((Get-GitBlobSha -Bytes $bytes) -ne $expected){throw 'Cloud graphics module SHA does not match the reviewed launcher version.'}
+        $lines=[IO.File]::ReadAllLines($temp)
+        $tokens=$null;$errors=$null
+        [void][System.Management.Automation.Language.Parser]::ParseFile($temp,[ref]$tokens,[ref]$errors)
+        if(@($errors).Count){throw 'Downloaded graphics module has invalid PowerShell syntax.'}
+        Copy-Item -LiteralPath $temp -Destination $cache -Force -ErrorAction Stop
+    }catch{
+        Write-Log ('Could not download graphics module: '+$_.Exception.Message) 'WARN'
+    }finally{Remove-Item -LiteralPath $temp -Force -ErrorAction SilentlyContinue}
+    if(-not (Test-Path -LiteralPath $cache -PathType Leaf)){throw 'Graphics module unavailable. Connect to GitHub and retry.'}
+    if((Get-GitBlobSha -Bytes ([IO.File]::ReadAllBytes($cache))) -ne $expected){
+        throw 'Cached graphics module failed signature/hash validation. Graphics not applied.'
+    }
+    . $cache
+    Apply-CS2ModeGraphics -ModeName $ModeName
+    } catch {
+        Write-Log ('Graphics module could not complete: '+$_.Exception.Message) 'ERROR'
+    } finally {
+        Complete-StepScope -Detail 'Graphics action finished; inspect applied/skipped video keys and backup logs.'
+        Write-RunSummary -Run ('Graphics '+$ModeName)
+    }
+}
+
+# Backward-compatible entry point.
+function Invoke-FabModeFull { Invoke-GamingProfile -ProfileName 'FabMode' }
+
+# Main window
+$form = New-Object System.Windows.Forms.Form
+$form.Text = "Cafe Launcher"
+$form.Size = New-Object System.Drawing.Size(800,1050)
+$form.StartPosition = "CenterScreen"
+$form.FormBorderStyle = "FixedSingle"
+$form.MaximizeBox = $false
+$form.BackColor = $BG
+$form.ForeColor = $WHITE
+$form.Font = New-Object System.Drawing.Font("Segoe UI",10)
+
+# Header
+$header = New-Object System.Windows.Forms.Panel
+$header.Location = New-Object System.Drawing.Point(0,0)
+$header.Size = New-Object System.Drawing.Size(800,105)
+$header.BackColor = $PANEL
+$form.Controls.Add($header)
+
+$title = New-Object System.Windows.Forms.Label
+$title.Text = "GAMING CAFE"
+$title.Location = New-Object System.Drawing.Point(28,18)
+$title.Size = New-Object System.Drawing.Size(500,38)
+$title.Font = New-Object System.Drawing.Font("Segoe UI",21,[System.Drawing.FontStyle]::Bold)
+$title.ForeColor = $WHITE
+$header.Controls.Add($title)
+
+$subtitle = New-Object System.Windows.Forms.Label
+$subtitle.Text = "APP LAUNCHER  |  PC SETTINGS"
+$subtitle.Location = New-Object System.Drawing.Point(31,62)
+$subtitle.Size = New-Object System.Drawing.Size(500,23)
+$subtitle.Font = New-Object System.Drawing.Font("Segoe UI",9)
+$subtitle.ForeColor = $MUTED
+$header.Controls.Add($subtitle)
+
+function New-Tile {
+    param(
+        [string]$Text,
+        [int]$Index,
+        [scriptblock]$Action,
+        [switch]$Primary,
+        [string]$EditProfile = ''
+    )
+
+    $col = $Index % 3
+    $row = [Math]::Floor($Index / 3)
+    $x = 25 + ($col * 250)
+    $y = 125 + ($row * 88)
+
+    $button = New-Object System.Windows.Forms.Button
+    $button.Text = $Text
+    $button.Location = New-Object System.Drawing.Point($x,$y)
+    if ($EditProfile) {
+        # Split the profile tile into Apply and Play + Exec buttons.
+        $button.Size = New-Object System.Drawing.Size(88,46)
+    } else {
+        $button.Size = New-Object System.Drawing.Size(235,70)
+    }
+    $button.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
+    $button.FlatAppearance.BorderSize = 0
+    if ($Primary) {
+        $button.BackColor = $BLUE
+    } else {
+        $button.BackColor = $PANEL
+    }
+    $button.ForeColor = $WHITE
+    $button.Font = New-Object System.Drawing.Font("Segoe UI",$(if($EditProfile){9}else{10}),[System.Drawing.FontStyle]::Bold)
+    $button.Cursor = [System.Windows.Forms.Cursors]::Hand
+    $actionToRun = $Action
+    $button.Add_Click({
+        Write-Log "Clicked: $($this.Text)"
+        try {
+            & $actionToRun
+        } catch {
+            Write-Log "Button '$($this.Text)' failed: $($_.Exception.Message)" "ERROR"
+            [System.Windows.Forms.MessageBox]::Show(
+                "$($this.Text) failed:`n$($_.Exception.Message)",
+                "Cafe Launcher"
+            )
+        }
+    }.GetNewClosure())
+    $form.Controls.Add($button)
+    if ($EditProfile) {
+        $selectedProfile = $EditProfile
+        $play = New-Object System.Windows.Forms.Button
+        $play.Text = 'Play + Exec'
+        $play.Location = New-Object System.Drawing.Point(($x + 92), $y)
+        $play.Size = New-Object System.Drawing.Size(70,46)
+        $play.FlatStyle = 'Flat'
+        $play.FlatAppearance.BorderSize = 0
+        $play.BackColor = [System.Drawing.Color]::FromArgb(38,132,102)
+        $play.ForeColor = $WHITE
+        $play.Font = New-Object System.Drawing.Font('Segoe UI',8,[System.Drawing.FontStyle]::Bold)
+        $play.Cursor = [System.Windows.Forms.Cursors]::Hand
+        $play.Add_Click({
+            Write-Log "Clicked: Play + Exec $selectedProfile"
+            try { Start-CS2WithProfileCfg -ProfileName $selectedProfile }
+            catch {
+                Write-Log ("Play + Exec failed for " + $selectedProfile + ": " + $_.Exception.Message + "; " + $_.ScriptStackTrace) 'ERROR'
+                [System.Windows.Forms.MessageBox]::Show(
+                    ("Unable to launch CS2 for " + $selectedProfile + ": " + $_.Exception.Message),
+                    'CS2 Launch Failed', 'OK', 'Error'
+                ) | Out-Null
+            }
+        }.GetNewClosure())
+        $form.Controls.Add($play)
+
+        # Independent third button: no graphics writes from the main mode,
+        # Play + Exec, Launch All, or background startup routines.
+        $graphics = New-Object System.Windows.Forms.Button
+        $graphics.Text = 'Apply Graphics'
+        $graphics.Location = New-Object System.Drawing.Point(($x + 166), $y)
+        $graphics.Size = New-Object System.Drawing.Size(69,46)
+        $graphics.FlatStyle = 'Flat'
+        $graphics.FlatAppearance.BorderSize = 0
+        $graphics.BackColor = [System.Drawing.Color]::FromArgb(77,72,125)
+        $graphics.ForeColor = $WHITE
+        $graphics.Font = New-Object System.Drawing.Font('Segoe UI',7,[System.Drawing.FontStyle]::Bold)
+        $graphics.Cursor = [System.Windows.Forms.Cursors]::Hand
+        $graphics.Add_Click({
+            try { Invoke-GraphicsOnly -ModeName $selectedProfile }
+            catch {
+                Write-Log ('Graphics button failed for '+$selectedProfile+': '+$_.Exception.Message) 'ERROR'
+                [void][System.Windows.Forms.MessageBox]::Show(
+                    ('Unable to apply '+$selectedProfile+' graphics: '+$_.Exception.Message),
+                    'CS2 Graphics','OK','Warning')
+            }
+        }.GetNewClosure())
+        $form.Controls.Add($graphics)
+
+        $edit = New-Object System.Windows.Forms.Button
+        $edit.Text = "Edit $EditProfile settings"
+        $edit.Location = [System.Drawing.Point]::new($x, ($y + 48))
+        $edit.Size = New-Object System.Drawing.Size(235,22)
+        $edit.Font = New-Object System.Drawing.Font('Segoe UI',8)
+        $edit.FlatStyle = 'Flat'
+        $edit.FlatAppearance.BorderSize = 0
+        $edit.BackColor = [System.Drawing.Color]::FromArgb(58,67,83)
+        $edit.ForeColor = $WHITE
+        $edit.Cursor = [System.Windows.Forms.Cursors]::Hand
+        $selectedProfile = $EditProfile
+        $edit.Add_Click({
+            Write-Log "Clicked: Edit $selectedProfile settings"
+            try { Show-ProfileEditor -ProfileName $selectedProfile }
+            catch { Write-Log "Profile editor failed: $($_.Exception.Message)" 'ERROR' }
+        }.GetNewClosure())
+        $form.Controls.Add($edit)
+    }
+}
+
+New-Tile "LAUNCH ALL" 0 { Launch-All } -Primary
+New-Tile "Steam" 1 { Start-DetectedSteam }
+New-Tile "FACEIT Anti-Cheat" 2 {
+    Launch-App -Name "FACEIT Anti-Cheat" -Paths @(
+        "$env:ProgramFiles\FACEIT AC\faceitclient.exe",
+        "${env:ProgramFiles(x86)}\FACEIT AC\faceitclient.exe"
+    )
+}
+New-Tile "FACEIT Matchmaking" 3 { Open-FaceitMatchmaking }
+New-Tile "Spotify" 4 { Open-Spotify }
+New-Tile "Logitech G HUB" 5 { Open-GHub }
+
+# Five editable gaming profiles, all using the same shared routine.
+New-Tile "FabMode" 6 { Invoke-GamingProfile -ProfileName 'FabMode' } -Primary -EditProfile 'FabMode'
+New-Tile "ArliMode" 7 { Invoke-GamingProfile -ProfileName 'ArliMode' } -Primary -EditProfile 'ArliMode'
+New-Tile "BrileMode" 8 { Invoke-GamingProfile -ProfileName 'BrileMode' } -Primary -EditProfile 'BrileMode'
+New-Tile "ArmlMode" 9 { Invoke-GamingProfile -ProfileName 'ArmlMode' } -Primary -EditProfile 'ArmlMode'
+New-Tile "OliMode" 10 { Invoke-GamingProfile -ProfileName 'OliMode' } -Primary -EditProfile 'OliMode'
+
+New-Tile "Mouse Pointer Options" 11 { Open-MousePointerOptions }
+New-Tile "NVIDIA Control Panel" 12 { Open-NvidiaControlPanel }
+New-Tile "Apply NVIDIA Settings" 13 { Apply-NvidiaGamingSettings } -Primary
+New-Tile "Install CS2 fab.cfg" 14 {
+    [void](Install-AtCfg -CfgName 'fab.cfg' -DownloadUrl $script:FabCfgCloudUrl -CloudPreferred)
+} -Primary
+New-Tile "Detect PC" 15 { Show-PCDiagnostics }
+New-Tile "Check for Updates" 16 { Check-CafeLauncherUpdates -Manual }
+New-Tile "Exit" 17 { $form.Close() }
+New-Tile "Set DPI 800 (Live)" 18 { Invoke-LogitechDpiButton }
+# New-Tile "Set DPI 800 (Onboard)" 19 { Invoke-LogitechDpiButton -Onboard } # disabled until hardware tested
+
+# Live diagnostic log panel (visible only while the launcher is open)
+$logTitle = New-Object System.Windows.Forms.Label
+$logTitle.Text = "LIVE LOGS  |  Errors and button activity"
+$logTitle.Location = New-Object System.Drawing.Point(28,755)
+$logTitle.Size = New-Object System.Drawing.Size(500,22)
+$logTitle.Font = New-Object System.Drawing.Font("Segoe UI",9,[System.Drawing.FontStyle]::Bold)
+$logTitle.ForeColor = $WHITE
+$form.Controls.Add($logTitle)
+
+$clearLogs = New-Object System.Windows.Forms.Button
+$clearLogs.Text = "Clear Logs"
+$clearLogs.Location = New-Object System.Drawing.Point(670,751)
+$clearLogs.Size = New-Object System.Drawing.Size(100,27)
+$clearLogs.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
+$clearLogs.FlatAppearance.BorderSize = 0
+$clearLogs.BackColor = $PANEL
+$clearLogs.ForeColor = $WHITE
+$clearLogs.Add_Click({
+    if ($script:LogBox) { $script:LogBox.Clear() }
+    try { Set-Content -LiteralPath $script:LogPath -Value "" -Encoding UTF8 } catch {}
+    Write-Log "Logs cleared."
+})
+$form.Controls.Add($clearLogs)
+
+$script:LogBox = New-Object System.Windows.Forms.TextBox
+$script:LogBox.Location = New-Object System.Drawing.Point(28,782)
+$script:LogBox.Size = New-Object System.Drawing.Size(742,168)
+$script:LogBox.Multiline = $true
+$script:LogBox.ReadOnly = $true
+$script:LogBox.ScrollBars = [System.Windows.Forms.ScrollBars]::Vertical
+$script:LogBox.WordWrap = $false
+$script:LogBox.BackColor = [System.Drawing.Color]::FromArgb(12,15,20)
+$script:LogBox.ForeColor = [System.Drawing.Color]::FromArgb(190,220,190)
+$script:LogBox.Font = New-Object System.Drawing.Font("Consolas",9)
+try {
+    $script:LogBox.Text = Get-Content -LiteralPath $script:LogPath -Raw -ErrorAction Stop
+    $script:LogBox.SelectionStart = $script:LogBox.TextLength
+    $script:LogBox.ScrollToCaret()
+} catch {}
+$form.Controls.Add($script:LogBox)
+Write-Log "Launcher ready. Log file: $script:LogPath"
+
+# Footer
+$footer = New-Object System.Windows.Forms.Label
+$footer.Text = "GAMING CAFE  |  WINDOWS TOOLKIT  |  LOG: %TEMP%\CafeLauncher.log"
+$footer.Location = New-Object System.Drawing.Point(28,970)
+$footer.Size = New-Object System.Drawing.Size(740,22)
+$footer.Font = New-Object System.Drawing.Font("Segoe UI",8)
+$footer.ForeColor = $MUTED
+$form.Controls.Add($footer)
+
+$form.Add_FormClosed({
+    if($script:LogihubDownloadTimer){$script:LogihubDownloadTimer.Stop();$script:LogihubDownloadTimer.Dispose();$script:LogihubDownloadTimer=$null}
+    $script:LogihubRequestedDPI=$null
+    if ($script:ColorWatchTimer) {
+        try { $script:ColorWatchTimer.Stop(); $script:ColorWatchTimer.Dispose() } catch {}
+        Write-Log "Color Watch stopped because the launcher closed."
+    }
+})
+# On first display, automatically inventory the machine and check GitHub for
+# an update. One-shot timer lets Windows render the UI before network access.
+$startupTimer = New-Object System.Windows.Forms.Timer
+$startupTimer.Interval=350
+$startupTimer.Add_Tick({
+    $startupTimer.Stop()
+    $startupTimer.Dispose()
+    try {
+        Write-Log 'Automatic startup inventory:'
+        $summary = Get-PCDiagnostics
+        foreach ($line in ($summary -split '\r?\n')) { if ($line) { Write-Log ('PC: ' + $line) } }
+    } catch { Write-Log "Startup inventory failed: $($_.Exception.Message)" 'WARN' }
+    Check-CafeLauncherUpdates
+})
+$form.Add_Shown({ $startupTimer.Start() })
+[void]$form.ShowDialog()
+)){
+            $readValue=[int]$Matches[1]
+            break
+        }
+    }
+    if($null -eq $readValue){throw ('Logitech DPI read-back cannot be parsed for device '+$deviceIndex+': '+$read)}
+    if($readValue -ne $DPI){throw ('Logitech DPI verification failed: requested '+$DPI+' but mouse reports '+$readValue)}
+    Write-Log ('Logitech live DPI verified: requested '+$DPI+'; read-back '+$readValue+' (device '+$deviceIndex+').')
 }
 function Set-LogitechOnboardDPI {
     param([int]$DPI=800)
