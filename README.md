@@ -4,7 +4,7 @@ A portable Windows **CS2 internet-café setup launcher**. A single hybrid `cafe.
 
 [Technical architecture and maintenance notes](./context.md)
 
-> Documents the current main-branch launcher at **2026.10.13.9**. Some features depend on PC hardware, installed programs and user permissions.
+> Documents the current main-branch launcher at **2026.10.13.10**. Some features depend on PC hardware, installed programs and user permissions.
 
 ## Quick start
 
@@ -15,6 +15,30 @@ A portable Windows **CS2 internet-café setup launcher**. A single hybrid `cafe.
 5. A separate **Play + Exec** button now appears beside each profile. It downloads/installs that profile's latest CFG and requests a Steam CS2 launch with a one-time argument like `steam.exe -applaunch 730 +exec oli.cfg`. It does **not** alter Steam's saved launch options or restart Steam.
 
 **Important:** Clicking a profile button only applies settings and installs its CFG, without starting CS2 or editing Steam launch options. **Play + Exec** launches CS2 with the selected CFG; it does *not* apply mouse/NVIDIA profile settings on its own. If CS2 is already running, the button shows instructions to use the developer console (`exec oli`) or restart the game. Old `+exec` values saved by earlier CafeLauncher versions will **remain in Steam's Launch Options** until you remove them once in **Steam → Library → Counter-Strike 2 → Properties → General → Launch Options**; otherwise those older commands may conflict.
+
+## Independent Apply Graphics buttons
+
+Each player row now contains **the original mode**, **Play + Exec**, and **Apply Graphics**. The graphics button does **not** trigger mouse/NVIDIA settings, Steam launch options, CS2 startup, or Launch All. Likewise, mode selection and Play + Exec do **not** automatically edit CS2 graphics.
+
+Graphics presets are **separate JSON files**, independent of the normal profile preferences:
+
+| Button | Editable graphics preset |
+| --- | --- |
+| FabMode → Apply Graphics | [graphics/FabMode.json](./graphics/FabMode.json) |
+| ArliMode → Apply Graphics | [graphics/ArliMode.json](./graphics/ArliMode.json) |
+| BrileMode → Apply Graphics | [graphics/BrileMode.json](./graphics/BrileMode.json) |
+| ArmlMode → Apply Graphics | [graphics/ArmlMode.json](./graphics/ArmlMode.json) |
+| OliMode → Apply Graphics | [graphics/OliMode.json](./graphics/OliMode.json) |
+
+On click, CafeLauncher downloads the corresponding public JSON (or a previously cached copy), detects the signed-in Steam account via the Windows registry, and edits **only recognized fields** in that account's `userdata/<Steam3ID>/730/local/cfg/cs2_video.txt`. It backs up the original under `%LOCALAPPDATA%\CafeLauncher\graphics-backups\<Steam3ID>` before any change and verifies the result. It refuses to edit while CS2 is running.
+
+Supported JSON fields are `Width`, `Height`, `RefreshHz`, `AspectRatioMode`, `Fullscreen`, `MSAASamples`, `ShadowQuality`, `DynamicShadows`, `TextureDetail`, `ShaderQuality`, `ParticleDetail`, `AmbientOcclusion`, `HDRDetail`, `NvidiaReflex`, `TextureFiltering`, `FSRDetail`, `VSync`, and `CMAA`. Change each mode's JSON independently on GitHub; **Save & Sync to GitHub in the normal profile editor does not update these files**.
+
+**Important defaults:** All five starter presets have independent JSON files with the same conservative advanced-video settings. Since specific preferences weren't supplied, `Width`, `Height`, `RefreshHz`, `AspectRatioMode`, and `Fullscreen` are initially `null` (leave existing values unchanged). Set both Width and Height if you want to override resolution; optionally specify RefreshHz. The launcher checks the requested mode against the PC's advertised DISPLAY1 modes and skips unsupported resolution/refresh entries. Missing CS2 keys are skipped; unrelated and hardware-specific fields (`Version`, `VendorID`, `DeviceID`, monitor index) are preserved.
+
+If CS2 isn't installed/signed in yet, open and save its video settings at least once to create `cs2_video.txt`. Close CS2 before applying graphics; the game writes these settings itself and could overwrite edits while running.
+
+The graphics-only PowerShell module is downloaded only when needed, checked against a **Git blob hash embedded in the BAT** (not code signing), and cached for offline reuse. Launch CS2 afterward to read the new graphics settings.
 
 ## Profile files
 
@@ -89,6 +113,7 @@ Before publishing launcher changes, run these **from the repository root on Wind
 powershell.exe -NoProfile -File .\tools\Test-CafeLauncher.ps1
 powershell.exe -NoProfile -File .\tools\Test-ProfileSave.ps1
 powershell.exe -NoProfile -File .\tools\Test-SteamLaunchOptions.ps1
+powershell.exe -NoProfile -File .\tools\Test-Graphics.ps1
 ```
 
 [GitHub Actions](./.github/workflows/cafe-syntax.yml) runs the syntax and save regression tests for relevant pushes and PRs. These do **not** replace live Windows/NVIDIA/CS2 testing, and a failed workflow does not block pushes without separately configured branch rules. Keep `cafe.bat` in Windows CRLF format and increment the release marker for each launcher release.
