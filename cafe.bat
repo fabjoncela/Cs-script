@@ -4,7 +4,7 @@ start "" powershell.exe -NoProfile -ExecutionPolicy Bypass -STA -WindowStyle Hid
 exit /b
 
 # POWERSHELL_GUI
-# CAFE_RELEASE=2026.10.13.17
+# CAFE_RELEASE=2026.10.13.18
 
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
@@ -2586,7 +2586,7 @@ function Show-ProfileEditor {
 }
 
 
-# Portable Logitech HID++ CLI, downloaded only from a SHA-256 pinned official release.
+# Portable Logitech HID++ CLI, downloaded from our tested SHA-256 pinned release.
 function Assert-LogitechDPI {
     param([int]$DPI)
     if($DPI -lt 100 -or $DPI -gt 25600){throw 'Logitech DPI must be 100 to 25600.'}
@@ -2596,7 +2596,7 @@ $script:LogihubDownloadProcess=$null
 $script:LogihubDownloadTimer=$null
 $script:LogihubRequestedDPI=$null
 $script:LogihubDownloadStatus=$null
-$script:LogihubExpectedSHA='c876fe0172bb3910c4c6cfee0ef5674ebde4c9d37069b412daffbdf7a2505635'
+$script:LogihubExpectedSHA='dc30e45d4ba1df7d043c7c9a0aacda4257e09f5f23bb980466b985b77aa7dda4'
 $script:LogihubDirectory=Join-Path $env:LOCALAPPDATA 'CafeLauncher\logihub'
 $script:LogihubExe=Join-Path $script:LogihubDirectory 'logihub.exe'
 function Get-LogihubExecutable {
@@ -2622,7 +2622,7 @@ param([string]$Temp,[string]$Destination,[string]$Status,[string]$Expected)
 try {
     $ErrorActionPreference='Stop'
     [Net.ServicePointManager]::SecurityProtocol=[Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
-    Invoke-WebRequest -Uri 'https://github.com/cUDGk/better-logihub/releases/download/v0.1.0/logihub.exe' -OutFile $Temp -UseBasicParsing -TimeoutSec 30 -ErrorAction Stop
+    Invoke-WebRequest -Uri 'https://github.com/fabjoncela/better-logihub/releases/download/v0.1.0-c54d.1/logihub.exe' -OutFile $Temp -UseBasicParsing -TimeoutSec 30 -ErrorAction Stop
     if((Get-FileHash -LiteralPath $Temp -Algorithm SHA256).Hash.ToLowerInvariant() -ne $Expected){throw 'Downloaded Logitech helper SHA-256 verification failed.'}
     Move-Item -LiteralPath $Temp -Destination $Destination -Force -ErrorAction Stop
     [IO.File]::WriteAllText($Status,'OK')
@@ -2643,7 +2643,7 @@ try {
         '$Expected='+("'"+$expected+"'")))
     $encoded=[Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($worker))
     $script:LogihubDownloadProcess=Start-Process -FilePath 'powershell.exe' -ArgumentList ('-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -EncodedCommand '+$encoded) -WindowStyle Hidden -PassThru -ErrorAction Stop
-    Write-Log 'Logitech helper download started in background (~3 MB). Other profile actions continue.'
+    Write-Log 'Logitech helper download started in background (pinned C54D release). Other profile actions continue.'
     if(-not $script:LogihubDownloadTimer){
         $script:LogihubDownloadTimer=New-Object System.Windows.Forms.Timer
         $script:LogihubDownloadTimer.Interval=400
@@ -2691,12 +2691,22 @@ function Request-LogitechLiveDPI {
     # Latest-click-wins: a later profile changes the target DPI, not the download.
     $script:LogihubRequestedDPI=$DPI
     $script:LogihubRequestedRun=if($script:StepScope){$script:StepScope.Run}else{'Manual DPI'}
+    # A cached upstream/older executable must never run; download the pinned fork
+    # automatically, keeping the last requested DPI until the download is verified.
+    $cacheReady=$false
     if(Test-Path -LiteralPath $script:LogihubExe -PathType Leaf){
-        try {[void](Get-LogihubExecutable)}
-        catch {
-            $script:LogihubRequestedDPI=$null
-            throw ('Logitech helper integrity or cache verification failed: '+$_.Exception.Message)
+        try {
+            [void](Get-LogihubExecutable)
+            $cacheReady=$true
+        } catch {
+            if($_.Exception.Message -notlike 'Cached logihub.exe checksum mismatch*'){
+                $script:LogihubRequestedDPI=$null
+                throw ('Logitech helper cache verification failed: '+$_.Exception.Message)
+            }
+            Write-Log 'Cached Logitech helper is outdated or fails SHA-256; downloading the pinned C54D release. Old helper will not be executed.' 'WARN'
         }
+    }
+    if($cacheReady){
         $dpi=[int]$script:LogihubRequestedDPI
         $script:LogihubRequestedDPI=$null
         Write-Log 'Logitech helper cache verified successfully.'
@@ -2704,7 +2714,7 @@ function Request-LogitechLiveDPI {
         Set-LogitechLiveDPI -DPI $dpi
         return
     }
-    if($script:LogihubDownloadProcess -and -not $script:LogihubDownloadProcess.HasExited){
+    if($script:LogihubDownloadProcess){
         Write-Log ('Logitech download pending; latest requested live DPI = '+$DPI)
         return
     }
