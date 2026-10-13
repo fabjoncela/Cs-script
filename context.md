@@ -1,6 +1,6 @@
 # CafeLauncher — Technical Context
 
-Maintainer / coding-assistant reference for [CafeLauncher](./README.md). This document reflects the `main` implementation of `cafe.bat` at **2026.10.13.10**. Read the actual source before editing; code is the ultimate source of truth.
+Maintainer / coding-assistant reference for [CafeLauncher](./README.md). This document reflects the `main` implementation of `cafe.bat` at **2026.10.13.11**. Read the actual source before editing; code is the ultimate source of truth.
 
 ## Repository structure
 
@@ -161,6 +161,8 @@ The graphics-only module:
 6. Backs up the original video file to `%LOCALAPPDATA%\CafeLauncher\graphics-backups\<ActiveUser>`, stages a replacement, atomically replaces the target where Windows allows, verifies the result, and attempts recovery using the backup on errors.
 
 `tools/Test-Graphics.ps1` exercises graphics VDF changes against in-memory fixtures (including known hardware-specific fields), validates the five independent JSON presets, checks enum/range validation, and ensures the normal profile code does not call graphics. CI validates these on Windows PowerShell 5.1; a final end-to-end test on a Windows PC with Steam + CS2 remains necessary.
+
+**Graphics save regression fixed (v2026.10.13.11):** Windows PowerShell 5.1 may reject a null third backup path in `[IO.File]::Replace($temp,$target,$null)` with `The path is not of a legal form`. `Save-CS2VideoFileWithBackup` now gives `File.Replace` a legal same-directory backup filename and keeps a separate, permanent timestamped copy under `%LOCALAPPDATA%\CafeLauncher\graphics-backups\<Steam3ID>`. It checks CS2 isn't running just before replacement, verifies the new text, and attempts recovery from the permanent backup on error. The Windows graphics test now exercises this function using real temporary files, checks backup integrity, and ensures temporary/swap files are cleaned up. Update the module blob SHA pinned by the BAT whenever editing the module.
 
 ## Windows, NVIDIA and PC detection
 
