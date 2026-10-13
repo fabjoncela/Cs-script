@@ -1946,16 +1946,15 @@ function Test-LauncherIsCurrent {
 }
 
 function Check-CafeLauncherUpdates {
-    # This experimental branch never switches itself to the production main.
-    # Testers can manually download the production version when they choose.
+    param([switch]$Manual)
+    # A preview build must not download and overwrite itself with production main.
     if($script:PreviewBranch){
         Write-Log ('Preview branch '+$script:PreviewBranch+': production auto-update disabled.')
         if($Manual){[void][System.Windows.Forms.MessageBox]::Show(
-            'This is a preview build. Main-branch updates are disabled to keep your test copy on its branch.',
+            'Preview build: production updates are disabled here. Your test copy will stay on this branch.',
             'CafeLauncher Preview','OK','Information')}
         return
     }
-    param([switch]$Manual)
     $source=$env:CAFE_SCRIPT
     if ([string]::IsNullOrWhiteSpace($source)) {
         if ($Manual) { Write-Log 'Current BAT path not available for updater.' 'WARN' }
