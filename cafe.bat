@@ -2665,7 +2665,7 @@ function Invoke-Logihub {
 # Only the original PRO X SUPERLIGHT and PRO X SUPERLIGHT 2 are supported here.
 function Select-SuperlightDevice {
     param([Parameter(Mandatory=$true)][string]$Json)
-    try {$rows=@(ConvertFrom-Json -InputObject $Json -ErrorAction Stop)}
+    try {$rows=@(ConvertFrom-Json -InputObject $Json -ErrorAction Stop | ForEach-Object {$_})}
     catch{throw ('Could not parse Logitech device list as JSON: '+$_.Exception.Message)}
     $matches=New-Object 'System.Collections.Generic.List[object]'
     foreach($row in $rows){
