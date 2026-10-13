@@ -12,7 +12,7 @@ The `ui/dashboard-tabbed-editor-preview` branch is a **test-only** version of th
 
 - **Test only the preview:** download `https://raw.githubusercontent.com/fabjoncela/Cs-script/ui/dashboard-tabbed-editor-preview/cafe.bat` directly. Save it as `cafe-preview.bat` and open that copy. Do **not** use Check for Updates from the production BAT to fetch the preview.
 - **Production untouched:** `main` is not modified by these UI changes, and this preview intentionally disables automatic/main-branch updater actions.
-- **Preview writes:** Save Locally works; Save & Sync to GitHub is intentionally disabled to prevent a preview settings edit from changing the production profile JSON. The preview still downloads public CFG/profile/graphics data from main.
+- **Preview writes:** Save Locally still works. **Save & Sync to GitHub** now requires explicit confirmation before writing to production `main`; it saves the profile JSON, and if CS2 sensitivity is nonblank, updates only its matching `<profile>.cfg` sensitivity command. You must explicitly authorize the GitHub update with a fine-grained token. The redesigned GUI itself remains on its preview branch and is not merged.
 - **Validation:** CI runs Windows PowerShell 5.1 syntax and non-device checks. Test tab navigation, editor layout at your Windows scaling, DPI, profile Apply, Play + Exec and Apply Graphics on a machine before considering merge.
 
 ## Quick start
@@ -85,13 +85,13 @@ Click **Edit ArliMode settings** (or the equivalent button for any other profile
 
 **Save Locally:** saves to `%LOCALAPPDATA%\CafeLauncher\profiles.json`. No GitHub login. Changes remain local and may be erased by Deep Freeze.
 
-**Save & Sync to GitHub:** saves locally, then asks for a **fine-grained GitHub personal access token** restricted to this repository with **Contents: Read and write**. On success, the launcher updates `profiles/<ProfileName>.json` on `main`. It does not intentionally save the token. **Never enter a GitHub token on a shared café PC.**
+**Save & Sync to GitHub:** saves locally, then asks for a **fine-grained GitHub personal access token** restricted to this repository with **Contents: Read and write**. On success, the launcher updates `profiles/<ProfileName>.json` on `main` and the matching `.cfg` sensitivity when provided; this operation writes to the production GitHub repository even when initiated from the GUI preview. It does not intentionally save the token. **Never enter a GitHub token on a shared café PC.**
 
 The launcher fetches public cloud JSON when editing or applying a profile **unless it has unsynced local edits**. Those local edits take precedence until synced. Saving an edit does not immediately apply the PC settings: click the profile button to apply.
 
 ### Updating CFG binds and crosshair
 
-**Save & Sync updates the profile's JSON settings, not the original `.cfg` file.** To update Arli's binds, crosshair, or other CS2 commands, edit `arli.cfg` in your local Git clone and push:
+**Save & Sync updates the profile's JSON and, when CS2 sensitivity is nonblank, also updates that profile's original `.cfg` sensitivity command on GitHub.** All other CFG binds, crosshair settings, and commands stay unchanged. A blank sensitivity leaves the CFG untouched. If the CFG commits but JSON fails, the launcher warns **PARTIAL SYNC** and keeps the local profile unsynced; retry Save & Sync. To change Arli's other binds, crosshair, or CS2 commands, continue editing `arli.cfg` in your local clone and push:
 
 ```powershell
 git add arli.cfg
