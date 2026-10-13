@@ -35,8 +35,43 @@ if($onboard.IndexOf("'onboard','dump'",[StringComparison]::Ordinal) -ge
    $onboard.IndexOf("'onboard','set-dpi'",[StringComparison]::Ordinal)){
     throw 'Onboard backup must happen before any onboard write.'
 }
-if($source -notmatch 'New-Tile "Set DPI 800 \(Live\)" 18' -or $source -notmatch '(?m)^# New-Tile "Set DPI 800 \(Onboard\)" 19'){
-    throw 'Live button must be active; onboard button must be commented out.'
+if($source -match 'New-Tile "Set DPI 800 \(Live\)" 18'){
+    throw 'Old fixed 800 DPI button must be removed.'
+}
+if($source -notmatch '(?m)^# New-Tile "Set DPI 800 \(Onboard\)" 19'){
+    throw 'Onboard button must remain disabled.'
+}
+foreach($fragment in @(
+    '$script:ManualDpiInput=New-Object System.Windows.Forms.TextBox',
+    '$script:ManualDpiChangeButton.Text=''Change DPI''',
+    'ConvertTo-ManualLogitechDPI -Text $script:ManualDpiInput.Text',
+    'Invoke-LogitechDpiButton -DPI $dpi',
+    '$script:ManualDpiChangeButton.PerformClick()'
+)){
+    if(-not $source.Contains($fragment)){throw ('Change DPI UI wiring missing: '+$fragment)}
+}
+if(-not $functions.ContainsKey('ConvertTo-ManualLogitechDPI')){
+    throw 'Manual DPI validation function missing.'
+}
+$manualButton=$functions['Invoke-LogitechDpiButton']
+if($manualButton -notmatch 'Request-LogitechLiveDPI -DPI \$DPI' -or
+   $manualButton -notmatch 'Assert-LogitechDPI -DPI \$DPI'){
+    throw 'Manual Change DPI button must apply entered value to live DPI routine.'
+}
+# Test the actual input parser on Windows PowerShell 5.1 (no device required).
+Invoke-Expression $functions['Assert-LogitechDPI']
+Invoke-Expression $functions['ConvertTo-ManualLogitechDPI']
+foreach($inputValue in @('100','300','800','1600','2400','25600',' 800 ')){
+    $expect=[int]$inputValue.Trim()
+    if((ConvertTo-ManualLogitechDPI -Text $inputValue) -ne $expect){
+        throw ('Incorrect manual DPI parsing: '+$inputValue)
+    }
+}
+foreach($invalid in @('',' ','abc','800.5','-800','99','0','25601','999999','1e3')){
+    $failed=$false
+    try { [void](ConvertTo-ManualLogitechDPI -Text $invalid) }
+    catch { $failed=$true }
+    if(-not $failed){throw ('Expected manual DPI input rejection: '+$invalid)}
 }
 if($functions['Start-LogihubAsyncDownload'] -notmatch 'Start-Process' -or $functions['Start-LogihubAsyncDownload'] -notmatch 'LogihubDownloadTimer' -or $functions['Request-LogitechLiveDPI'] -notmatch 'LogihubRequestedDPI'){
     throw 'Hybrid async download or latest DPI pending state missing.'

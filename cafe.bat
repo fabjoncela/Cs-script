@@ -4,7 +4,7 @@ start "" powershell.exe -NoProfile -ExecutionPolicy Bypass -STA -WindowStyle Hid
 exit /b
 
 # POWERSHELL_GUI
-# CAFE_RELEASE=2026.10.13.18
+# CAFE_RELEASE=2026.10.13.19
 
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
@@ -2806,11 +2806,23 @@ function Set-LogitechOnboardDPI {
     [void](Invoke-Logihub -Arguments @('onboard','mode','set','on','--device',([string]$target.Index)))
     Write-Log ('Onboard DPI '+$DPI+' command completed. Backup: '+$backup)
 }
+# Parse custom DPI text; reject empty, decimal, negative and out-of-range values.
+function ConvertTo-ManualLogitechDPI {
+    param([AllowEmptyString()][string]$Text)
+    $raw=$Text.Trim()
+    if($raw -notmatch '^[0-9]{1,5}$'){
+        throw 'Type a whole-number DPI between 100 and 25600.'
+    }
+    $dpi=[int]::Parse($raw,[Globalization.CultureInfo]::InvariantCulture)
+    Assert-LogitechDPI -DPI $dpi
+    return $dpi
+}
 function Invoke-LogitechDpiButton {
-    param([switch]$Onboard)
+    param([int]$DPI=800,[switch]$Onboard)
     try {
-        if($Onboard){Set-LogitechOnboardDPI -DPI 800}
-        else{Request-LogitechLiveDPI -DPI 800}
+        Assert-LogitechDPI -DPI $DPI
+        if($Onboard){Set-LogitechOnboardDPI -DPI $DPI}
+        else{Request-LogitechLiveDPI -DPI $DPI}
     } catch {
         Write-Log ('Logitech DPI failed: '+$_.Exception.Message) 'ERROR'
         [void][System.Windows.Forms.MessageBox]::Show($_.Exception.Message,'Logitech DPI','OK','Warning')
@@ -3144,7 +3156,61 @@ New-Tile "Install CS2 fab.cfg" 14 {
 New-Tile "Detect PC" 15 { Show-PCDiagnostics }
 New-Tile "Check for Updates" 16 { Check-CafeLauncherUpdates -Manual }
 New-Tile "Exit" 17 { $form.Close() }
-New-Tile "Set DPI 800 (Live)" 18 { Invoke-LogitechDpiButton }
+# Editable DPI input replaces the fixed-800 live button in tile 18.
+$manualDpiPanel=New-Object System.Windows.Forms.Panel
+$manualDpiPanel.Location=New-Object System.Drawing.Point(25,653)
+$manualDpiPanel.Size=New-Object System.Drawing.Size(235,70)
+$manualDpiPanel.BackColor=$PANEL
+$form.Controls.Add($manualDpiPanel)
+
+$manualDpiLabel=New-Object System.Windows.Forms.Label
+$manualDpiLabel.Text='DPI (100 - 25600)'
+$manualDpiLabel.Location=New-Object System.Drawing.Point(10,7)
+$manualDpiLabel.Size=New-Object System.Drawing.Size(108,20)
+$manualDpiLabel.Font=New-Object System.Drawing.Font('Segoe UI',8)
+$manualDpiLabel.ForeColor=$WHITE
+$manualDpiPanel.Controls.Add($manualDpiLabel)
+
+$script:ManualDpiInput=New-Object System.Windows.Forms.TextBox
+$script:ManualDpiInput.Text='800'
+$script:ManualDpiInput.Location=New-Object System.Drawing.Point(10,32)
+$script:ManualDpiInput.Size=New-Object System.Drawing.Size(105,26)
+$script:ManualDpiInput.MaxLength=5
+$script:ManualDpiInput.Font=New-Object System.Drawing.Font('Segoe UI',11)
+$script:ManualDpiInput.ForeColor=$WHITE
+$script:ManualDpiInput.BackColor=$BG
+$manualDpiPanel.Controls.Add($script:ManualDpiInput)
+
+$script:ManualDpiChangeButton=New-Object System.Windows.Forms.Button
+$script:ManualDpiChangeButton.Text='Change DPI'
+$script:ManualDpiChangeButton.Location=New-Object System.Drawing.Point(121,10)
+$script:ManualDpiChangeButton.Size=New-Object System.Drawing.Size(105,50)
+$script:ManualDpiChangeButton.Font=New-Object System.Drawing.Font('Segoe UI',9,[System.Drawing.FontStyle]::Bold)
+$script:ManualDpiChangeButton.FlatStyle='Flat'
+$script:ManualDpiChangeButton.FlatAppearance.BorderSize=0
+$script:ManualDpiChangeButton.BackColor=$BLUE
+$script:ManualDpiChangeButton.ForeColor=$WHITE
+$script:ManualDpiChangeButton.Cursor=[System.Windows.Forms.Cursors]::Hand
+$script:ManualDpiChangeButton.Add_Click({
+    try {
+        $dpi=ConvertTo-ManualLogitechDPI -Text $script:ManualDpiInput.Text
+        Write-Log ('Clicked: Change DPI ('+$dpi+')')
+        Invoke-LogitechDpiButton -DPI $dpi
+    } catch {
+        Write-Log ('Invalid custom Logitech DPI: '+$_.Exception.Message) 'ERROR'
+        [void][System.Windows.Forms.MessageBox]::Show($_.Exception.Message,'Change DPI','OK','Warning')
+        $script:ManualDpiInput.Focus()
+        $script:ManualDpiInput.SelectAll()
+    }
+})
+$manualDpiPanel.Controls.Add($script:ManualDpiChangeButton)
+$script:ManualDpiInput.Add_KeyDown({
+    param($sender,$eventArgs)
+    if($eventArgs.KeyCode -eq [System.Windows.Forms.Keys]::Enter){
+        $eventArgs.SuppressKeyPress=$true
+        $script:ManualDpiChangeButton.PerformClick()
+    }
+})
 # New-Tile "Set DPI 800 (Onboard)" 19 { Invoke-LogitechDpiButton -Onboard } # disabled until hardware tested
 
 # Live diagnostic log panel (visible only while the launcher is open)
