@@ -2389,7 +2389,8 @@ function Sync-ProfileToGitHub {
         $existingSha = [string]$current.sha
     } catch {
         $status = $null
-        if ($_.Exception.Response) { $status = [int]$_.Exception.Response.StatusCode }
+        $responseProp=$_.Exception.PSObject.Properties['Response']
+        if($responseProp -and $responseProp.Value){$status=[int]$responseProp.Value.StatusCode}
         if ($status -ne 404) { throw "GitHub authorization or file read failed (HTTP $status)." }
     }
 
@@ -2443,7 +2444,8 @@ function Sync-ProfileToGitHub {
         Write-Log ("GitHub sync completed: "+$path+" updated; "+$cfgName+" "+$cfgStatus+"; commit="+$result.commit.sha)
     } catch {
         $status = $null
-        if ($_.Exception.Response) { $status = [int]$_.Exception.Response.StatusCode }
+        $responseProp=$_.Exception.PSObject.Properties['Response']
+        if($responseProp -and $responseProp.Value){$status=[int]$responseProp.Value.StatusCode}
         $detail=if ($status -eq 401 -or $status -eq 403) {
             'GitHub refused the token. Check Contents: Read and write permission.'
         } elseif($status -eq 409 -or $status -eq 422) {
