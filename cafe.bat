@@ -2578,7 +2578,7 @@ function Start-CS2WithProfileCfg {
 # Strict hash pin prevents executing unreviewed modified remote module code.
 function Invoke-GraphicsOnly {
     param([Parameter(Mandatory=$true)][string]$ModeName)
-    $expected='88fb6551d0fff1d58c78b06a53b9e6cb92a7c274'
+    $expected='1a9b183b01aaf2758cbe14400e51f0835143a7c8'
     $source='https://raw.githubusercontent.com/fabjoncela/Cs-script/main/graphics/ApplyGraphics.ps1'
     $cache=Join-Path $env:LOCALAPPDATA 'CafeLauncher\graphics-module.ps1'
     $parent=Split-Path -Parent $cache
