@@ -4,6 +4,7 @@ start "" powershell.exe -NoProfile -ExecutionPolicy Bypass -STA -WindowStyle Hid
 exit /b
 
 # POWERSHELL_GUI
+# CAFE_RELEASE=2026.10.13.2
 
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
@@ -302,6 +303,8 @@ function Open-NvidiaControlPanel {
 
 
 # Windows display-mode API and NVIDIA NVAPI first-stage settings helper.
+# Automatically chooses highest driver-advertised refresh at preferred resolution
+# if the requested Hz is unavailable; falls back to the CURRENT resolution only.
 # The display mode helper uses a byte-array placeholder for DEVMODE's 16-byte union,
 # avoiding compiler/layout problems from the prior explicit union implementation.
 try {
@@ -309,6 +312,7 @@ try {
         Add-Type -ErrorAction Stop @"
 using System;
 using System.Runtime.InteropServices;
+using System.Collections.Generic;
 
 public static class FabDisplayNative {
     [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
@@ -372,58 +376,105 @@ public static class FabDisplayNative {
         }
     }
 
+    // List of driver-advertised modes for the main Windows display (DISPLAY1).
+    public static string GetDisplayModesReport() {
+        const string device = @"\\.\DISPLAY1";
+        DEVMODE current = NewMode();
+        string active = EnumDisplaySettings(device, -1, ref current)
+            ? current.dmPelsWidth + "x" + current.dmPelsHeight + " @" + current.dmDisplayFrequency + "Hz"
+            : "unknown";
+        SortedSet<int> requested1080 = new SortedSet<int>();
+        SortedSet<int> atCurrent = new SortedSet<int>();
+        int count = 0;
+        for (int i=0; i<4096; i++) {
+            DEVMODE dm = NewMode();
+            if (!EnumDisplaySettings(device, i, ref dm)) break;
+            if (dm.dmBitsPerPel < 24 || dm.dmDisplayFrequency < 24 ||
+                (dm.dmDisplayFlags & 2) != 0) continue;
+            count++;
+            if (dm.dmPelsWidth == 1920 && dm.dmPelsHeight == 1080)
+                requested1080.Add(dm.dmDisplayFrequency);
+            if (dm.dmPelsWidth == current.dmPelsWidth && dm.dmPelsHeight == current.dmPelsHeight)
+                atCurrent.Add(dm.dmDisplayFrequency);
+        }
+        return device + ": active " + active + "; 1080p Hz: " +
+            (requested1080.Count > 0 ? String.Join(", ", requested1080) : "not advertised") +
+            "; current-resolution Hz: " +
+            (atCurrent.Count > 0 ? String.Join(", ", atCurrent) : "not advertised") +
+            "; modes checked=" + count + ".";
+    }
+
     public static bool TrySetDisplayMode(int desiredWidth, int desiredHeight, int desiredHz, out string report) {
         const string device = @"\\.\DISPLAY1";
+        DEVMODE current = NewMode();
+        if (!EnumDisplaySettings(device, -1, ref current)) {
+            report = "Cannot read current DISPLAY1 mode; no changes made.";
+            return false;
+        }
         DEVMODE candidate = NewMode();
-        bool found = false;
+        int tier = -1;  // 2 = preferred resolution/Hz; 1 = preferred resolution; 0 = current resolution
         int count = 0;
-        for (int i = 0; i < 4096; i++) {
+        for (int i=0; i<4096; i++) {
             DEVMODE dm = NewMode();
             if (!EnumDisplaySettings(device, i, ref dm)) break;
             count++;
-            if (dm.dmPelsWidth == desiredWidth && dm.dmPelsHeight == desiredHeight &&
-                dm.dmDisplayFrequency == desiredHz && dm.dmBitsPerPel >= 24) {
-                candidate = dm;
-                found = true;
-                if (dm.dmBitsPerPel >= 32) break;
-            }
+            if (dm.dmBitsPerPel < 24 || dm.dmDisplayFrequency < 24 ||
+                (dm.dmDisplayFlags & 2) != 0) continue;
+            int thisTier = -1;
+            if (dm.dmPelsWidth == desiredWidth && dm.dmPelsHeight == desiredHeight)
+                thisTier = dm.dmDisplayFrequency == desiredHz ? 2 : 1;
+            else if (dm.dmPelsWidth == current.dmPelsWidth && dm.dmPelsHeight == current.dmPelsHeight)
+                thisTier = 0;
+            if (thisTier < 0) continue;
+            bool preferable = thisTier > tier ||
+                (thisTier == tier && dm.dmDisplayFrequency > candidate.dmDisplayFrequency) ||
+                (thisTier == tier && dm.dmDisplayFrequency == candidate.dmDisplayFrequency &&
+                    dm.dmBitsPerPel > candidate.dmBitsPerPel);
+            if (preferable) { candidate = dm; tier = thisTier; }
         }
-
-        if (!found) {
-            DEVMODE current = NewMode();
-            string currentText = "current mode unavailable";
-            if (EnumDisplaySettings(device, -1, ref current)) {
-                currentText = current.dmPelsWidth + "x" + current.dmPelsHeight +
-                    " @" + current.dmDisplayFrequency + "Hz";
-            }
-            report = device + " current=" + currentText +
-                ". Windows did not advertise " + desiredWidth + "x" + desiredHeight + " @" + desiredHz + "Hz (modes checked: " +
-                count + "). No display mode was changed.";
+        if (tier < 0) {
+            report = device + " no suitable display mode advertised after checking " + count +
+                " modes. Keeping " + current.dmPelsWidth + "x" + current.dmPelsHeight +
+                " @" + current.dmDisplayFrequency + "Hz.";
             return false;
         }
+        string choice = candidate.dmPelsWidth + "x" + candidate.dmPelsHeight +
+            " @" + candidate.dmDisplayFrequency + "Hz";
+        string requested = desiredWidth + "x" + desiredHeight + " @" + desiredHz + "Hz";
+        string reason = tier == 2 ? "exact mode available" :
+            tier == 1 ? "requested Hz unavailable; highest advertised Hz at preferred resolution" :
+            "preferred resolution unavailable; using highest advertised Hz at current resolution";
 
+        // Avoid screen flicker and unnecessary registry writes if mode is already correct.
+        if (current.dmPelsWidth == candidate.dmPelsWidth &&
+            current.dmPelsHeight == candidate.dmPelsHeight &&
+            current.dmDisplayFrequency == candidate.dmDisplayFrequency) {
+            report = device + " already uses " + choice + " (requested " + requested +
+                "; " + reason + "). No change needed.";
+            return true;
+        }
         candidate.dmFields |= 0x00040000 | 0x00080000 | 0x00100000 | 0x00400000;
         int test = ChangeDisplaySettingsEx(device, ref candidate, IntPtr.Zero, 0x00000002, IntPtr.Zero);
         if (test != 0) {
-            report = "Windows rejected display-mode test: " + ResultName(test) + " (" + test + ").";
+            report = "Windows rejected candidate " + choice + " during test: " + ResultName(test) + ". Original mode kept.";
             return false;
         }
         int apply = ChangeDisplaySettingsEx(device, ref candidate, IntPtr.Zero, 0x00000001, IntPtr.Zero);
         if (apply != 0) {
-            report = "Windows could not apply display mode: " + ResultName(apply) + " (" + apply + ").";
+            report = "Windows rejected candidate " + choice + " during apply: " + ResultName(apply) + ".";
             return false;
         }
-
         DEVMODE after = NewMode();
         if (EnumDisplaySettings(device, -1, ref after)) {
-            report = device + " now reports " + after.dmPelsWidth + "x" + after.dmPelsHeight +
-                " @" + after.dmDisplayFrequency + "Hz, " + after.dmBitsPerPel +
-                " bpp (requested " + desiredWidth + "x" + desiredHeight + " @" + desiredHz + "Hz).";
-            return after.dmPelsWidth == desiredWidth && after.dmPelsHeight == desiredHeight &&
-                after.dmDisplayFrequency == desiredHz;
+            bool verified = after.dmPelsWidth == candidate.dmPelsWidth &&
+                after.dmPelsHeight == candidate.dmPelsHeight &&
+                after.dmDisplayFrequency == candidate.dmDisplayFrequency;
+            report = device + " " + (verified ? "set and verified " : "read-back mismatch after requesting ") +
+                choice + "; requested " + requested + "; " + reason + ".";
+            return verified;
         }
-        report = "Windows accepted display mode, but current mode could not be read back.";
-        return true;
+        report = "Windows accepted " + choice + " but current mode could not be verified.";
+        return false;
     }
 
     public static bool TrySetDisplay1To1080p360(out string report) {
@@ -1636,11 +1687,216 @@ function Install-AtCfg {
     }
 }
 
-function Launch-All {
-    Launch-App -Name "Steam" -Paths @(
+# ============================================================== 
+# Automatic PC inventory; safe to run without administrator rights.
+# ============================================================== 
+function Get-SteamExecutable {
+    $candidates = @(
         "${env:ProgramFiles(x86)}\Steam\steam.exe",
-        "$env:ProgramFiles\Steam\steam.exe"
+        "$env:ProgramFiles\Steam\steam.exe",
+        "$env:LOCALAPPDATA\Steam\steam.exe"
     )
+    foreach ($root in @(Get-SteamLibraryRoots)) { $candidates += (Join-Path $root 'steam.exe') }
+    return Find-App -Paths $candidates
+}
+
+function Start-DetectedSteam {
+    $steamExe = Get-SteamExecutable
+    if ($steamExe) {
+        try { Start-Process -FilePath $steamExe -ErrorAction Stop; Write-Log "Steam launched from $steamExe" }
+        catch { Write-Log "Steam failed to launch: $($_.Exception.Message)" 'ERROR' }
+    } else { Write-Log 'Steam executable not found.' 'WARN' }
+}
+
+function Get-PCDiagnostics {
+    $lines = New-Object 'System.Collections.Generic.List[string]'
+    $lines.Add("Machine: $env:COMPUTERNAME")
+    try {
+        $gpus = @(Get-CimInstance -ClassName Win32_VideoController -ErrorAction Stop |
+            Where-Object { $_.Name } | Select-Object -ExpandProperty Name)
+        $lines.Add('Graphics: ' + ($(if ($gpus.Count) { $gpus -join '; ' } else { 'Unavailable' })))
+    } catch { $lines.Add('Graphics: Could not query GPU details') }
+    try {
+        if ('FabDisplayNative' -as [type]) {
+            $lines.Add([FabDisplayNative]::GetDisplayModesReport())
+        } else { $lines.Add('Display modes: driver helper unavailable') }
+        foreach ($screen in [System.Windows.Forms.Screen]::AllScreens) {
+            $lines.Add("Monitor $($screen.DeviceName): $($screen.Bounds.Width)x$($screen.Bounds.Height), primary=$($screen.Primary)")
+        }
+    } catch { $lines.Add('Display inventory could not be read') }
+    try {
+        $ptr = [Runtime.InteropServices.Marshal]::AllocHGlobal(4)
+        try {
+            $ok = [FabMouseNative]::SystemParametersInfo(0x0070,0,$ptr,0)
+            if ($ok) { $lines.Add('Active Windows pointer speed: ' + [Runtime.InteropServices.Marshal]::ReadInt32($ptr)) }
+            else { $lines.Add('Pointer speed API read failed') }
+        } finally { [Runtime.InteropServices.Marshal]::FreeHGlobal($ptr) }
+        $m = Get-ItemProperty -Path 'HKCU:\Control Panel\Mouse' -ErrorAction Stop
+        $lines.Add("Mouse registry: speed=$($m.MouseSensitivity), acceleration=$($m.MouseSpeed), thresholds=$($m.MouseThreshold1)/$($m.MouseThreshold2)")
+    } catch { $lines.Add('Mouse settings could not be read') }
+    $steam = Get-SteamExecutable
+    $lines.Add('Steam: ' + $(if ($steam) { $steam } else { 'not detected' }))
+    $roots = @(Get-SteamLibraryRoots)
+    $lines.Add('Steam libraries: ' + $(if ($roots.Count) { $roots -join '; ' } else { 'not detected' }))
+    $cs2 = Find-CS2ConfigFolder -NoPrompt
+    $lines.Add('CS2 config: ' + $(if ($cs2) { $cs2 } else { 'not detected' }))
+    $faceit = Find-App -Paths @("$env:ProgramFiles\FACEIT AC\faceitclient.exe", "${env:ProgramFiles(x86)}\FACEIT AC\faceitclient.exe")
+    $lines.Add('FACEIT AC: ' + $(if ($faceit) { $faceit } else { 'not detected' }))
+    $ghub = Find-App -Paths @("$env:ProgramFiles\LGHUB\lghub.exe", "$env:ProgramFiles\LGHUB\lghub_system_tray.exe")
+    $lines.Add('Logitech G HUB: ' + $(if ($ghub) { $ghub } else { 'not detected' }))
+    $chrome = Get-ChromePath
+    $lines.Add('Chrome: ' + $(if ($chrome) { $chrome } else { 'not detected' }))
+    try {
+        $nvPanel = Find-App -Paths @("$env:ProgramFiles\NVIDIA Corporation\Control Panel Client\nvcplui.exe", "${env:ProgramFiles(x86)}\NVIDIA Corporation\Control Panel Client\nvcplui.exe")
+        if (-not $nvPanel) {
+            $storeApp = Get-StartApps -ErrorAction Stop | Where-Object { $_.Name -match '^NVIDIA Control Panel$' } | Select-Object -First 1
+            if ($storeApp) { $nvPanel='Installed Store app' }
+        }
+        $lines.Add('NVIDIA Control Panel: ' + $(if ($nvPanel) { $nvPanel } else { 'not detected' }))
+    } catch { $lines.Add('NVIDIA Control Panel: not detected') }
+    return ($lines -join [Environment]::NewLine)
+}
+
+function Show-PCDiagnostics {
+    Write-Log 'PC detection started.'
+    try {
+        $summary = Get-PCDiagnostics
+        foreach ($line in ($summary -split '\r?\n')) { if ($line) { Write-Log ('PC: ' + $line) } }
+        $formDialog = New-Object System.Windows.Forms.Form
+        $formDialog.Text='PC Detection - CafeLauncher'
+        $formDialog.ClientSize=[System.Drawing.Size]::new(755,445)
+        $formDialog.StartPosition='CenterParent'
+        $formDialog.BackColor=$BG
+        $formDialog.ForeColor=$WHITE
+        $formDialog.Font=New-Object System.Drawing.Font('Consolas',10)
+        $reportBox = New-Object System.Windows.Forms.TextBox
+        $reportBox.Location=[System.Drawing.Point]::new(12,12)
+        $reportBox.Size=[System.Drawing.Size]::new(731,385)
+        $reportBox.Multiline=$true
+        $reportBox.ReadOnly=$true
+        $reportBox.ScrollBars='Both'
+        $reportBox.WordWrap=$false
+        $reportBox.BackColor=$PANEL
+        $reportBox.ForeColor=$WHITE
+        $reportBox.Text=$summary
+        $formDialog.Controls.Add($reportBox)
+        $close = New-Object System.Windows.Forms.Button
+        $close.Text='Close'
+        $close.Location=[System.Drawing.Point]::new(633,404)
+        $close.Size=[System.Drawing.Size]::new(110,30)
+        $close.Add_Click({ $formDialog.Close() })
+        $formDialog.Controls.Add($close)
+        [void]$formDialog.ShowDialog($form)
+        $formDialog.Dispose()
+    } catch { Write-Log "PC detection failed: $($_.Exception.Message)" 'ERROR' }
+}
+
+# ============================================================== 
+# Public GitHub updater: no token needed, never auto-runs new code.
+# Compares local content to the main-branch Git blob SHA, verifies download.
+# ============================================================== 
+function Get-GitBlobSha {
+    param([byte[]]$Bytes)
+    $head=[Text.Encoding]::ASCII.GetBytes('blob ' + $Bytes.Length + [char]0)
+    $blob=New-Object byte[] ($head.Length + $Bytes.Length)
+    [Array]::Copy($head,0,$blob,0,$head.Length)
+    [Array]::Copy($Bytes,0,$blob,$head.Length,$Bytes.Length)
+    $sha=[Security.Cryptography.SHA1]::Create()
+    try { return ([BitConverter]::ToString($sha.ComputeHash($blob))).Replace('-','').ToLowerInvariant() }
+    finally { $sha.Dispose() }
+}
+
+function Test-LauncherIsCurrent {
+    param([string]$CurrentPath,[string]$RemoteBlobSha)
+    if (-not (Test-Path -LiteralPath $CurrentPath -PathType Leaf)) { return $false }
+    $bytes=[IO.File]::ReadAllBytes($CurrentPath)
+    if ((Get-GitBlobSha -Bytes $bytes) -eq $RemoteBlobSha) { return $true }
+    # Chrome/Drive may preserve CRLF even when GitHub stores LF. Ignore just
+    # line-ending differences and an optional final newline for comparison.
+    $normalized=[Text.Encoding]::UTF8.GetString($bytes).Replace("`r`n","`n")
+    if ((Get-GitBlobSha -Bytes ([Text.Encoding]::UTF8.GetBytes($normalized))) -eq $RemoteBlobSha) { return $true }
+    $oneNewline=$normalized.TrimEnd("`n")
+    return (Get-GitBlobSha -Bytes ([Text.Encoding]::UTF8.GetBytes($oneNewline))) -eq $RemoteBlobSha
+}
+
+function Check-CafeLauncherUpdates {
+    param([switch]$Manual)
+    $source=$env:CAFE_SCRIPT
+    if ([string]::IsNullOrWhiteSpace($source)) {
+        if ($Manual) { Write-Log 'Current BAT path not available for updater.' 'WARN' }
+        return
+    }
+    try {
+        [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+        $uri="https://api.github.com/repos/fabjoncela/Cs-script/contents/cafe.bat?ref=main"
+        $remote=Invoke-RestMethod -Uri $uri -Headers @{'User-Agent'='CafeLauncher-Updater'; 'Accept'='application/vnd.github+json'} -TimeoutSec 8 -ErrorAction Stop
+        if ($remote.path -ne 'cafe.bat' -or $remote.sha -notmatch '^[a-fA-F0-9]{40}$' -or
+            [int64]$remote.size -lt 10000 -or [int64]$remote.size -gt 1000000) { throw 'Unexpected update metadata from GitHub.' }
+        # Ignore older/unversioned GitHub builds. A new release must increment
+        # its CAFE_RELEASE marker, rather than merely have different line endings.
+        if ($remote.encoding -ne 'base64' -or [string]::IsNullOrWhiteSpace($remote.content)) {
+            throw 'GitHub did not include update version metadata.'
+        }
+        $remoteText=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String(($remote.content -replace '\s','')))
+        $pattern='(?m)^# CAFE_RELEASE=(\d{4}\.\d{1,2}\.\d{1,2}\.\d+)\s*$'
+        $remoteMatch=[regex]::Match($remoteText,$pattern)
+        $localMatch=[regex]::Match([IO.File]::ReadAllText($source),$pattern)
+        if (-not $remoteMatch.Success) {
+            Write-Log 'GitHub main has no release marker (older launcher); skipping downgrade. Upload this new cafe.bat to main first.' 'WARN'
+            if ($Manual) { [System.Windows.Forms.MessageBox]::Show('Your current local build is newer than the unversioned GitHub launcher. Upload this BAT to GitHub main to activate self-updates.', 'Update Check', 'OK', 'Information') | Out-Null }
+            return
+        }
+        $remoteRelease=[version]::Parse($remoteMatch.Groups[1].Value)
+        $localRelease=if ($localMatch.Success) { [version]::Parse($localMatch.Groups[1].Value) } else { [version]'0.0.0.0' }
+        if ($remoteRelease -le $localRelease) {
+            Write-Log "CafeLauncher local release $localRelease is current; GitHub main release is $remoteRelease."
+            if ($Manual) { [System.Windows.Forms.MessageBox]::Show("CafeLauncher is current (local $localRelease; GitHub $remoteRelease).", 'Update Check', 'OK', 'Information') | Out-Null }
+            return
+        }
+        if (Test-LauncherIsCurrent -CurrentPath $source -RemoteBlobSha $remote.sha) {
+            Write-Log 'CafeLauncher is up to date with GitHub main.'
+            if ($Manual) { [System.Windows.Forms.MessageBox]::Show('CafeLauncher is already up to date.', 'Update Check', 'OK', 'Information') | Out-Null }
+            return
+        }
+        Write-Log 'A newer/different cafe.bat is available on GitHub main.' 'INFO'
+        $reply=[System.Windows.Forms.MessageBox]::Show(
+            "GitHub has a different CafeLauncher build.`n`nDownload and replace your local BAT?`n`nYour currently open launcher will keep running. Reopen it to use the update.`n`nNo GitHub login required.",
+            'CafeLauncher Update Available',
+            [System.Windows.Forms.MessageBoxButtons]::YesNo,
+            [System.Windows.Forms.MessageBoxIcon]::Question)
+        if ($reply -ne [System.Windows.Forms.DialogResult]::Yes) { Write-Log 'User skipped CafeLauncher update.'; return }
+        $temp=Join-Path $env:TEMP ("CafeLauncher-update-{0}.bat" -f [Guid]::NewGuid().ToString('N'))
+        try {
+            Invoke-WebRequest -Uri 'https://raw.githubusercontent.com/fabjoncela/Cs-script/main/cafe.bat' -OutFile $temp -UseBasicParsing -TimeoutSec 20 -ErrorAction Stop | Out-Null
+            $bytes=[IO.File]::ReadAllBytes($temp)
+            if ($bytes.Length -ne [int64]$remote.size -or
+                (Get-GitBlobSha -Bytes $bytes) -ne $remote.sha) { throw 'Downloaded BAT failed GitHub blob hash and size verification.' }
+            $text=[Text.Encoding]::UTF8.GetString($bytes)
+            if (-not $text.StartsWith('@echo off') -or -not $text.Contains('# POWERSHELL_GUI')) { throw 'Downloaded launcher structure check failed.' }
+            $backupDir=Join-Path $env:LOCALAPPDATA 'CafeLauncher\backups'
+            if (-not (Test-Path -LiteralPath $backupDir)) { New-Item -ItemType Directory -Path $backupDir -Force -ErrorAction Stop | Out-Null }
+            $backup=Join-Path $backupDir ("cafe-before-update-{0}.bat" -f (Get-Date -Format 'yyyyMMdd-HHmmss'))
+            try {
+                # Backup first, then attempt to replace the file downloaded from Drive.
+                Copy-Item -LiteralPath $source -Destination $backup -ErrorAction Stop
+                Copy-Item -LiteralPath $temp -Destination $source -Force -ErrorAction Stop
+                Write-Log "Update downloaded, verified and installed at $source; backup: $backup"
+                [System.Windows.Forms.MessageBox]::Show("CafeLauncher updated successfully at:`n$source`n`nClose and reopen the BAT to use the latest version.", 'Update Installed', 'OK', 'Information') | Out-Null
+            } catch {
+                $dest=Join-Path $env:USERPROFILE 'Downloads\CafeLauncher_latest.bat'
+                Copy-Item -LiteralPath $temp -Destination $dest -Force -ErrorAction Stop
+                Write-Log "Current BAT could not be overwritten; saved verified update to $dest" 'WARN'
+                [System.Windows.Forms.MessageBox]::Show("Your original BAT could not be replaced (read-only/protected folder).`n`nA verified new copy was saved to:`n$dest`n`nOpen that copy next time.", 'Update Downloaded', 'OK', 'Warning') | Out-Null
+            }
+        } finally { Remove-Item -LiteralPath $temp -Force -ErrorAction SilentlyContinue }
+    } catch {
+        Write-Log "Update check/download failed; the existing launcher is unchanged where possible: $($_.Exception.Message)" 'WARN'
+        if ($Manual) { [System.Windows.Forms.MessageBox]::Show("Update check failed: $($_.Exception.Message)", 'Update Check', 'OK', 'Warning') | Out-Null }
+    }
+}
+
+function Launch-All {
+    Start-DetectedSteam
 
     Launch-App -Name "FACEIT Anti-Cheat" -Paths @(
         "$env:ProgramFiles\FACEIT AC\faceitclient.exe",
@@ -1998,7 +2254,7 @@ function Show-ProfileEditor {
     $cfgFile.Size=New-Object System.Drawing.Size(530,29)
     $dialog.Controls.Add($cfgFile)
 
-    New-EditorLabel $dialog 'Direct GitHub RAW URL (blank = local file only)' 20 355 540 | Out-Null
+    New-EditorLabel $dialog 'GitHub .cfg URL (blank = bundled/local config)' 20 355 540 | Out-Null
     $url = New-Object System.Windows.Forms.TextBox
     $url.Text=[string]$p.CfgDownloadUrl
     $url.Location=New-Object System.Drawing.Point(20,380)
@@ -2286,12 +2542,7 @@ function New-Tile {
 }
 
 New-Tile "LAUNCH ALL" 0 { Launch-All } -Primary
-New-Tile "Steam" 1 {
-    Launch-App -Name "Steam" -Paths @(
-        "${env:ProgramFiles(x86)}\Steam\steam.exe",
-        "$env:ProgramFiles\Steam\steam.exe"
-    )
-}
+New-Tile "Steam" 1 { Start-DetectedSteam }
 New-Tile "FACEIT Anti-Cheat" 2 {
     Launch-App -Name "FACEIT Anti-Cheat" -Paths @(
         "$env:ProgramFiles\FACEIT AC\faceitclient.exe",
@@ -2313,7 +2564,9 @@ New-Tile "Mouse Pointer Options" 11 { Open-MousePointerOptions }
 New-Tile "NVIDIA Control Panel" 12 { Open-NvidiaControlPanel }
 New-Tile "Apply NVIDIA Settings" 13 { Apply-NvidiaGamingSettings } -Primary
 New-Tile "Install CS2 at.cfg" 14 { Install-AtCfg } -Primary
-New-Tile "Exit" 15 { $form.Close() }
+New-Tile "Detect PC" 15 { Show-PCDiagnostics }
+New-Tile "Check for Updates" 16 { Check-CafeLauncherUpdates -Manual }
+New-Tile "Exit" 17 { $form.Close() }
 
 # Live diagnostic log panel (visible only while the launcher is open)
 $logTitle = New-Object System.Windows.Forms.Label
@@ -2372,4 +2625,19 @@ $form.Add_FormClosed({
         Write-Log "Color Watch stopped because the launcher closed."
     }
 })
+# On first display, automatically inventory the machine and check GitHub for
+# an update. One-shot timer lets Windows render the UI before network access.
+$startupTimer = New-Object System.Windows.Forms.Timer
+$startupTimer.Interval=350
+$startupTimer.Add_Tick({
+    $startupTimer.Stop()
+    $startupTimer.Dispose()
+    try {
+        Write-Log 'Automatic startup inventory:'
+        $summary = Get-PCDiagnostics
+        foreach ($line in ($summary -split '\r?\n')) { if ($line) { Write-Log ('PC: ' + $line) } }
+    } catch { Write-Log "Startup inventory failed: $($_.Exception.Message)" 'WARN' }
+    Check-CafeLauncherUpdates
+})
+$form.Add_Shown({ $startupTimer.Start() })
 [void]$form.ShowDialog()
