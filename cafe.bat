@@ -4,7 +4,7 @@ start "" powershell.exe -NoProfile -ExecutionPolicy Bypass -STA -WindowStyle Hid
 exit /b
 
 # POWERSHELL_GUI
-# CAFE_RELEASE=2026.10.13.14
+# CAFE_RELEASE=2026.10.13.15
 
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
@@ -2660,14 +2660,49 @@ function Invoke-Logihub {
     if($code -ne 0){throw ('logihub exited '+$code+': '+$output)}
     return $output
 }
+
+# Better-logihub exposes machine-readable device records with explicit indexes.
+# Only the original PRO X SUPERLIGHT and PRO X SUPERLIGHT 2 are supported here.
+function Select-SuperlightDevice {
+    param([Parameter(Mandatory=$true)][string]$Json)
+    try {$rows=@(ConvertFrom-Json -InputObject $Json -ErrorAction Stop | ForEach-Object {$_})}
+    catch{throw ('Could not parse Logitech device list as JSON: '+$_.Exception.Message)}
+    $matches=New-Object 'System.Collections.Generic.List[object]'
+    foreach($row in $rows){
+        if($null -eq $row){continue}
+        $model=[string]$row.model_id
+        $name=[string]$row.display_name
+        # Trust the CLI model_id, not a receiver name containing 'Superlight'.
+        if($model -notin @('pro_x_wireless_mouse','pro_x_2_wireless_mouse')){continue}
+        if(([string]$row.type) -match '^(receiver)$'){continue}
+        if(([string]$row.status) -match '(?i)^(open failed|error|offline|disconnected)'){continue}
+        $idx=0
+        if(-not [int]::TryParse(([string]$row.index),[ref]$idx) -or $idx -lt 0){continue}
+        $matches.Add([pscustomobject]@{Index=$idx;Model=$model;Name=$name})
+    }
+    if($matches.Count -eq 0){throw 'No supported PRO X SUPERLIGHT 1 or 2 detected. Check mouse/receiver and connection.'}
+    if($matches.Count -gt 1){
+        $names=($matches | ForEach-Object { $_.Name+' (device '+$_.Index+')' }) -join ', '
+        throw ('Multiple Superlight mice detected: '+$names+'. DPI was NOT changed; disconnect other mouse before retrying.')
+    }
+    return $matches[0]
+}
+function Get-SelectedSuperlight {
+    $json=Invoke-Logihub -Arguments @('--json','list')
+    $selected=Select-SuperlightDevice -Json $json
+    Write-Log ('Logitech target: '+$selected.Name+' (device '+$selected.Index+')')
+    return $selected
+}
+
 function Set-LogitechLiveDPI {
     param([int]$DPI=800)
     Assert-LogitechDPI $DPI
     if(@(Get-Process -Name lghub,lghub_agent -ErrorAction SilentlyContinue).Count -gt 0){
         Write-Log 'G HUB detected; leaving it running. It may override the DPI later.' 'WARN'
     }
-    [void](Invoke-Logihub -Arguments @('dpi','set',([string]$DPI)))
-    $read=Invoke-Logihub -Arguments @('dpi','get')
+    $target=Get-SelectedSuperlight
+    [void](Invoke-Logihub -Arguments @('dpi','set',([string]$DPI),'--device',([string]$target.Index)))
+    $read=Invoke-Logihub -Arguments @('dpi','get','--device',([string]$target.Index))
     Write-Log ('Requested Logitech live DPI '+$DPI+'; read-back: '+$read)
 }
 function Set-LogitechOnboardDPI {
@@ -2678,16 +2713,17 @@ function Set-LogitechOnboardDPI {
         'Back up existing memory, set DPI '+$DPI+' and enable onboard mode?'),
         'Confirm Onboard DPI Write','YesNo','Warning')
     if($answer -ne [System.Windows.Forms.DialogResult]::Yes){Write-Log 'Onboard DPI cancelled.';return}
+    $target=Get-SelectedSuperlight
     $folder=Join-Path $env:LOCALAPPDATA 'CafeLauncher\logihub\onboard-backups'
     [void](New-Item -ItemType Directory -Path $folder -Force -ErrorAction Stop)
     $backup=Join-Path $folder ('onboard-'+(Get-Date -Format 'yyyyMMdd-HHmmss-fff')+'.bin')
-    [void](Invoke-Logihub -Arguments @('onboard','dump','--out',$backup))
+    [void](Invoke-Logihub -Arguments @('onboard','dump','--out',$backup,'--device',([string]$target.Index)))
     if(-not (Test-Path -LiteralPath $backup -PathType Leaf) -or (Get-Item -LiteralPath $backup).Length -le 0){
         throw 'Onboard backup is missing/empty; no memory changes attempted.'
     }
     Write-Log ('Onboard backup: '+$backup)
-    [void](Invoke-Logihub -Arguments @('onboard','set-dpi',([string]$DPI),'--default','1','--shift',([string]$DPI)))
-    [void](Invoke-Logihub -Arguments @('onboard','mode','set','on'))
+    [void](Invoke-Logihub -Arguments @('onboard','set-dpi',([string]$DPI),'--default','1','--shift',([string]$DPI),'--device',([string]$target.Index)))
+    [void](Invoke-Logihub -Arguments @('onboard','mode','set','on','--device',([string]$target.Index)))
     Write-Log ('Onboard DPI '+$DPI+' command completed. Backup: '+$backup)
 }
 function Invoke-LogitechDpiButton {
