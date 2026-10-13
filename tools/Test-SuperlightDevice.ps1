@@ -21,9 +21,9 @@ Test-Select 'pro_x_wireless_mouse' 3
 Test-Select 'pro_x_2_wireless_mouse' 8
 # A switched-off Superlight 1 keeps its pairing record but reports unreachable.
 $twoDongles=@(
-    @{index=1;type='receiver';model_id=$null;status='connected'},
+    @{index=1;type='receiver';model_id=$null;display_name=$null;status='connected'},
     @{index=2;type='wireless device';model_id='pro_x_wireless_mouse';display_name='PRO X SUPERLIGHT';status='unreachable: HID++ timeout'},
-    @{index=3;type='receiver';model_id=$null;status='connected'},
+    @{index=3;type='receiver';model_id=$null;display_name=$null;status='connected'},
     @{index=4;type='wireless device';model_id='pro_x_2_wireless_mouse';display_name='PRO X SUPERLIGHT 2';status='connected'}
 ) | ConvertTo-Json
 $active=Select-SuperlightDevice -Json $twoDongles
