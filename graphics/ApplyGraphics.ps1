@@ -101,7 +101,7 @@ function Get-ActiveSteamCS2Video {
 }
 function Find-CS2VideoSetting {
     param([string]$Text,[string]$Key)
-    $pattern='(?m)^(?<before>[ \t]*"{0}"[ \t]+")(?<value>[^"\r\n]*)(?<after>"[ \t]*(?://[^\r\n]*)?)$' -f [regex]::Escape($Key)
+    $pattern='(?m)^(?<before>[ \t]*"{0}"[ \t]+")(?<value>[^"\r\n]*)(?<after>"[ \t]*(?://[^\r\n]*)?\r?)$' -f [regex]::Escape($Key)
     $matches=[regex]::Matches($Text,$pattern)
     if($matches.Count -gt 1){throw ("Duplicate CS2 video setting: "+$Key)}
     if($matches.Count -eq 0){return $null}
