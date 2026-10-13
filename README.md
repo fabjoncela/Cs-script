@@ -129,3 +129,10 @@ powershell.exe -NoProfile -File .\tools\Test-Graphics.ps1
 [GitHub Actions](./.github/workflows/cafe-syntax.yml) runs the syntax and save regression tests for relevant pushes and PRs. These do **not** replace live Windows/NVIDIA/CS2 testing, and a failed workflow does not block pushes without separately configured branch rules. Keep `cafe.bat` in Windows CRLF format and increment the release marker for each launcher release.
 
 For complete logic, source layout, data flow, and maintenance gotchas: **[context.md](./context.md)**.
+
+## NVIDIA compatibility preflight (v2026.10.13.14)
+
+Before applying NVIDIA gaming settings, CafeLauncher reads the installed NVIDIA GPU and Windows-reported driver version, identifies the available NVAPI driver DLL and its file version, detects classic or Microsoft Store NVIDIA Control Panel, and inspects the monitor's driver-advertised resolutions/refresh rates. The same read-only report is available from **Detect PC** and appears in LIVE LOGS when NVIDIA settings are applied.
+
+Unsupported driver functions are handled independently: the launcher skips an unavailable NVAPI or display API but continues any supported actions, logging the reason. The existing resolution fallback chooses the highest advertised refresh at the requested resolution, or an available current-resolution mode if needed. **No driver is automatically installed or updated**, and existing FabMode/other preset values are unchanged. Compatibility still depends on each café PC's actual drivers, monitor, and Windows permissions.
+
