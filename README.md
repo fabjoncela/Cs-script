@@ -136,3 +136,8 @@ Before applying NVIDIA gaming settings, CafeLauncher reads the installed NVIDIA 
 
 Unsupported driver functions are handled independently: the launcher skips an unavailable NVAPI or display API but continues any supported actions, logging the reason. The existing resolution fallback chooses the highest advertised refresh at the requested resolution, or an available current-resolution mode if needed. **No driver is automatically installed or updated**, and existing FabMode/other preset values are unchanged. Compatibility still depends on each café PC's actual drivers, monitor, and Windows permissions.
 
+
+## Superlight 1 / Superlight 2 safe device targeting (v2026.10.13.15)
+
+For live DPI, CafeLauncher runs `logihub.exe --json list`, selects the detected `pro_x_wireless_mouse` (PRO X SUPERLIGHT 1) or `pro_x_2_wireless_mouse` (PRO X SUPERLIGHT 2), and passes that device's specific `--device` index to both `dpi set` and `dpi get`. If no supported mouse is detected or more than one supported mouse is connected, CafeLauncher logs a warning/error and does not change DPI. This prevents silently changing the wrong player's mouse. The same device-targeting guard has been added to the dormant onboard implementation, but the onboard GUI button remains commented out.
+
