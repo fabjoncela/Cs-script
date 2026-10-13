@@ -43,7 +43,7 @@ if ($versions.Count -ne 1) { throw 'Expected exactly one valid # CAFE_RELEASE=YY
 $psSource = [string]::Join([Environment]::NewLine, [string[]]$lines[($marker + 1)..($lines.Length - 1)])
 $parseTokens = $null
 $parseErrors = $null
-[void][System.Management.Automation.Language.Parser]::ParseInput(
+$psAst=[System.Management.Automation.Language.Parser]::ParseInput(
     $psSource, [ref]$parseTokens, [ref]$parseErrors
 )
 if (@($parseErrors).Count -gt 0) {
@@ -81,8 +81,7 @@ if($psSource -notmatch 'function Apply-NvidiaGamingSettings' -or
 # Launch All button should still start G HUB, but every player-profile
 # LaunchApps path must skip it so the external DPI helper stays in control.
 $definitions=@{}
-foreach($def in $parseTokens){ } # parser already validated full source
-foreach($def in $([Management.Automation.Language.Parser]::ParseInput($psSource,[ref]$null,[ref]$null)).FindAll({
+foreach($def in $psAst.FindAll({
     param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst]
 },$true)){
     $definitions[$def.Name]=$def.Extent.Text
