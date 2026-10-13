@@ -3205,9 +3205,9 @@ $script:ManualDpiChangeButton.Add_Click({
 })
 $manualDpiPanel.Controls.Add($script:ManualDpiChangeButton)
 $script:ManualDpiInput.Add_KeyDown({
-    param($sender,$args)
-    if($args.KeyCode -eq [System.Windows.Forms.Keys]::Enter){
-        $args.SuppressKeyPress=$true
+    param($sender,$eventArgs)
+    if($eventArgs.KeyCode -eq [System.Windows.Forms.Keys]::Enter){
+        $eventArgs.SuppressKeyPress=$true
         $script:ManualDpiChangeButton.PerformClick()
     }
 })
