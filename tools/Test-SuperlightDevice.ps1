@@ -19,6 +19,23 @@ function Test-Select([string]$Model,[int]$Index){
 }
 Test-Select 'pro_x_wireless_mouse' 3
 Test-Select 'pro_x_2_wireless_mouse' 8
+# A switched-off Superlight 1 keeps its pairing record but reports unreachable.
+$twoDongles=@(
+    @{index=1;type='receiver';model_id=$null;status='connected'},
+    @{index=2;type='wireless device';model_id='pro_x_wireless_mouse';display_name='PRO X SUPERLIGHT';status='unreachable: HID++ timeout'},
+    @{index=3;type='receiver';model_id=$null;status='connected'},
+    @{index=4;type='wireless device';model_id='pro_x_2_wireless_mouse';display_name='PRO X SUPERLIGHT 2';status='connected'}
+) | ConvertTo-Json
+$active=Select-SuperlightDevice -Json $twoDongles
+if($active.Index -ne 4 -or $active.Model -ne 'pro_x_2_wireless_mouse'){
+    throw 'Powered-off Superlight 1 dongle must not block active Superlight 2.'
+}
+try {
+    $off=@(@{index=2;type='wireless device';model_id='pro_x_wireless_mouse';display_name='PRO X SUPERLIGHT';status='unreachable: HID++ timeout'}) | ConvertTo-Json
+    [void](Select-SuperlightDevice -Json $off)
+    throw 'Powered-off mouse should not be selected'
+}catch{if($_.Exception.Message -notmatch 'No supported'){throw}}
+
 try {
     [void](Select-SuperlightDevice -Json ((@(
         @{index=1;type='wireless device';model_id='pro_x_wireless_mouse';display_name='PRO X SUPERLIGHT';status='ok'},
