@@ -10,5 +10,6 @@
   "Vibrance": 75,
   "CS2Sensitivity": "",
   "CfgDownloadUrl": "https://raw.githubusercontent.com/fabjoncela/Cs-script/main/arli.cfg",
-  "LaunchApps": true
+  "LaunchApps": true,
+  "LogitechDPI": 800
 }
