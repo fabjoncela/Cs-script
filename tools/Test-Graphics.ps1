@@ -58,6 +58,45 @@ foreach($value in @(-10,7,100)){
     }catch{$bad++}
 }
 if($bad -ne 3){throw 'MSAA validation accepted invalid values.'}
+# Regression for real .NET Framework File.Replace (Windows PowerShell 5.1):
+# exercise the exact production saver using isolated temporary files.
+$sandbox=Join-Path $env:TEMP ('CafeLauncher-Graphics-ReplaceTest-'+[guid]::NewGuid().ToString('N'))
+$videoFolder=Join-Path $sandbox 'userdata\123\730\local\cfg'
+$backups=Join-Path $sandbox 'user-backups'
+[void](New-Item -Path $videoFolder -ItemType Directory -Force)
+[void](New-Item -Path $backups -ItemType Directory -Force)
+try {
+    $target=Join-Path $videoFolder 'cs2_video.txt'
+    $backup=Join-Path $backups 'cs2_video-original.txt'
+    $encoding=New-Object System.Text.UTF8Encoding($false)
+    [IO.File]::WriteAllText($target,$fixture,$encoding)
+    $proposed=Update-CS2VideoGraphicsText -Text $fixture -Settings ([ordered]@{MSAASamples=2})
+    Save-CS2VideoFileWithBackup -VideoPath $target -UpdatedText $proposed.Text -Encoding $encoding -BackupPath $backup
+    if ([IO.File]::ReadAllText($target,$encoding) -cne $proposed.Text) {
+        throw 'The real Windows replacement did not save the new video text.'
+    }
+    if (-not (Test-Path -LiteralPath $backup -PathType Leaf) -or
+        [IO.File]::ReadAllText($backup,$encoding) -cne $fixture) {
+        throw 'The original CS2 graphics backup was not preserved.'
+    }
+    $orphans=@(Get-ChildItem -LiteralPath $videoFolder -File -ErrorAction Stop |
+        Where-Object { $_.Name -like 'cs2_video.cafe-*' })
+    if ($orphans.Count -gt 0) { throw 'Temporary/swap-backup files remain after successful graphics replacement.' }
+
+    # Refuse a backup in a missing directory before touching the video file.
+    $badBackup=Join-Path $sandbox 'missing-parent\backup.txt'
+    $preFailure=[IO.File]::ReadAllText($target,$encoding)
+    $failed=$false
+    try {
+        Save-CS2VideoFileWithBackup -VideoPath $target -UpdatedText $fixture -Encoding $encoding -BackupPath $badBackup
+    } catch { $failed=$true }
+    if (-not $failed -or [IO.File]::ReadAllText($target,$encoding) -cne $preFailure) {
+        throw 'Graphics backup failure must not change the existing video file.'
+    }
+} finally {
+    Remove-Item -LiteralPath $sandbox -Recurse -Force -ErrorAction SilentlyContinue
+}
+
 $profileNames=@('FabMode','ArliMode','BrileMode','ArmlMode','OliMode')
 foreach($name in $profileNames){
     $file=Join-Path $root ('graphics\'+$name+'.json')
@@ -112,4 +151,4 @@ if(-not ('FabDisplayNative' -as [type]) -or
 if([FabDisplayNative]::IsAdvertisedMode(1,1,0)){
     throw 'Invalid resolution must not pass display mode validation.'
 }
-Write-Host 'PASS: all five graphics presets, selective VDF edits, graphics ranges, hardware preservation, and standalone GUI trigger.'
+Write-Host 'PASS: actual Windows File.Replace with backups, safe failure, five graphics presets, selective edits, graphics ranges, hardware preservation, and standalone GUI trigger.'
