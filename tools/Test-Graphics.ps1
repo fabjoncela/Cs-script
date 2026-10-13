@@ -71,7 +71,11 @@ $batText=[IO.File]::ReadAllText($bat)
 if($batText -notmatch '\$graphics\.Add_Click' -or $batText -notmatch 'Invoke-GraphicsOnly -ModeName \$selectedProfile'){
     throw 'Apply Graphics GUI button missing.'
 }
-if($batText -match '(?s)function Invoke-GamingProfile \{.*?Apply-CS2ModeGraphics'){
+$applyBegin=$batText.IndexOf('function Invoke-GamingProfile {',[StringComparison]::Ordinal)
+$applyEnd=$batText.IndexOf('function Get-CS2SteamLaunchArguments {',[StringComparison]::Ordinal)
+if($applyBegin -lt 0 -or $applyEnd -le $applyBegin){throw 'Cannot identify profile application function boundaries.'}
+$applyBody=$batText.Substring($applyBegin,$applyEnd-$applyBegin)
+if($applyBody -match 'Apply-CS2ModeGraphics|Invoke-GraphicsOnly|Get-CS2ModeGraphicsPreset'){
     throw 'Graphics must never be called inside profile application.'
 }
 if($batText -match 'Invoke-GamingProfile.+Invoke-GraphicsOnly'){
