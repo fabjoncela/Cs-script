@@ -170,6 +170,40 @@ if($psSource -notmatch 'CAFE_PREVIEW_BRANCH=ui/dashboard-tabbed-editor-preview' 
     throw 'Preview builds must not auto-update to production main.'
 }
 
+# Construct the preview main dashboard in memory. No GUI is shown and none
+# of the profile / tool button actions are clicked, so no devices are changed.
+$dashboardStart=$psSource.IndexOf('# Modern dashboard preview.')
+$dashboardEnd=$psSource.IndexOf('# On first display, automatically inventory the machine',$dashboardStart)
+if($dashboardStart -lt 0 -or $dashboardEnd -le $dashboardStart){
+    throw 'Preview dashboard code region not found.'
+}
+$BG=[System.Drawing.Color]::FromArgb(20,23,30)
+$PANEL=[System.Drawing.Color]::FromArgb(31,36,46)
+$BLUE=[System.Drawing.Color]::FromArgb(35,125,245)
+$MUTED=[System.Drawing.Color]::FromArgb(160,170,185)
+$script:GamingProfiles=[ordered]@{}
+foreach($name in @('FabMode','ArliMode','BrileMode','ArmlMode','OliMode')){
+    $script:GamingProfiles[$name]=@{LogitechDPI=800;PointerSpeed=10;Width=1920;Height=1080;RefreshHz=360;ConfigFile=($name.ToLower()+'.cfg')}
+}
+$script:LogPath=Join-Path $env:TEMP ('CafeLauncher-preview-CI-'+[Guid]::NewGuid().ToString('N')+'.log')
+try {
+    Invoke-Expression $psSource.Substring($dashboardStart,$dashboardEnd-$dashboardStart)
+    if($tabs.TabPages.Count -ne 2 -or $profilesGrid.Controls.Count -ne 6){
+        throw 'Dashboard must construct two tabs and exactly five profile cards.'
+    }
+    if($script:SelectedProfileTitle.Text -ne 'FabMode' -or
+       $script:ManualDpiInput.Text -ne '800' -or
+       $toolsFlow.Controls.Count -lt 9){
+        throw 'Dashboard summary, manual DPI or utility buttons were not created correctly.'
+    }
+    if($root.RowStyles[2].Height -ne 44){
+        throw 'LIVE LOGS must start collapsed.'
+    }
+} finally {
+    if($form){$form.Dispose()}
+    Remove-Item -LiteralPath $script:LogPath -Force -ErrorAction SilentlyContinue
+}
+
 # Sanity check: this test must reject the precise interpolation bug that broke
 # the October 13 launcher: "$name:" without braces around the variable name.
 $badExample = 'throw "Cannot save $name: exporter returned nothing"'
