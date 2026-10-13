@@ -35,7 +35,7 @@ if($onboard.IndexOf("'onboard','dump'",[StringComparison]::Ordinal) -ge
    $onboard.IndexOf("'onboard','set-dpi'",[StringComparison]::Ordinal)){
     throw 'Onboard backup must happen before any onboard write.'
 }
-if($source -notmatch 'New-Tile "Set DPI 800 \\(Live\\)" 18' -or $source -notmatch '(?m)^# New-Tile "Set DPI 800 \\(Onboard\\)" 19'){
+if($source -notmatch 'New-Tile "Set DPI 800 \(Live\)" 18' -or $source -notmatch '(?m)^# New-Tile "Set DPI 800 \(Onboard\)" 19'){
     throw 'Live button must be active; onboard button must be commented out.'
 }
 if($functions['Start-LogihubAsyncDownload'] -notmatch 'Start-Process' -or $functions['Start-LogihubAsyncDownload'] -notmatch 'LogihubDownloadTimer' -or $functions['Request-LogitechLiveDPI'] -notmatch 'LogihubRequestedDPI'){
