@@ -53,7 +53,7 @@ if (@($parseErrors).Count -gt 0) {
         $message = $parseError.Message.Replace([string][char]13, ' ').Replace([string][char]10, ' ')
         Write-Host ('::error file=cafe.bat,line={0},col={1}::{2}' -f $absoluteLine, $column, $message)
     }
-    throw ('PowerShell syntax check failed: {0} error(s).' -f @($parseErrors).Count)
+    throw ('PowerShell syntax check failed: {0} error(s). First error at cafe.bat line {1}, column {2}: {3}; text: {4}' -f @($parseErrors).Count, ($marker + 1 + $parseErrors[0].Extent.StartLineNumber), $parseErrors[0].Extent.StartColumnNumber, $parseErrors[0].Message, $parseErrors[0].Extent.Text)
 }
 
 # Sanity check: this test must reject the precise interpolation bug that broke
