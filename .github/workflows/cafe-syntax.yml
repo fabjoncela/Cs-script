@@ -9,6 +9,7 @@ on:
       - 'tools/Test-SteamLaunchOptions.ps1'
       - 'tools/Test-Graphics.ps1'
       - 'tools/Test-NvidiaCompatibility.ps1'
+      - 'tools/Test-SuperlightDevice.ps1'
       - 'tools/Test-LogitechDPI.ps1'
       - 'graphics/**'
       - '.github/workflows/cafe-syntax.yml'
@@ -21,6 +22,7 @@ on:
       - 'tools/Test-SteamLaunchOptions.ps1'
       - 'tools/Test-Graphics.ps1'
       - 'tools/Test-NvidiaCompatibility.ps1'
+      - 'tools/Test-SuperlightDevice.ps1'
       - 'graphics/**'
       - '.github/workflows/cafe-syntax.yml'
   workflow_dispatch:
@@ -60,3 +62,7 @@ jobs:
         shell: powershell
         run: |
           & "$env:GITHUB_WORKSPACE\tools\Test-NvidiaCompatibility.ps1"
+      - name: Test Logitech Superlight device selection
+        shell: powershell
+        run: |
+          & "$env:GITHUB_WORKSPACE\tools\Test-SuperlightDevice.ps1"
