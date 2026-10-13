@@ -3101,152 +3101,229 @@ function Invoke-GraphicsOnly {
 # Backward-compatible entry point.
 function Invoke-FabModeFull { Invoke-GamingProfile -ProfileName 'FabMode' }
 
-# Main window
-$form = New-Object System.Windows.Forms.Form
-$form.Text = "Cafe Launcher"
-$form.Size = New-Object System.Drawing.Size(800,1050)
-$form.StartPosition = "CenterScreen"
-$form.FormBorderStyle = "FixedSingle"
-$form.MaximizeBox = $false
-$form.BackColor = $BG
-$form.ForeColor = $WHITE
-$form.Font = New-Object System.Drawing.Font("Segoe UI",10)
+# Modern dashboard preview. Production main is unchanged and preview auto-update is disabled.
+$form=New-Object System.Windows.Forms.Form
+$form.Text='CafeLauncher | UI Preview'
+$form.ClientSize=New-Object System.Drawing.Size(1080,825)
+$form.MinimumSize=New-Object System.Drawing.Size(960,780)
+$form.StartPosition='CenterScreen'
+$form.BackColor=$BG
+$form.ForeColor=$WHITE
+$form.Font=New-Object System.Drawing.Font('Segoe UI',10)
+$form.AutoScaleMode=[System.Windows.Forms.AutoScaleMode]::Font
 
-# Header
-$header = New-Object System.Windows.Forms.Panel
-$header.Location = New-Object System.Drawing.Point(0,0)
-$header.Size = New-Object System.Drawing.Size(800,105)
-$header.BackColor = $PANEL
-$form.Controls.Add($header)
+$script:SelectedProfile='FabMode'
+$script:SelectedProfileTitle=$null
+$script:SelectedProfileDetails=$null
+$script:SelectedProfileHint=$null
+function New-CafeLabel {
+    param([string]$Text,[int]$FontSize=10,[switch]$Strong)
+    $label=New-Object System.Windows.Forms.Label
+    $label.Text=$Text
+    $label.Dock='Fill'
+    $label.ForeColor=if($Strong){$WHITE}else{$MUTED}
+    $label.Font=New-Object System.Drawing.Font('Segoe UI',$FontSize,$(if($Strong){[System.Drawing.FontStyle]::Bold}else{[System.Drawing.FontStyle]::Regular}))
+    $label.TextAlign='MiddleLeft'
+    $label.AutoEllipsis=$true
+    return $label
+}
+function Style-CafeButton {
+    param($Button,[switch]$Primary)
+    $Button.FlatStyle='Flat'
+    $Button.FlatAppearance.BorderSize=0
+    $Button.BackColor=if($Primary){$BLUE}else{$PANEL}
+    $Button.ForeColor=$WHITE
+    $Button.Font=New-Object System.Drawing.Font('Segoe UI',9,[System.Drawing.FontStyle]::Bold)
+    $Button.Cursor=[System.Windows.Forms.Cursors]::Hand
+    $Button.Margin=New-Object System.Windows.Forms.Padding(4)
+}
+function Update-SelectedProfileCard {
+    param([string]$Name)
+    if(-not $script:GamingProfiles.Contains($Name)){return}
+    $script:SelectedProfile=$Name
+    $p=$script:GamingProfiles[$Name]
+    if($script:SelectedProfileTitle){$script:SelectedProfileTitle.Text=$Name}
+    if($script:SelectedProfileDetails){
+        $script:SelectedProfileDetails.Text=('DPI: '+[string]$p.LogitechDPI+'     Pointer: '+[string]$p.PointerSpeed+
+            [Environment]::NewLine+'CFG: '+[string]$p.ConfigFile+
+            [Environment]::NewLine+'Display: '+[string]$p.Width+'x'+[string]$p.Height+' @'+[string]$p.RefreshHz+' Hz')
+    }
+    if($script:SelectedProfileHint){
+        $script:SelectedProfileHint.Text='Selected for review. Click Apply on a profile row to run settings.'
+    }
+}
 
-$title = New-Object System.Windows.Forms.Label
-$title.Text = "GAMING CAFE"
-$title.Location = New-Object System.Drawing.Point(28,18)
-$title.Size = New-Object System.Drawing.Size(500,38)
-$title.Font = New-Object System.Drawing.Font("Segoe UI",21,[System.Drawing.FontStyle]::Bold)
-$title.ForeColor = $WHITE
+$root=New-Object System.Windows.Forms.TableLayoutPanel
+$root.Dock='Fill'
+$root.ColumnCount=1
+$root.RowCount=4
+[void]$root.RowStyles.Add((New-Object System.Windows.Forms.RowStyle('Absolute',82)))
+[void]$root.RowStyles.Add((New-Object System.Windows.Forms.RowStyle('Percent',100)))
+[void]$root.RowStyles.Add((New-Object System.Windows.Forms.RowStyle('Absolute',44)))
+[void]$root.RowStyles.Add((New-Object System.Windows.Forms.RowStyle('Absolute',30)))
+$form.Controls.Add($root)
+$header=New-Object System.Windows.Forms.Panel
+$header.Dock='Fill'
+$header.BackColor=$PANEL
+$root.Controls.Add($header,0,0)
+$title=New-CafeLabel -Text 'CAFE  LAUNCHER' -FontSize 22 -Strong
+$title.Dock='None'
+$title.Location=New-Object System.Drawing.Point(24,8)
+$title.Size=New-Object System.Drawing.Size(450,39)
 $header.Controls.Add($title)
-
-$subtitle = New-Object System.Windows.Forms.Label
-$subtitle.Text = "APP LAUNCHER  |  PC SETTINGS"
-$subtitle.Location = New-Object System.Drawing.Point(31,62)
-$subtitle.Size = New-Object System.Drawing.Size(500,23)
-$subtitle.Font = New-Object System.Drawing.Font("Segoe UI",9)
-$subtitle.ForeColor = $MUTED
+$subtitle=New-CafeLabel -Text 'CS2 Setup Center   |   Profiles / Graphics / DPI' -FontSize 9
+$subtitle.Dock='None'
+$subtitle.Location=New-Object System.Drawing.Point(28,49)
+$subtitle.Size=New-Object System.Drawing.Size(600,25)
 $header.Controls.Add($subtitle)
+$preview=New-CafeLabel -Text 'PREVIEW  -  MAIN SAFE' -Strong
+$preview.Dock='Right'
+$preview.Width=215
+$preview.ForeColor=[System.Drawing.Color]::FromArgb(111,177,255)
+$preview.TextAlign='MiddleRight'
+$header.Controls.Add($preview)
+
+$tabs=New-Object System.Windows.Forms.TabControl
+$tabs.Dock='Fill'
+$tabs.Margin=New-Object System.Windows.Forms.Padding(13,8,13,8)
+$root.Controls.Add($tabs,0,1)
+$dashboard=New-Object System.Windows.Forms.TabPage
+$dashboard.Text='Dashboard'
+$dashboard.BackColor=$BG
+$utilities=New-Object System.Windows.Forms.TabPage
+$utilities.Text='Tools & Apps'
+$utilities.BackColor=$BG
+[void]$tabs.TabPages.Add($dashboard)
+[void]$tabs.TabPages.Add($utilities)
+$dashGrid=New-Object System.Windows.Forms.TableLayoutPanel
+$dashGrid.Dock='Fill'
+$dashGrid.ColumnCount=2
+$dashGrid.Padding=New-Object System.Windows.Forms.Padding(8)
+[void]$dashGrid.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle('Percent',57)))
+[void]$dashGrid.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle('Percent',43)))
+$dashboard.Controls.Add($dashGrid)
+$profilesGrid=New-Object System.Windows.Forms.TableLayoutPanel
+$profilesGrid.Dock='Fill'
+$profilesGrid.RowCount=6
+$profilesGrid.ColumnCount=1
+[void]$profilesGrid.RowStyles.Add((New-Object System.Windows.Forms.RowStyle('Absolute',45)))
+for($i=1;$i -le 5;$i++){[void]$profilesGrid.RowStyles.Add((New-Object System.Windows.Forms.RowStyle('Percent',20)))}
+$profilesGrid.Controls.Add((New-CafeLabel -Text 'PLAYER PROFILES  |  Apply, Play, Graphics, Edit' -Strong),0,0)
+$dashGrid.Controls.Add($profilesGrid,0,0)
+
+$rightGrid=New-Object System.Windows.Forms.TableLayoutPanel
+$rightGrid.Dock='Fill'
+$rightGrid.ColumnCount=1
+$rightGrid.RowCount=7
+$rightGrid.Padding=New-Object System.Windows.Forms.Padding(10)
+foreach($size in @(38,48,110,55,110,66)){
+    [void]$rightGrid.RowStyles.Add((New-Object System.Windows.Forms.RowStyle('Absolute',$size)))
+}
+[void]$rightGrid.RowStyles.Add((New-Object System.Windows.Forms.RowStyle('Percent',100)))
+$dashGrid.Controls.Add($rightGrid,1,0)
+$rightGrid.Controls.Add((New-CafeLabel -Text 'SELECTED PROFILE' -Strong),0,0)
+$script:SelectedProfileTitle=New-CafeLabel -Text 'FabMode' -FontSize 22 -Strong
+$rightGrid.Controls.Add($script:SelectedProfileTitle,0,1)
+$script:SelectedProfileDetails=New-CafeLabel -Text '' -FontSize 11
+$script:SelectedProfileDetails.ForeColor=$WHITE
+$script:SelectedProfileDetails.BackColor=$PANEL
+$script:SelectedProfileDetails.Padding=New-Object System.Windows.Forms.Padding(14)
+$rightGrid.Controls.Add($script:SelectedProfileDetails,0,2)
+$script:SelectedProfileHint=New-CafeLabel -Text 'Graphics is separate from profile Apply.' -FontSize 9
+$rightGrid.Controls.Add($script:SelectedProfileHint,0,3)
+$rightGrid.Controls.Add((New-CafeLabel -Text 'Apply changes to the mouse with the control above.' -FontSize 9),0,6)
+
+$toolsGrid=New-Object System.Windows.Forms.TableLayoutPanel
+$toolsGrid.Dock='Fill'
+$toolsGrid.RowCount=2
+$toolsGrid.ColumnCount=1
+$toolsGrid.Padding=New-Object System.Windows.Forms.Padding(16)
+[void]$toolsGrid.RowStyles.Add((New-Object System.Windows.Forms.RowStyle('Absolute',54)))
+[void]$toolsGrid.RowStyles.Add((New-Object System.Windows.Forms.RowStyle('Percent',100)))
+$toolsGrid.Controls.Add((New-CafeLabel -Text 'TOOLS & APPLICATIONS   |   Separate from profiles' -FontSize 13 -Strong),0,0)
+$utilities.Controls.Add($toolsGrid)
+$toolsFlow=New-Object System.Windows.Forms.FlowLayoutPanel
+$toolsFlow.Dock='Fill'
+$toolsFlow.AutoScroll=$true
+$toolsFlow.WrapContents=$true
+$toolsGrid.Controls.Add($toolsFlow,0,1)
 
 function New-Tile {
-    param(
-        [string]$Text,
-        [int]$Index,
-        [scriptblock]$Action,
-        [switch]$Primary,
-        [string]$EditProfile = ''
-    )
-
-    $col = $Index % 3
-    $row = [Math]::Floor($Index / 3)
-    $x = 25 + ($col * 250)
-    $y = 125 + ($row * 88)
-
-    $button = New-Object System.Windows.Forms.Button
-    $button.Text = $Text
-    $button.Location = New-Object System.Drawing.Point($x,$y)
-    if ($EditProfile) {
-        # Split the profile tile into Apply and Play + Exec buttons.
-        $button.Size = New-Object System.Drawing.Size(88,46)
-    } else {
-        $button.Size = New-Object System.Drawing.Size(235,70)
-    }
-    $button.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
-    $button.FlatAppearance.BorderSize = 0
-    if ($Primary) {
-        $button.BackColor = $BLUE
-    } else {
-        $button.BackColor = $PANEL
-    }
-    $button.ForeColor = $WHITE
-    $button.Font = New-Object System.Drawing.Font("Segoe UI",$(if($EditProfile){9}else{10}),[System.Drawing.FontStyle]::Bold)
-    $button.Cursor = [System.Windows.Forms.Cursors]::Hand
-    $actionToRun = $Action
-    $button.Add_Click({
-        Write-Log "Clicked: $($this.Text)"
-        try {
-            & $actionToRun
-        } catch {
-            Write-Log "Button '$($this.Text)' failed: $($_.Exception.Message)" "ERROR"
-            [System.Windows.Forms.MessageBox]::Show(
-                "$($this.Text) failed:`n$($_.Exception.Message)",
-                "Cafe Launcher"
-            )
-        }
-    }.GetNewClosure())
-    $form.Controls.Add($button)
-    if ($EditProfile) {
-        $selectedProfile = $EditProfile
-        $play = New-Object System.Windows.Forms.Button
-        $play.Text = 'Play + Exec'
-        $play.Location = New-Object System.Drawing.Point(($x + 92), $y)
-        $play.Size = New-Object System.Drawing.Size(70,46)
-        $play.FlatStyle = 'Flat'
-        $play.FlatAppearance.BorderSize = 0
-        $play.BackColor = [System.Drawing.Color]::FromArgb(38,132,102)
-        $play.ForeColor = $WHITE
-        $play.Font = New-Object System.Drawing.Font('Segoe UI',8,[System.Drawing.FontStyle]::Bold)
-        $play.Cursor = [System.Windows.Forms.Cursors]::Hand
+    param([string]$Text,[int]$Index,[scriptblock]$Action,[switch]$Primary,[string]$EditProfile='')
+    $button=New-Object System.Windows.Forms.Button
+    $button.Text=if($EditProfile){"Apply $Text"}else{$Text}
+    Style-CafeButton -Button $button -Primary:$Primary
+    $actionToRun=$Action
+    if($EditProfile){
+        $selectedProfile=$EditProfile
+        $card=New-Object System.Windows.Forms.TableLayoutPanel
+        $card.Dock='Fill'
+        $card.ColumnCount=4
+        $card.RowCount=1
+        $card.BackColor=$PANEL
+        $card.Padding=New-Object System.Windows.Forms.Padding(3)
+        $card.Margin=New-Object System.Windows.Forms.Padding(3)
+        foreach($pct in @(28,23,26,23)){[void]$card.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle('Percent',$pct)))}
+        $button.Dock='Fill'
+        $button.Add_Click({
+            Update-SelectedProfileCard -Name $selectedProfile
+            Write-Log ('Clicked: Apply '+$selectedProfile)
+            try { & $actionToRun; Update-SelectedProfileCard -Name $selectedProfile }
+            catch { Write-Log ('Profile '+$selectedProfile+' failed: '+$_.Exception.Message) 'ERROR' }
+        }.GetNewClosure())
+        $card.Controls.Add($button,0,0)
+        $play=New-Object System.Windows.Forms.Button
+        $play.Text='Play + Exec'
+        Style-CafeButton -Button $play
+        $play.BackColor=[System.Drawing.Color]::FromArgb(38,132,102)
+        $play.Dock='Fill'
         $play.Add_Click({
-            Write-Log "Clicked: Play + Exec $selectedProfile"
+            Update-SelectedProfileCard -Name $selectedProfile
             try { Start-CS2WithProfileCfg -ProfileName $selectedProfile }
-            catch {
-                Write-Log ("Play + Exec failed for " + $selectedProfile + ": " + $_.Exception.Message + "; " + $_.ScriptStackTrace) 'ERROR'
-                [System.Windows.Forms.MessageBox]::Show(
-                    ("Unable to launch CS2 for " + $selectedProfile + ": " + $_.Exception.Message),
-                    'CS2 Launch Failed', 'OK', 'Error'
-                ) | Out-Null
-            }
+            catch{Write-Log ('Play + Exec failed for '+$selectedProfile+': '+$_.Exception.Message) 'ERROR'}
         }.GetNewClosure())
-        $form.Controls.Add($play)
-
-        # Independent third button: no graphics writes from the main mode,
-        # Play + Exec, Launch All, or background startup routines.
-        $graphics = New-Object System.Windows.Forms.Button
-        $graphics.Text = 'Apply Graphics'
-        $graphics.Location = New-Object System.Drawing.Point(($x + 166), $y)
-        $graphics.Size = New-Object System.Drawing.Size(69,46)
-        $graphics.FlatStyle = 'Flat'
-        $graphics.FlatAppearance.BorderSize = 0
-        $graphics.BackColor = [System.Drawing.Color]::FromArgb(77,72,125)
-        $graphics.ForeColor = $WHITE
-        $graphics.Font = New-Object System.Drawing.Font('Segoe UI',7,[System.Drawing.FontStyle]::Bold)
-        $graphics.Cursor = [System.Windows.Forms.Cursors]::Hand
+        $card.Controls.Add($play,1,0)
+        $graphics=New-Object System.Windows.Forms.Button
+        $graphics.Text='Graphics'
+        Style-CafeButton -Button $graphics
+        $graphics.BackColor=[System.Drawing.Color]::FromArgb(77,72,125)
+        $graphics.Dock='Fill'
         $graphics.Add_Click({
+            Update-SelectedProfileCard -Name $selectedProfile
             try { Invoke-GraphicsOnly -ModeName $selectedProfile }
+            catch{Write-Log ('Graphics failed for '+$selectedProfile+': '+$_.Exception.Message) 'ERROR'}
+        }.GetNewClosure())
+        $card.Controls.Add($graphics,2,0)
+        $edit=New-Object System.Windows.Forms.Button
+        $edit.Text='Edit'
+        Style-CafeButton -Button $edit
+        $edit.BackColor=[System.Drawing.Color]::FromArgb(58,67,83)
+        $edit.Dock='Fill'
+        $edit.Add_Click({
+            Update-SelectedProfileCard -Name $selectedProfile
+            try{
+                Show-ProfileEditor -ProfileName $selectedProfile
+                Update-SelectedProfileCard -Name $selectedProfile
+            }catch{Write-Log ('Editor failed: '+$_.Exception.Message) 'ERROR'}
+        }.GetNewClosure())
+        $card.Controls.Add($edit,3,0)
+        $profilesGrid.Controls.Add($card,0,($Index-5))
+    }else{
+        $button.Add_Click({
+            Write-Log ('Clicked: '+$this.Text)
+            try { & $actionToRun }
             catch {
-                Write-Log ('Graphics button failed for '+$selectedProfile+': '+$_.Exception.Message) 'ERROR'
-                [void][System.Windows.Forms.MessageBox]::Show(
-                    ('Unable to apply '+$selectedProfile+' graphics: '+$_.Exception.Message),
-                    'CS2 Graphics','OK','Warning')
+                Write-Log ('Button error: '+$_.Exception.Message) 'ERROR'
+                [void][System.Windows.Forms.MessageBox]::Show($_.Exception.Message,'CafeLauncher','OK','Warning')
             }
         }.GetNewClosure())
-        $form.Controls.Add($graphics)
-
-        $edit = New-Object System.Windows.Forms.Button
-        $edit.Text = "Edit $EditProfile settings"
-        $edit.Location = [System.Drawing.Point]::new($x, ($y + 48))
-        $edit.Size = New-Object System.Drawing.Size(235,22)
-        $edit.Font = New-Object System.Drawing.Font('Segoe UI',8)
-        $edit.FlatStyle = 'Flat'
-        $edit.FlatAppearance.BorderSize = 0
-        $edit.BackColor = [System.Drawing.Color]::FromArgb(58,67,83)
-        $edit.ForeColor = $WHITE
-        $edit.Cursor = [System.Windows.Forms.Cursors]::Hand
-        $selectedProfile = $EditProfile
-        $edit.Add_Click({
-            Write-Log "Clicked: Edit $selectedProfile settings"
-            try { Show-ProfileEditor -ProfileName $selectedProfile }
-            catch { Write-Log "Profile editor failed: $($_.Exception.Message)" 'ERROR' }
-        }.GetNewClosure())
-        $form.Controls.Add($edit)
+        if($Index -eq 0){
+            $button.Dock='Fill'
+            $rightGrid.Controls.Add($button,0,5)
+        }else{
+            $button.Size=New-Object System.Drawing.Size(198,58)
+            $toolsFlow.Controls.Add($button)
+        }
     }
 }
 
@@ -3282,23 +3359,23 @@ New-Tile "Check for Updates" 16 { Check-CafeLauncherUpdates -Manual }
 New-Tile "Exit" 17 { $form.Close() }
 # Editable DPI input replaces the fixed-800 live button in tile 18.
 $manualDpiPanel=New-Object System.Windows.Forms.Panel
-$manualDpiPanel.Location=New-Object System.Drawing.Point(25,653)
-$manualDpiPanel.Size=New-Object System.Drawing.Size(235,70)
+$manualDpiPanel.Dock='Fill'
+$manualDpiPanel.Margin=New-Object System.Windows.Forms.Padding(5,8,5,8)
 $manualDpiPanel.BackColor=$PANEL
-$form.Controls.Add($manualDpiPanel)
+$rightGrid.Controls.Add($manualDpiPanel,0,4)
 
 $manualDpiLabel=New-Object System.Windows.Forms.Label
 $manualDpiLabel.Text='DPI (100 - 25600)'
-$manualDpiLabel.Location=New-Object System.Drawing.Point(10,7)
-$manualDpiLabel.Size=New-Object System.Drawing.Size(108,20)
+$manualDpiLabel.Location=New-Object System.Drawing.Point(12,8)
+$manualDpiLabel.Size=New-Object System.Drawing.Size(220,20)
 $manualDpiLabel.Font=New-Object System.Drawing.Font('Segoe UI',8)
 $manualDpiLabel.ForeColor=$WHITE
 $manualDpiPanel.Controls.Add($manualDpiLabel)
 
 $script:ManualDpiInput=New-Object System.Windows.Forms.TextBox
 $script:ManualDpiInput.Text='800'
-$script:ManualDpiInput.Location=New-Object System.Drawing.Point(10,32)
-$script:ManualDpiInput.Size=New-Object System.Drawing.Size(105,26)
+$script:ManualDpiInput.Location=New-Object System.Drawing.Point(12,38)
+$script:ManualDpiInput.Size=New-Object System.Drawing.Size(110,30)
 $script:ManualDpiInput.MaxLength=5
 $script:ManualDpiInput.Font=New-Object System.Drawing.Font('Segoe UI',11)
 $script:ManualDpiInput.ForeColor=$WHITE
@@ -3307,8 +3384,8 @@ $manualDpiPanel.Controls.Add($script:ManualDpiInput)
 
 $script:ManualDpiChangeButton=New-Object System.Windows.Forms.Button
 $script:ManualDpiChangeButton.Text='Change DPI'
-$script:ManualDpiChangeButton.Location=New-Object System.Drawing.Point(121,10)
-$script:ManualDpiChangeButton.Size=New-Object System.Drawing.Size(105,50)
+$script:ManualDpiChangeButton.Location=New-Object System.Drawing.Point(130,32)
+$script:ManualDpiChangeButton.Size=New-Object System.Drawing.Size(142,40)
 $script:ManualDpiChangeButton.Font=New-Object System.Drawing.Font('Segoe UI',9,[System.Drawing.FontStyle]::Bold)
 $script:ManualDpiChangeButton.FlatStyle='Flat'
 $script:ManualDpiChangeButton.FlatAppearance.BorderSize=0
@@ -3337,63 +3414,67 @@ $script:ManualDpiInput.Add_KeyDown({
 })
 # New-Tile "Set DPI 800 (Onboard)" 19 { Invoke-LogitechDpiButton -Onboard } # disabled until hardware tested
 
-# Live diagnostic log panel (visible only while the launcher is open)
-$logTitle = New-Object System.Windows.Forms.Label
-$logTitle.Text = "LIVE LOGS  |  Errors and button activity"
-$logTitle.Location = New-Object System.Drawing.Point(28,755)
-$logTitle.Size = New-Object System.Drawing.Size(500,22)
-$logTitle.Font = New-Object System.Drawing.Font("Segoe UI",9,[System.Drawing.FontStyle]::Bold)
-$logTitle.ForeColor = $WHITE
-$form.Controls.Add($logTitle)
 
-$clearLogs = New-Object System.Windows.Forms.Button
-$clearLogs.Text = "Clear Logs"
-$clearLogs.Location = New-Object System.Drawing.Point(670,751)
-$clearLogs.Size = New-Object System.Drawing.Size(100,27)
-$clearLogs.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
-$clearLogs.FlatAppearance.BorderSize = 0
-$clearLogs.BackColor = $PANEL
-$clearLogs.ForeColor = $WHITE
-$clearLogs.Add_Click({
-    if ($script:LogBox) { $script:LogBox.Clear() }
-    try { Set-Content -LiteralPath $script:LogPath -Value "" -Encoding UTF8 } catch {}
-    Write-Log "Logs cleared."
+$logPane=New-Object System.Windows.Forms.TableLayoutPanel
+$logPane.Dock='Fill'
+$logPane.ColumnCount=3
+$logPane.RowCount=2
+$logPane.BackColor=$PANEL
+$logPane.Margin=New-Object System.Windows.Forms.Padding(15,0,15,0)
+[void]$logPane.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle('Percent',100)))
+[void]$logPane.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle('Absolute',110)))
+[void]$logPane.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle('Absolute',110)))
+[void]$logPane.RowStyles.Add((New-Object System.Windows.Forms.RowStyle('Absolute',42)))
+[void]$logPane.RowStyles.Add((New-Object System.Windows.Forms.RowStyle('Percent',100)))
+$root.Controls.Add($logPane,0,2)
+$statusLine=New-CafeLabel -Text 'Ready - check logs for detailed operation results.' -FontSize 9
+$logPane.Controls.Add($statusLine,0,0)
+$logToggle=New-Object System.Windows.Forms.Button
+$logToggle.Text='Show Logs'
+Style-CafeButton -Button $logToggle
+$logToggle.Dock='Fill'
+$logPane.Controls.Add($logToggle,1,0)
+$clearLogs=New-Object System.Windows.Forms.Button
+$clearLogs.Text='Clear Logs'
+Style-CafeButton -Button $clearLogs
+$clearLogs.Dock='Fill'
+$logPane.Controls.Add($clearLogs,2,0)
+$script:LogBox=New-Object System.Windows.Forms.TextBox
+$script:LogBox.Dock='Fill'
+$script:LogBox.Multiline=$true
+$script:LogBox.ReadOnly=$true
+$script:LogBox.ScrollBars=[System.Windows.Forms.ScrollBars]::Vertical
+$script:LogBox.WordWrap=$false
+$script:LogBox.BackColor=[System.Drawing.Color]::FromArgb(12,15,20)
+$script:LogBox.ForeColor=[System.Drawing.Color]::FromArgb(190,220,190)
+$script:LogBox.Font=New-Object System.Drawing.Font('Consolas',9)
+$logPane.Controls.Add($script:LogBox,0,1)
+$logPane.SetColumnSpan($script:LogBox,3)
+$script:LogBox.Visible=$false
+$script:LogsExpanded=$false
+$logToggle.Add_Click({
+    $script:LogsExpanded= -not $script:LogsExpanded
+    $root.RowStyles[2].Height=if($script:LogsExpanded){185}else{44}
+    $script:LogBox.Visible=$script:LogsExpanded
+    $logToggle.Text=if($script:LogsExpanded){'Hide Logs'}else{'Show Logs'}
 })
-$form.Controls.Add($clearLogs)
-
-$script:LogBox = New-Object System.Windows.Forms.TextBox
-$script:LogBox.Location = New-Object System.Drawing.Point(28,782)
-$script:LogBox.Size = New-Object System.Drawing.Size(742,168)
-$script:LogBox.Multiline = $true
-$script:LogBox.ReadOnly = $true
-$script:LogBox.ScrollBars = [System.Windows.Forms.ScrollBars]::Vertical
-$script:LogBox.WordWrap = $false
-$script:LogBox.BackColor = [System.Drawing.Color]::FromArgb(12,15,20)
-$script:LogBox.ForeColor = [System.Drawing.Color]::FromArgb(190,220,190)
-$script:LogBox.Font = New-Object System.Drawing.Font("Consolas",9)
-try {
-    $script:LogBox.Text = Get-Content -LiteralPath $script:LogPath -Raw -ErrorAction Stop
-    $script:LogBox.SelectionStart = $script:LogBox.TextLength
-    $script:LogBox.ScrollToCaret()
-} catch {}
-$form.Controls.Add($script:LogBox)
-Write-Log "Launcher ready. Log file: $script:LogPath"
-
-# Footer
-$footer = New-Object System.Windows.Forms.Label
-$footer.Text = "GAMING CAFE  |  WINDOWS TOOLKIT  |  LOG: %TEMP%\CafeLauncher.log"
-$footer.Location = New-Object System.Drawing.Point(28,970)
-$footer.Size = New-Object System.Drawing.Size(740,22)
-$footer.Font = New-Object System.Drawing.Font("Segoe UI",8)
-$footer.ForeColor = $MUTED
-$form.Controls.Add($footer)
+$clearLogs.Add_Click({
+    if($script:LogBox){$script:LogBox.Clear()}
+    try{Set-Content -LiteralPath $script:LogPath -Value '' -Encoding UTF8}catch{}
+    Write-Log 'Logs cleared.'
+})
+try {$script:LogBox.Text=Get-Content -LiteralPath $script:LogPath -Raw -ErrorAction Stop}catch{}
+Write-Log ('Preview dashboard ready. Log file: '+$script:LogPath)
+Update-SelectedProfileCard -Name 'FabMode'
+$footer=New-CafeLabel -Text '  UI PREVIEW | main branch unchanged | auto-update disabled | %TEMP%\CafeLauncher.log' -FontSize 9
+$root.Controls.Add($footer,0,3)
 
 $form.Add_FormClosed({
     if($script:LogihubDownloadTimer){$script:LogihubDownloadTimer.Stop();$script:LogihubDownloadTimer.Dispose();$script:LogihubDownloadTimer=$null}
     $script:LogihubRequestedDPI=$null
     if ($script:ColorWatchTimer) {
-        try { $script:ColorWatchTimer.Stop(); $script:ColorWatchTimer.Dispose() } catch {}
-        Write-Log "Color Watch stopped because the launcher closed."
+        try {$script:ColorWatchTimer.Stop();$script:ColorWatchTimer.Dispose()}catch{}
+        Write-Log 'Color Watch stopped because the launcher closed.'
     }
 })
 # On first display, automatically inventory the machine and check GitHub for
