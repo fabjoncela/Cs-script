@@ -5,12 +5,14 @@ on:
     paths:
       - 'cafe.bat'
       - 'tools/Test-CafeLauncher.ps1'
+      - 'tools/Test-ProfileSave.ps1'
       - '.github/workflows/cafe-syntax.yml'
   push:
     branches: [main]
     paths:
       - 'cafe.bat'
       - 'tools/Test-CafeLauncher.ps1'
+      - 'tools/Test-ProfileSave.ps1'
       - '.github/workflows/cafe-syntax.yml'
   workflow_dispatch:
 
@@ -29,3 +31,7 @@ jobs:
         shell: powershell
         run: |
           & "$env:GITHUB_WORKSPACE\tools\Test-CafeLauncher.ps1"
+      - name: Test profile save closure and local JSON roundtrip
+        shell: powershell
+        run: |
+          & "$env:GITHUB_WORKSPACE\tools\Test-ProfileSave.ps1"
