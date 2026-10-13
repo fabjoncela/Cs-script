@@ -4,7 +4,7 @@ start "" powershell.exe -NoProfile -ExecutionPolicy Bypass -STA -WindowStyle Hid
 exit /b
 
 # POWERSHELL_GUI
-# CAFE_RELEASE=2026.10.13.21
+# CAFE_RELEASE=2026.10.13.24
 
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
@@ -28,6 +28,24 @@ function Write-Log {
         elseif($Level -eq "WARN"){$script:StepScopeWarning=$true}
     }
     try { Add-Content -LiteralPath $script:LogPath -Value $line -Encoding UTF8 } catch {}
+    if($script:StatusLine -and -not $script:StatusLine.IsDisposed -and
+        $Level -in @('ERROR','WARN','RESULT','SUMMARY')){
+        try {
+            $messageForStatus=$Message
+            if($script:StatusLine.InvokeRequired){
+                [void]$script:StatusLine.BeginInvoke([Action]{
+                    $script:StatusLine.Text=$messageForStatus
+                })
+            }else{
+                $script:StatusLine.Text=$messageForStatus
+                $script:StatusLine.ForeColor=if($Level -eq 'ERROR'){
+                    [System.Drawing.Color]::FromArgb(255,128,128)
+                }elseif($Level -eq 'WARN'){
+                    [System.Drawing.Color]::FromArgb(255,190,105)
+                }else{$MUTED}
+            }
+        }catch{}
+    }
     if ($script:LogBox -and -not $script:LogBox.IsDisposed) {
         try {
             if ($script:LogBox.InvokeRequired) {
@@ -2309,9 +2327,40 @@ function Get-GitHubSyncToken {
     }
 }
 
+# Replace the active CS2 sensitivity command without changing binds or comments.
+function Set-CS2CfgSensitivityText {
+    param([Parameter(Mandatory=$true)][string]$Content,
+          [Parameter(Mandatory=$true)][string]$Sensitivity)
+    $number=0.0
+    if($Sensitivity -notmatch '^(?:[0-9]+(?:\.[0-9]+)?)$' -or
+        -not [double]::TryParse($Sensitivity,[Globalization.NumberStyles]::Float,
+            [Globalization.CultureInfo]::InvariantCulture,[ref]$number) -or
+        $number -le 0 -or $number -gt 20){
+        throw 'CFG sensitivity must be greater than 0 and at most 20.'
+    }
+    $pattern='(?im)^(?<indent>[ \t]*)sensitivity[ \t]+(?:"[^"\r\n]*"|[0-9]+(?:\.[0-9]+)?)(?<tail>[ \t]*(?://[^\r\n]*)?)[ \t]*(?=\r?$)'
+    $matches=[regex]::Matches($Content,$pattern)
+    if($matches.Count -gt 1){throw 'Multiple active CFG sensitivity commands; please resolve them manually.'}
+    if($matches.Count -eq 1){
+        $m=$matches[0]
+        $line=$m.Groups['indent'].Value+'sensitivity "'+$Sensitivity+'"'+$m.Groups['tail'].Value
+        return $Content.Substring(0,$m.Index)+$line+$Content.Substring($m.Index+$m.Length)
+    }
+    $newline=if($Content.Contains(([string][char]13+[string][char]10))){
+        [string][char]13+[string][char]10
+    }else{[string][char]10}
+    $separator=if($Content.Length -eq 0 -or $Content.EndsWith([string][char]10)){''}else{$newline}
+    return $Content+$separator+'sensitivity "'+$Sensitivity+'"'+$newline
+}
+
 function Sync-ProfileToGitHub {
     param([Parameter(Mandatory=$true)][string]$ProfileName, [Parameter(Mandatory=$true)][string]$Token)
     if (-not $script:GamingProfiles.Contains($ProfileName)) { throw "Unknown profile: $ProfileName" }
+    $cfgName=[string]$script:GamingProfiles[$ProfileName].ConfigFile
+    $expectedCfg=(($ProfileName -replace 'Mode$','').ToLowerInvariant()+'.cfg')
+    if($cfgName -ne $expectedCfg -or $cfgName -notmatch '^[a-z0-9_-]+\.cfg$'){
+        throw ('Refusing to modify unexpected CFG filename: '+$cfgName)
+    }
     $path = "profiles/$ProfileName.json"
     $uri = "https://api.github.com/repos/$($script:GithubRepo)/contents/$path"
     $headers = @{
@@ -2321,13 +2370,17 @@ function Sync-ProfileToGitHub {
         'X-GitHub-Api-Version'='2022-11-28'
     }
     $existingSha = $null
+    $cfgBody=$null
+    $cfgUploaded=$false
+    $cfgStatus='left unchanged because sensitivity is blank'
     [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
     try {
         $current = Invoke-RestMethod -Uri ($uri + '?ref=' + $script:GithubBranch) -Method Get -Headers $headers -TimeoutSec 20 -MaximumRedirection 0 -ErrorAction Stop
         $existingSha = [string]$current.sha
     } catch {
         $status = $null
-        if ($_.Exception.Response) { $status = [int]$_.Exception.Response.StatusCode }
+        $responseProp=$_.Exception.PSObject.Properties['Response']
+        if($responseProp -and $responseProp.Value){$status=[int]$responseProp.Value.StatusCode}
         if ($status -ne 404) { throw "GitHub authorization or file read failed (HTTP $status)." }
     }
 
@@ -2344,19 +2397,58 @@ function Sync-ProfileToGitHub {
         branch=$script:GithubBranch
     }
     if ($existingSha) { $body.sha = $existingSha }
+    # Stage a matching CFG update after validating its path, blob metadata, and SHA.
+    # Empty sensitivity means "use the CFG's value" and does not edit the CFG.
+    $sensValue=[string]$values['CS2Sensitivity']
+    if(-not [string]::IsNullOrWhiteSpace($sensValue)){
+        $cfgUri="https://api.github.com/repos/$($script:GithubRepo)/contents/$cfgName"
+        $cfgRemote=Invoke-RestMethod -Uri ($cfgUri+'?ref='+$script:GithubBranch) -Method Get -Headers $headers -TimeoutSec 20 -MaximumRedirection 0 -ErrorAction Stop
+        if($cfgRemote.type -ne 'file' -or $cfgRemote.path -ne $cfgName -or
+            $cfgRemote.encoding -ne 'base64' -or
+            [string]$cfgRemote.sha -notmatch '^[a-fA-F0-9]{40}$' -or
+            [string]::IsNullOrWhiteSpace([string]$cfgRemote.content) -or
+            [int64]$cfgRemote.size -gt 2097152){
+            throw ('Invalid GitHub CFG metadata, cannot safely sync '+$cfgName)
+        }
+        $cfgText=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String(([string]$cfgRemote.content -replace '\s','')))
+        $newCfgText=Set-CS2CfgSensitivityText -Content $cfgText -Sensitivity $sensValue
+        if($newCfgText -cne $cfgText){
+            $cfgBody=@{
+                message="Update $cfgName sensitivity from CafeLauncher"
+                content=[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($newCfgText))
+                branch=$script:GithubBranch
+                sha=[string]$cfgRemote.sha
+            }
+        }else{$cfgStatus='already has the requested sensitivity'}
+    }
     try {
+        if($cfgBody){
+            $cfgResponse=Invoke-RestMethod -Uri $cfgUri -Method Put -Headers $headers -ContentType 'application/json' -Body ($cfgBody | ConvertTo-Json -Depth 5 -Compress) -TimeoutSec 25 -MaximumRedirection 0 -ErrorAction Stop
+            if(-not $cfgResponse.commit.sha){throw ('CFG write was not confirmed for '+$cfgName)}
+            $cfgUploaded=$true
+            $cfgStatus="updated sensitivity to $sensValue"
+            Write-Log ("GitHub CFG sensitivity saved to "+$cfgName+"; commit="+$cfgResponse.commit.sha)
+        }
         $result = Invoke-RestMethod -Uri $uri -Method Put -Headers $headers -ContentType 'application/json' -Body ($body | ConvertTo-Json -Depth 5 -Compress) -TimeoutSec 25 -MaximumRedirection 0 -ErrorAction Stop
         if (-not $result.commit.sha) { throw 'GitHub did not return a successful commit.' }
-        Write-Log "$ProfileName settings synced to GitHub. Commit: $($result.commit.sha)"
+        Write-Log ("GitHub sync completed: "+$path+" updated; "+$cfgName+" "+$cfgStatus+"; commit="+$result.commit.sha)
     } catch {
         $status = $null
-        if ($_.Exception.Response) { $status = [int]$_.Exception.Response.StatusCode }
-        if ($status -eq 401 -or $status -eq 403) { throw 'GitHub refused the token. Check repository access and Contents: Read and write permission.' }
-        if ($status -eq 409 -or $status -eq 422) { throw 'GitHub rejected the update due to a changed version or validation error. Retry syncing.' }
-        throw "GitHub upload failed (HTTP $status). Your settings remain saved locally."
+        $responseProp=$_.Exception.PSObject.Properties['Response']
+        if($responseProp -and $responseProp.Value){$status=[int]$responseProp.Value.StatusCode}
+        $detail=if ($status -eq 401 -or $status -eq 403) {
+            'GitHub refused the token. Check Contents: Read and write permission.'
+        } elseif($status -eq 409 -or $status -eq 422) {
+            'GitHub file versions changed; reload and retry.'
+        } else { $_.Exception.Message }
+        if($cfgUploaded){
+            throw ("PARTIAL SYNC: "+$cfgName+" was updated, but "+$path+" was not confirmed saved. Retry Save & Sync. "+$detail)
+        }
+        throw ("GitHub sync failed; neither file was confirmed updated. "+$detail)
     } finally {
         $headers.Authorization = $null
         $body.content = $null
+        if($cfgBody){$cfgBody.content=$null}
     }
 }
 
@@ -2383,6 +2475,64 @@ function New-EditorNumber {
     return $n
 }
 
+# Field controls live in isolated table cells: labels can never cover adjacent inputs.
+function New-EditorTabGrid {
+    param($Page,[int]$Rows)
+    $grid=New-Object System.Windows.Forms.TableLayoutPanel
+    $grid.Dock='Top'
+    $grid.AutoSize=$true
+    $grid.AutoSizeMode='GrowAndShrink'
+    $grid.ColumnCount=2
+    $grid.RowCount=$Rows
+    $grid.Padding=New-Object System.Windows.Forms.Padding(10,12,10,10)
+    [void]$grid.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle('Percent',50)))
+    [void]$grid.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle('Percent',50)))
+    for($i=0;$i -lt $Rows;$i++){
+        [void]$grid.RowStyles.Add((New-Object System.Windows.Forms.RowStyle('Absolute',75)))
+    }
+    $Page.Controls.Add($grid)
+    return $grid
+}
+function Add-EditorTabField {
+    param($Grid,[string]$Title,$Control,[int]$Column,[int]$Row)
+    $cell=New-Object System.Windows.Forms.TableLayoutPanel
+    $cell.Dock='Fill'
+    $cell.ColumnCount=1
+    $cell.RowCount=2
+    $cell.Margin=New-Object System.Windows.Forms.Padding(7,4,7,4)
+    [void]$cell.RowStyles.Add((New-Object System.Windows.Forms.RowStyle('Absolute',28)))
+    [void]$cell.RowStyles.Add((New-Object System.Windows.Forms.RowStyle('Percent',100)))
+    $caption=New-Object System.Windows.Forms.Label
+    $caption.Text=$Title
+    $caption.ForeColor=$WHITE
+    $caption.Dock='Fill'
+    $caption.AutoEllipsis=$true
+    $caption.Font=New-Object System.Drawing.Font('Segoe UI',9)
+    $cell.Controls.Add($caption,0,0)
+    $Control.Dock='Fill'
+    $Control.Margin=New-Object System.Windows.Forms.Padding(0,0,0,3)
+    $cell.Controls.Add($Control,0,1)
+    $Grid.Controls.Add($cell,$Column,$Row)
+    return $cell
+}
+function New-EditorTabNumber {
+    param($Grid,[string]$Title,[int]$Column,[int]$Row,[int]$Min,[int]$Max,[int]$Value)
+    $numeric=New-Object System.Windows.Forms.NumericUpDown
+    $numeric.Minimum=[decimal]$Min
+    $numeric.Maximum=[decimal]$Max
+    $numeric.Value=[decimal]$Value
+    [void](Add-EditorTabField -Grid $Grid -Title $Title -Control $numeric -Column $Column -Row $Row)
+    return $numeric
+}
+function Add-EditorTabWide {
+    param($Grid,$Control,[int]$Row)
+    $Control.Dock='Fill'
+    $Control.Margin=New-Object System.Windows.Forms.Padding(13,9,13,5)
+    $Control.AutoSize=$false
+    $Grid.Controls.Add($Control,0,$Row)
+    $Grid.SetColumnSpan($Control,2)
+}
+
 function Show-ProfileEditor {
     param([Parameter(Mandatory=$true)][string]$ProfileName)
     Refresh-ProfileFromGitHub -ProfileName $ProfileName
@@ -2397,117 +2547,167 @@ function Show-ProfileEditor {
     }
 
     $dialog = New-Object System.Windows.Forms.Form
-    $dialog.Text = "Edit $ProfileName"
-    $dialog.ClientSize = New-Object System.Drawing.Size(590,645)
+    $dialog.Text = "Edit $ProfileName - CafeLauncher"
+    $dialog.ClientSize = New-Object System.Drawing.Size(740,600)
+    $dialog.MinimumSize = New-Object System.Drawing.Size(740,620)
     $dialog.StartPosition = 'CenterParent'
-    $dialog.FormBorderStyle = 'FixedDialog'
+    $dialog.FormBorderStyle = 'Sizable'
     $dialog.MaximizeBox = $false
     $dialog.MinimizeBox = $false
     $dialog.ShowInTaskbar = $false
-    $dialog.BackColor = $PANEL
+    $dialog.BackColor = $BG
     $dialog.ForeColor = $WHITE
     $dialog.Font = New-Object System.Drawing.Font('Segoe UI',10)
     $script:EditorTextColor = $WHITE
 
-    New-EditorLabel $dialog 'Windows pointer speed (1-20)' 20 18 260 | Out-Null
-    $pointer = New-EditorNumber $dialog 20 42 1 20 ([int]$p.PointerSpeed) 245
-    New-EditorLabel $dialog 'NVIDIA Digital Vibrance (%)' 305 18 260 | Out-Null
-    $vibrance = New-EditorNumber $dialog 305 42 0 100 ([int]$p.Vibrance) 245
+    # A docked layout and per-field cells prevent labels from painting over
+    # neighboring numeric boxes at 100%, 125% and 150% Windows display scaling.
+    $editorRoot = New-Object System.Windows.Forms.TableLayoutPanel
+    $editorRoot.Dock = 'Fill'
+    $editorRoot.ColumnCount = 1
+    $editorRoot.RowCount = 3
+    [void]$editorRoot.RowStyles.Add((New-Object System.Windows.Forms.RowStyle('Absolute',76)))
+    [void]$editorRoot.RowStyles.Add((New-Object System.Windows.Forms.RowStyle('Percent',100)))
+    [void]$editorRoot.RowStyles.Add((New-Object System.Windows.Forms.RowStyle('Absolute',136)))
+    $dialog.Controls.Add($editorRoot)
 
-    $accel = New-Object System.Windows.Forms.CheckBox
-    $accel.Text='Enable Windows mouse acceleration (EPP)'
-    $accel.Checked = -not [bool]$p.DisableAcceleration
-    $accel.Location=New-Object System.Drawing.Point(20,83)
-    $accel.Size=New-Object System.Drawing.Size(500,27)
-    $dialog.Controls.Add($accel)
+    $intro = New-Object System.Windows.Forms.Panel
+    $intro.Dock='Fill'
+    $intro.Padding=New-Object System.Windows.Forms.Padding(20,12,20,0)
+    $editorRoot.Controls.Add($intro,0,0)
+    $introTitle=New-Object System.Windows.Forms.Label
+    $introTitle.Text="Edit $ProfileName"
+    $introTitle.Dock='Top'
+    $introTitle.Height=32
+    $introTitle.Font=New-Object System.Drawing.Font('Segoe UI',17,[System.Drawing.FontStyle]::Bold)
+    $introTitle.ForeColor=$WHITE
+    $intro.Controls.Add($introTitle)
+    $introSubtitle=New-Object System.Windows.Forms.Label
+    $introSubtitle.Text='Mouse, NVIDIA/display, CS2 and app preferences'
+    $introSubtitle.Dock='Bottom'
+    $introSubtitle.Height=23
+    $introSubtitle.ForeColor=$MUTED
+    $introSubtitle.Font=New-Object System.Drawing.Font('Segoe UI',9)
+    $intro.Controls.Add($introSubtitle)
 
-    New-EditorLabel $dialog 'Resolution width' 20 122 160 | Out-Null
-    New-EditorLabel $dialog 'Resolution height' 205 122 160 | Out-Null
-    New-EditorLabel $dialog 'Refresh rate (Hz)' 390 122 160 | Out-Null
-    $width = New-EditorNumber $dialog 20 147 640 7680 ([int]$p.Width) 165
-    $height = New-EditorNumber $dialog 205 147 480 4320 ([int]$p.Height) 165
-    $hz = New-EditorNumber $dialog 390 147 30 600 ([int]$p.RefreshHz) 160
-
-    New-EditorLabel $dialog 'CS2 sensitivity (blank = value from .cfg)' 20 196 530 | Out-Null
-    $sens = New-Object System.Windows.Forms.TextBox
-    $sens.Text=[string]$p.CS2Sensitivity
-    $sens.Location=New-Object System.Drawing.Point(20,222)
-    $sens.Size=New-Object System.Drawing.Size(530,29)
-    $dialog.Controls.Add($sens)
-
-    New-EditorLabel $dialog 'CS2 config filename (fixed for each profile)' 20 276 530 | Out-Null
-    $cfgFile = New-Object System.Windows.Forms.TextBox
-    $cfgFile.Text=[string]$p.ConfigFile
-    $cfgFile.ReadOnly=$true
-    $cfgFile.Location=New-Object System.Drawing.Point(20,300)
-    $cfgFile.Size=New-Object System.Drawing.Size(530,29)
-    $dialog.Controls.Add($cfgFile)
-
-    New-EditorLabel $dialog 'GitHub .cfg URL (FabMode default: fab.cfg)' 20 355 540 | Out-Null
-    $url = New-Object System.Windows.Forms.TextBox
-    $url.Text=[string]$p.CfgDownloadUrl
-    $url.Location=New-Object System.Drawing.Point(20,380)
-    $url.Size=New-Object System.Drawing.Size(530,28)
-    $dialog.Controls.Add($url)
-
-    $nv = New-Object System.Windows.Forms.CheckBox
-    $nv.Text='Apply NVIDIA settings (including resolution + vibrance)'
-    $nv.Checked=[bool]$p.ApplyNvidia
-    $nv.Location=New-Object System.Drawing.Point(20,430)
-    $nv.Size=New-Object System.Drawing.Size(550,26)
-    $dialog.Controls.Add($nv)
-
-    $apps = New-Object System.Windows.Forms.CheckBox
-    $apps.Text='Launch Steam, FACEIT, Spotify, Mouse Options (no G HUB)'
-    $apps.Checked=[bool]$p.LaunchApps
-    $apps.Location=New-Object System.Drawing.Point(20,461)
-    $apps.Size=New-Object System.Drawing.Size(550,26)
-    $dialog.Controls.Add($apps)
-
-    $dialog.ClientSize = New-Object System.Drawing.Size(590,725)
-    New-EditorLabel $dialog 'Logitech DPI (live, per profile)' 20 495 330 | Out-Null
-    $logitechDpi = New-EditorNumber $dialog 405 493 100 25600 ([int]$p.LogitechDPI) 145
-    $logitechDpi.Increment = 50
-    $tip = New-EditorLabel $dialog 'Local edits stay on this PC. GitHub sync shares ALL profile settings; CFG binds remain separate.' 20 538 550
-    $tip.ForeColor=$MUTED
-    $tip.Font=New-Object System.Drawing.Font('Segoe UI',8)
-    $tip.Size=New-Object System.Drawing.Size(550,37)
-
-    $status = New-EditorLabel $dialog '' 20 582 550
-    $status.Font=New-Object System.Drawing.Font('Segoe UI',8,[System.Drawing.FontStyle]::Bold)
-    $status.Size=New-Object System.Drawing.Size(550,23)
-    if ($script:PendingSync[$ProfileName]) {
-        $status.Text='Unsynced local edits - cloud download will not overwrite them.'
-        $status.ForeColor=[System.Drawing.Color]::FromArgb(255,190,105)
-    } else {
-        $status.Text='GitHub settings enabled - saved locally and cached for offline use.'
-        $status.ForeColor=$MUTED
+    $editorTabs=New-Object System.Windows.Forms.TabControl
+    $editorTabs.Dock='Fill'
+    $editorTabs.Margin=New-Object System.Windows.Forms.Padding(17,0,17,3)
+    $editorRoot.Controls.Add($editorTabs,0,1)
+    $mousePage=New-Object System.Windows.Forms.TabPage
+    $mousePage.Text='Mouse'
+    $displayPage=New-Object System.Windows.Forms.TabPage
+    $displayPage.Text='NVIDIA / Display'
+    $cs2Page=New-Object System.Windows.Forms.TabPage
+    $cs2Page.Text='CS2 / Apps'
+    foreach($page in @($mousePage,$displayPage,$cs2Page)){
+        $page.BackColor=$PANEL
+        $page.ForeColor=$WHITE
+        $page.AutoScroll=$true
+        [void]$editorTabs.TabPages.Add($page)
     }
 
-    $saveLocal = New-Object System.Windows.Forms.Button
+    $mouseGrid=New-EditorTabGrid -Page $mousePage -Rows 3
+    $pointer=New-EditorTabNumber -Grid $mouseGrid -Title 'Windows pointer speed (1-20)' -Column 0 -Row 0 -Min 1 -Max 20 -Value ([int]$p.PointerSpeed)
+    $logitechDpi=New-EditorTabNumber -Grid $mouseGrid -Title 'Logitech DPI (live, per profile)' -Column 1 -Row 0 -Min 100 -Max 25600 -Value ([int]$p.LogitechDPI)
+    $logitechDpi.Increment=50
+    $accel=New-Object System.Windows.Forms.CheckBox
+    $accel.Text='Enable Windows mouse acceleration (EPP)'
+    $accel.Checked= -not [bool]$p.DisableAcceleration
+    Add-EditorTabWide -Grid $mouseGrid -Control $accel -Row 1
+    $mouseHint=New-Object System.Windows.Forms.Label
+    $mouseHint.Text='Live DPI uses your better-logihub helper. G HUB is not launched by profiles.'
+    $mouseHint.ForeColor=$MUTED
+    Add-EditorTabWide -Grid $mouseGrid -Control $mouseHint -Row 2
+
+    $displayGrid=New-EditorTabGrid -Page $displayPage -Rows 3
+    $width=New-EditorTabNumber -Grid $displayGrid -Title 'Resolution width' -Column 0 -Row 0 -Min 640 -Max 7680 -Value ([int]$p.Width)
+    $height=New-EditorTabNumber -Grid $displayGrid -Title 'Resolution height' -Column 1 -Row 0 -Min 480 -Max 4320 -Value ([int]$p.Height)
+    $hz=New-EditorTabNumber -Grid $displayGrid -Title 'Refresh rate (Hz)' -Column 0 -Row 1 -Min 30 -Max 600 -Value ([int]$p.RefreshHz)
+    $vibrance=New-EditorTabNumber -Grid $displayGrid -Title 'NVIDIA Digital Vibrance (%)' -Column 1 -Row 1 -Min 0 -Max 100 -Value ([int]$p.Vibrance)
+    $nv=New-Object System.Windows.Forms.CheckBox
+    $nv.Text='Apply NVIDIA settings (including resolution + vibrance)'
+    $nv.Checked=[bool]$p.ApplyNvidia
+    Add-EditorTabWide -Grid $displayGrid -Control $nv -Row 2
+
+    $cs2Grid=New-EditorTabGrid -Page $cs2Page -Rows 4
+    $cfgFile=New-Object System.Windows.Forms.TextBox
+    $cfgFile.Text=[string]$p.ConfigFile
+    $cfgFile.ReadOnly=$true
+    Add-EditorTabField -Grid $cs2Grid -Title 'CS2 config filename (fixed)' -Control $cfgFile -Column 0 -Row 0
+    $sens=New-Object System.Windows.Forms.TextBox
+    $sens.Text=[string]$p.CS2Sensitivity
+    Add-EditorTabField -Grid $cs2Grid -Title 'CS2 sensitivity (sync updates .cfg)' -Control $sens -Column 1 -Row 0
+    $url=New-Object System.Windows.Forms.TextBox
+    $url.Text=[string]$p.CfgDownloadUrl
+    $urlCell=Add-EditorTabField -Grid $cs2Grid -Title 'GitHub .cfg URL (FabMode default: fab.cfg)' -Control $url -Column 0 -Row 1
+    $cs2Grid.SetColumnSpan($urlCell,2)
+    $apps=New-Object System.Windows.Forms.CheckBox
+    $apps.Text='Launch Steam, FACEIT, Spotify, Mouse Options (no G HUB)'
+    $apps.Checked=[bool]$p.LaunchApps
+    Add-EditorTabWide -Grid $cs2Grid -Control $apps -Row 2
+    $cs2Hint=New-Object System.Windows.Forms.Label
+    $cs2Hint.Text='Apply Graphics and Play + Exec remain separate actions on the dashboard.'
+    $cs2Hint.ForeColor=$MUTED
+    Add-EditorTabWide -Grid $cs2Grid -Control $cs2Hint -Row 3
+
+    $editorFooter=New-Object System.Windows.Forms.TableLayoutPanel
+    $editorFooter.Dock='Fill'
+    $editorFooter.Padding=New-Object System.Windows.Forms.Padding(20,4,20,10)
+    $editorFooter.ColumnCount=3
+    $editorFooter.RowCount=3
+    [void]$editorFooter.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle('Percent',28)))
+    [void]$editorFooter.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle('Percent',44)))
+    [void]$editorFooter.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle('Percent',28)))
+    [void]$editorFooter.RowStyles.Add((New-Object System.Windows.Forms.RowStyle('Absolute',32)))
+    [void]$editorFooter.RowStyles.Add((New-Object System.Windows.Forms.RowStyle('Absolute',30)))
+    [void]$editorFooter.RowStyles.Add((New-Object System.Windows.Forms.RowStyle('Percent',100)))
+    $editorRoot.Controls.Add($editorFooter,0,2)
+    $tip=New-Object System.Windows.Forms.Label
+    $tip.Text='Save locally or sync profile JSON + sensitivity to GitHub CFG. Click Apply to use edits.'
+    $tip.ForeColor=$MUTED
+    $tip.Dock='Fill'
+    $tip.AutoEllipsis=$true
+    $tip.Font=New-Object System.Drawing.Font('Segoe UI',9)
+    $editorFooter.Controls.Add($tip,0,0)
+    $editorFooter.SetColumnSpan($tip,3)
+
+    $status=New-Object System.Windows.Forms.Label
+    $status.Dock='Fill'
+    $status.AutoEllipsis=$true
+    $status.Font=New-Object System.Drawing.Font('Segoe UI',9,[System.Drawing.FontStyle]::Bold)
+    if ($script:PendingSync[$ProfileName]) {
+        $status.Text='Unsynced local edits - cloud refresh will not overwrite them.'
+        $status.ForeColor=[System.Drawing.Color]::FromArgb(255,190,105)
+    } else {
+        $status.Text='GitHub settings enabled; cached for offline use.'
+        $status.ForeColor=$MUTED
+    }
+    $editorFooter.Controls.Add($status,0,1)
+    $editorFooter.SetColumnSpan($status,3)
+
+    $saveLocal=New-Object System.Windows.Forms.Button
     $saveLocal.Text='Save Locally'
-    $saveLocal.Location=New-Object System.Drawing.Point(20,635)
-    $saveLocal.Size=New-Object System.Drawing.Size(155,40)
     $saveLocal.BackColor=$BLUE
     $saveLocal.ForeColor=$WHITE
     $saveLocal.FlatStyle='Flat'
-    $dialog.Controls.Add($saveLocal)
+    $saveLocal.Dock='Fill'
+    $editorFooter.Controls.Add($saveLocal,0,2)
 
-    $saveSync = New-Object System.Windows.Forms.Button
+    $saveSync=New-Object System.Windows.Forms.Button
     $saveSync.Text='Save & Sync to GitHub'
-    $saveSync.Location=New-Object System.Drawing.Point(184,635)
-    $saveSync.Size=New-Object System.Drawing.Size(219,40)
     $saveSync.BackColor=[System.Drawing.Color]::FromArgb(38,132,102)
     $saveSync.ForeColor=$WHITE
     $saveSync.FlatStyle='Flat'
-    $dialog.Controls.Add($saveSync)
+    $saveSync.Dock='Fill'
+    $editorFooter.Controls.Add($saveSync,1,2)
+    $saveSync.Tag='Sync this profile JSON and, if set, sensitivity in its matching CFG on GitHub.'
 
-    $cancel = New-Object System.Windows.Forms.Button
+    $cancel=New-Object System.Windows.Forms.Button
     $cancel.Text='Cancel'
-    $cancel.Location=New-Object System.Drawing.Point(413,635)
-    $cancel.Size=New-Object System.Drawing.Size(137,40)
+    $cancel.Dock='Fill'
     $cancel.DialogResult=[System.Windows.Forms.DialogResult]::Cancel
-    $dialog.Controls.Add($cancel)
+    $editorFooter.Controls.Add($cancel,2,2)
     $dialog.CancelButton=$cancel
 
     $saveEditorValues = {
@@ -2552,9 +2752,27 @@ function Show-ProfileEditor {
         }
     }.GetNewClosure())
 
+    $syncTargetBranch=[string]$script:GithubBranch
     $saveSync.Add_Click({
         try {
             & $saveEditorValues
+            $changes=if($sens.Text.Trim()){
+                "profiles/$ProfileName.json AND $($p.ConfigFile) (sensitivity only)"
+            }else{
+                "profiles/$ProfileName.json only (CFG unchanged: sensitivity blank)"
+            }
+            $newline=[Environment]::NewLine
+            $message="Save these files to GitHub branch $syncTargetBranch?"+$newline+
+                $changes+$newline+$newline+
+                'Other CFG binds and graphics presets will not be changed.'
+            $confirm=[System.Windows.Forms.MessageBox]::Show(
+                $message,'Confirm GitHub sync','YesNo','Question')
+            if($confirm -ne [System.Windows.Forms.DialogResult]::Yes){
+                $status.Text='Saved locally; GitHub sync canceled.'
+                $status.ForeColor=[System.Drawing.Color]::FromArgb(255,190,105)
+                Write-Log "$ProfileName GitHub sync canceled; local edits preserved."
+                return
+            }
             $token = Get-GitHubSyncToken -OwnerWindow $dialog
             if ([string]::IsNullOrWhiteSpace($token)) {
                 $status.Text='Saved locally. GitHub sync canceled; local edits preserved.'
@@ -2568,7 +2786,7 @@ function Show-ProfileEditor {
                 Sync-ProfileToGitHub -ProfileName $ProfileName -Token $token
                 $pendingSyncState[$ProfileName] = $false
                 Save-ProfileSettings
-                [System.Windows.Forms.MessageBox]::Show("$ProfileName settings committed to GitHub and saved locally.`nOther PCs can now download the new settings without signing in.`nThe .cfg bindings are still maintained separately on GitHub.", 'GitHub sync complete', 'OK', 'Information') | Out-Null
+                [System.Windows.Forms.MessageBox]::Show("$ProfileName settings committed to GitHub and saved locally.`nOther PCs can now download the new settings without signing in.`nIf CS2 sensitivity was set, it was also synced into the matching .cfg; binds and other commands remain unchanged.", 'GitHub sync complete', 'OK', 'Information') | Out-Null
                 $dialog.DialogResult=[System.Windows.Forms.DialogResult]::OK
                 $dialog.Close()
             } finally {
@@ -2984,152 +3202,229 @@ function Invoke-GraphicsOnly {
 # Backward-compatible entry point.
 function Invoke-FabModeFull { Invoke-GamingProfile -ProfileName 'FabMode' }
 
-# Main window
-$form = New-Object System.Windows.Forms.Form
-$form.Text = "Cafe Launcher"
-$form.Size = New-Object System.Drawing.Size(800,1050)
-$form.StartPosition = "CenterScreen"
-$form.FormBorderStyle = "FixedSingle"
-$form.MaximizeBox = $false
-$form.BackColor = $BG
-$form.ForeColor = $WHITE
-$form.Font = New-Object System.Drawing.Font("Segoe UI",10)
+# Modern CafeLauncher dashboard. Profile actions remain separate and independently callable.
+$form=New-Object System.Windows.Forms.Form
+$form.Text='CafeLauncher | CS2 Setup Center'
+$form.ClientSize=New-Object System.Drawing.Size(1080,825)
+$form.MinimumSize=New-Object System.Drawing.Size(960,780)
+$form.StartPosition='CenterScreen'
+$form.BackColor=$BG
+$form.ForeColor=$WHITE
+$form.Font=New-Object System.Drawing.Font('Segoe UI',10)
+$form.AutoScaleMode=[System.Windows.Forms.AutoScaleMode]::Font
 
-# Header
-$header = New-Object System.Windows.Forms.Panel
-$header.Location = New-Object System.Drawing.Point(0,0)
-$header.Size = New-Object System.Drawing.Size(800,105)
-$header.BackColor = $PANEL
-$form.Controls.Add($header)
+$script:SelectedProfile='FabMode'
+$script:SelectedProfileTitle=$null
+$script:SelectedProfileDetails=$null
+$script:SelectedProfileHint=$null
+function New-CafeLabel {
+    param([string]$Text,[int]$FontSize=10,[switch]$Strong)
+    $label=New-Object System.Windows.Forms.Label
+    $label.Text=$Text
+    $label.Dock='Fill'
+    $label.ForeColor=if($Strong){$WHITE}else{$MUTED}
+    $label.Font=New-Object System.Drawing.Font('Segoe UI',$FontSize,$(if($Strong){[System.Drawing.FontStyle]::Bold}else{[System.Drawing.FontStyle]::Regular}))
+    $label.TextAlign='MiddleLeft'
+    $label.AutoEllipsis=$true
+    return $label
+}
+function Style-CafeButton {
+    param($Button,[switch]$Primary)
+    $Button.FlatStyle='Flat'
+    $Button.FlatAppearance.BorderSize=0
+    $Button.BackColor=if($Primary){$BLUE}else{$PANEL}
+    $Button.ForeColor=$WHITE
+    $Button.Font=New-Object System.Drawing.Font('Segoe UI',9,[System.Drawing.FontStyle]::Bold)
+    $Button.Cursor=[System.Windows.Forms.Cursors]::Hand
+    $Button.Margin=New-Object System.Windows.Forms.Padding(4)
+}
+function Update-SelectedProfileCard {
+    param([string]$Name)
+    if(-not $script:GamingProfiles.Contains($Name)){return}
+    $script:SelectedProfile=$Name
+    $p=$script:GamingProfiles[$Name]
+    if($script:SelectedProfileTitle){$script:SelectedProfileTitle.Text=$Name}
+    if($script:SelectedProfileDetails){
+        $script:SelectedProfileDetails.Text=('DPI: '+[string]$p.LogitechDPI+'     Pointer: '+[string]$p.PointerSpeed+
+            [Environment]::NewLine+'CFG: '+[string]$p.ConfigFile+
+            [Environment]::NewLine+'Display: '+[string]$p.Width+'x'+[string]$p.Height+' @'+[string]$p.RefreshHz+' Hz')
+    }
+    if($script:SelectedProfileHint){
+        $script:SelectedProfileHint.Text='Selected for review. Click Apply on a profile row to run settings.'
+    }
+}
 
-$title = New-Object System.Windows.Forms.Label
-$title.Text = "GAMING CAFE"
-$title.Location = New-Object System.Drawing.Point(28,18)
-$title.Size = New-Object System.Drawing.Size(500,38)
-$title.Font = New-Object System.Drawing.Font("Segoe UI",21,[System.Drawing.FontStyle]::Bold)
-$title.ForeColor = $WHITE
+$root=New-Object System.Windows.Forms.TableLayoutPanel
+$root.Dock='Fill'
+$root.ColumnCount=1
+$root.RowCount=4
+[void]$root.RowStyles.Add((New-Object System.Windows.Forms.RowStyle('Absolute',82)))
+[void]$root.RowStyles.Add((New-Object System.Windows.Forms.RowStyle('Percent',100)))
+[void]$root.RowStyles.Add((New-Object System.Windows.Forms.RowStyle('Absolute',44)))
+[void]$root.RowStyles.Add((New-Object System.Windows.Forms.RowStyle('Absolute',30)))
+$form.Controls.Add($root)
+$header=New-Object System.Windows.Forms.Panel
+$header.Dock='Fill'
+$header.BackColor=$PANEL
+$root.Controls.Add($header,0,0)
+$title=New-CafeLabel -Text 'CAFE  LAUNCHER' -FontSize 22 -Strong
+$title.Dock='None'
+$title.Location=New-Object System.Drawing.Point(24,8)
+$title.Size=New-Object System.Drawing.Size(450,39)
 $header.Controls.Add($title)
-
-$subtitle = New-Object System.Windows.Forms.Label
-$subtitle.Text = "APP LAUNCHER  |  PC SETTINGS"
-$subtitle.Location = New-Object System.Drawing.Point(31,62)
-$subtitle.Size = New-Object System.Drawing.Size(500,23)
-$subtitle.Font = New-Object System.Drawing.Font("Segoe UI",9)
-$subtitle.ForeColor = $MUTED
+$subtitle=New-CafeLabel -Text 'CS2 Setup Center   |   Profiles / Graphics / DPI' -FontSize 9
+$subtitle.Dock='None'
+$subtitle.Location=New-Object System.Drawing.Point(28,49)
+$subtitle.Size=New-Object System.Drawing.Size(600,25)
 $header.Controls.Add($subtitle)
+$versionTag=New-CafeLabel -Text 'v2026.10.13.24' -Strong
+$versionTag.Dock='Right'
+$versionTag.Width=185
+$versionTag.ForeColor=[System.Drawing.Color]::FromArgb(111,177,255)
+$versionTag.TextAlign='MiddleRight'
+$header.Controls.Add($versionTag)
+
+$tabs=New-Object System.Windows.Forms.TabControl
+$tabs.Dock='Fill'
+$tabs.Margin=New-Object System.Windows.Forms.Padding(13,8,13,8)
+$root.Controls.Add($tabs,0,1)
+$dashboard=New-Object System.Windows.Forms.TabPage
+$dashboard.Text='Dashboard'
+$dashboard.BackColor=$BG
+$utilities=New-Object System.Windows.Forms.TabPage
+$utilities.Text='Tools & Apps'
+$utilities.BackColor=$BG
+[void]$tabs.TabPages.Add($dashboard)
+[void]$tabs.TabPages.Add($utilities)
+$dashGrid=New-Object System.Windows.Forms.TableLayoutPanel
+$dashGrid.Dock='Fill'
+$dashGrid.ColumnCount=2
+$dashGrid.Padding=New-Object System.Windows.Forms.Padding(8)
+[void]$dashGrid.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle('Percent',57)))
+[void]$dashGrid.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle('Percent',43)))
+$dashboard.Controls.Add($dashGrid)
+$profilesGrid=New-Object System.Windows.Forms.TableLayoutPanel
+$profilesGrid.Dock='Fill'
+$profilesGrid.RowCount=6
+$profilesGrid.ColumnCount=1
+[void]$profilesGrid.RowStyles.Add((New-Object System.Windows.Forms.RowStyle('Absolute',45)))
+for($i=1;$i -le 5;$i++){[void]$profilesGrid.RowStyles.Add((New-Object System.Windows.Forms.RowStyle('Percent',20)))}
+$profilesGrid.Controls.Add((New-CafeLabel -Text 'PLAYER PROFILES  |  Apply, Play, Graphics, Edit' -Strong),0,0)
+$dashGrid.Controls.Add($profilesGrid,0,0)
+
+$rightGrid=New-Object System.Windows.Forms.TableLayoutPanel
+$rightGrid.Dock='Fill'
+$rightGrid.ColumnCount=1
+$rightGrid.RowCount=7
+$rightGrid.Padding=New-Object System.Windows.Forms.Padding(10)
+foreach($size in @(38,48,110,55,110,66)){
+    [void]$rightGrid.RowStyles.Add((New-Object System.Windows.Forms.RowStyle('Absolute',$size)))
+}
+[void]$rightGrid.RowStyles.Add((New-Object System.Windows.Forms.RowStyle('Percent',100)))
+$dashGrid.Controls.Add($rightGrid,1,0)
+$rightGrid.Controls.Add((New-CafeLabel -Text 'SELECTED PROFILE' -Strong),0,0)
+$script:SelectedProfileTitle=New-CafeLabel -Text 'FabMode' -FontSize 22 -Strong
+$rightGrid.Controls.Add($script:SelectedProfileTitle,0,1)
+$script:SelectedProfileDetails=New-CafeLabel -Text '' -FontSize 11
+$script:SelectedProfileDetails.ForeColor=$WHITE
+$script:SelectedProfileDetails.BackColor=$PANEL
+$script:SelectedProfileDetails.Padding=New-Object System.Windows.Forms.Padding(14)
+$rightGrid.Controls.Add($script:SelectedProfileDetails,0,2)
+$script:SelectedProfileHint=New-CafeLabel -Text 'Graphics is separate from profile Apply.' -FontSize 9
+$rightGrid.Controls.Add($script:SelectedProfileHint,0,3)
+$rightGrid.Controls.Add((New-CafeLabel -Text 'Apply changes to the mouse with the control above.' -FontSize 9),0,6)
+
+$toolsGrid=New-Object System.Windows.Forms.TableLayoutPanel
+$toolsGrid.Dock='Fill'
+$toolsGrid.RowCount=2
+$toolsGrid.ColumnCount=1
+$toolsGrid.Padding=New-Object System.Windows.Forms.Padding(16)
+[void]$toolsGrid.RowStyles.Add((New-Object System.Windows.Forms.RowStyle('Absolute',54)))
+[void]$toolsGrid.RowStyles.Add((New-Object System.Windows.Forms.RowStyle('Percent',100)))
+$toolsGrid.Controls.Add((New-CafeLabel -Text 'TOOLS & APPLICATIONS   |   Separate from profiles' -FontSize 13 -Strong),0,0)
+$utilities.Controls.Add($toolsGrid)
+$toolsFlow=New-Object System.Windows.Forms.FlowLayoutPanel
+$toolsFlow.Dock='Fill'
+$toolsFlow.AutoScroll=$true
+$toolsFlow.WrapContents=$true
+$toolsGrid.Controls.Add($toolsFlow,0,1)
 
 function New-Tile {
-    param(
-        [string]$Text,
-        [int]$Index,
-        [scriptblock]$Action,
-        [switch]$Primary,
-        [string]$EditProfile = ''
-    )
-
-    $col = $Index % 3
-    $row = [Math]::Floor($Index / 3)
-    $x = 25 + ($col * 250)
-    $y = 125 + ($row * 88)
-
-    $button = New-Object System.Windows.Forms.Button
-    $button.Text = $Text
-    $button.Location = New-Object System.Drawing.Point($x,$y)
-    if ($EditProfile) {
-        # Split the profile tile into Apply and Play + Exec buttons.
-        $button.Size = New-Object System.Drawing.Size(88,46)
-    } else {
-        $button.Size = New-Object System.Drawing.Size(235,70)
-    }
-    $button.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
-    $button.FlatAppearance.BorderSize = 0
-    if ($Primary) {
-        $button.BackColor = $BLUE
-    } else {
-        $button.BackColor = $PANEL
-    }
-    $button.ForeColor = $WHITE
-    $button.Font = New-Object System.Drawing.Font("Segoe UI",$(if($EditProfile){9}else{10}),[System.Drawing.FontStyle]::Bold)
-    $button.Cursor = [System.Windows.Forms.Cursors]::Hand
-    $actionToRun = $Action
-    $button.Add_Click({
-        Write-Log "Clicked: $($this.Text)"
-        try {
-            & $actionToRun
-        } catch {
-            Write-Log "Button '$($this.Text)' failed: $($_.Exception.Message)" "ERROR"
-            [System.Windows.Forms.MessageBox]::Show(
-                "$($this.Text) failed:`n$($_.Exception.Message)",
-                "Cafe Launcher"
-            )
-        }
-    }.GetNewClosure())
-    $form.Controls.Add($button)
-    if ($EditProfile) {
-        $selectedProfile = $EditProfile
-        $play = New-Object System.Windows.Forms.Button
-        $play.Text = 'Play + Exec'
-        $play.Location = New-Object System.Drawing.Point(($x + 92), $y)
-        $play.Size = New-Object System.Drawing.Size(70,46)
-        $play.FlatStyle = 'Flat'
-        $play.FlatAppearance.BorderSize = 0
-        $play.BackColor = [System.Drawing.Color]::FromArgb(38,132,102)
-        $play.ForeColor = $WHITE
-        $play.Font = New-Object System.Drawing.Font('Segoe UI',8,[System.Drawing.FontStyle]::Bold)
-        $play.Cursor = [System.Windows.Forms.Cursors]::Hand
+    param([string]$Text,[int]$Index,[scriptblock]$Action,[switch]$Primary,[string]$EditProfile='')
+    $button=New-Object System.Windows.Forms.Button
+    $button.Text=if($EditProfile){"Apply $Text"}else{$Text}
+    Style-CafeButton -Button $button -Primary:$Primary
+    $actionToRun=$Action
+    if($EditProfile){
+        $selectedProfile=$EditProfile
+        $card=New-Object System.Windows.Forms.TableLayoutPanel
+        $card.Dock='Fill'
+        $card.ColumnCount=4
+        $card.RowCount=1
+        $card.BackColor=$PANEL
+        $card.Padding=New-Object System.Windows.Forms.Padding(3)
+        $card.Margin=New-Object System.Windows.Forms.Padding(3)
+        foreach($pct in @(28,23,26,23)){[void]$card.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle('Percent',$pct)))}
+        $button.Dock='Fill'
+        $button.Add_Click({
+            Update-SelectedProfileCard -Name $selectedProfile
+            Write-Log ('Clicked: Apply '+$selectedProfile)
+            try { & $actionToRun; Update-SelectedProfileCard -Name $selectedProfile }
+            catch { Write-Log ('Profile '+$selectedProfile+' failed: '+$_.Exception.Message) 'ERROR' }
+        }.GetNewClosure())
+        $card.Controls.Add($button,0,0)
+        $play=New-Object System.Windows.Forms.Button
+        $play.Text='Play + Exec'
+        Style-CafeButton -Button $play
+        $play.BackColor=[System.Drawing.Color]::FromArgb(38,132,102)
+        $play.Dock='Fill'
         $play.Add_Click({
-            Write-Log "Clicked: Play + Exec $selectedProfile"
+            Update-SelectedProfileCard -Name $selectedProfile
             try { Start-CS2WithProfileCfg -ProfileName $selectedProfile }
-            catch {
-                Write-Log ("Play + Exec failed for " + $selectedProfile + ": " + $_.Exception.Message + "; " + $_.ScriptStackTrace) 'ERROR'
-                [System.Windows.Forms.MessageBox]::Show(
-                    ("Unable to launch CS2 for " + $selectedProfile + ": " + $_.Exception.Message),
-                    'CS2 Launch Failed', 'OK', 'Error'
-                ) | Out-Null
-            }
+            catch{Write-Log ('Play + Exec failed for '+$selectedProfile+': '+$_.Exception.Message) 'ERROR'}
         }.GetNewClosure())
-        $form.Controls.Add($play)
-
-        # Independent third button: no graphics writes from the main mode,
-        # Play + Exec, Launch All, or background startup routines.
-        $graphics = New-Object System.Windows.Forms.Button
-        $graphics.Text = 'Apply Graphics'
-        $graphics.Location = New-Object System.Drawing.Point(($x + 166), $y)
-        $graphics.Size = New-Object System.Drawing.Size(69,46)
-        $graphics.FlatStyle = 'Flat'
-        $graphics.FlatAppearance.BorderSize = 0
-        $graphics.BackColor = [System.Drawing.Color]::FromArgb(77,72,125)
-        $graphics.ForeColor = $WHITE
-        $graphics.Font = New-Object System.Drawing.Font('Segoe UI',7,[System.Drawing.FontStyle]::Bold)
-        $graphics.Cursor = [System.Windows.Forms.Cursors]::Hand
+        $card.Controls.Add($play,1,0)
+        $graphics=New-Object System.Windows.Forms.Button
+        $graphics.Text='Graphics'
+        Style-CafeButton -Button $graphics
+        $graphics.BackColor=[System.Drawing.Color]::FromArgb(77,72,125)
+        $graphics.Dock='Fill'
         $graphics.Add_Click({
+            Update-SelectedProfileCard -Name $selectedProfile
             try { Invoke-GraphicsOnly -ModeName $selectedProfile }
+            catch{Write-Log ('Graphics failed for '+$selectedProfile+': '+$_.Exception.Message) 'ERROR'}
+        }.GetNewClosure())
+        $card.Controls.Add($graphics,2,0)
+        $edit=New-Object System.Windows.Forms.Button
+        $edit.Text='Edit'
+        Style-CafeButton -Button $edit
+        $edit.BackColor=[System.Drawing.Color]::FromArgb(58,67,83)
+        $edit.Dock='Fill'
+        $edit.Add_Click({
+            Update-SelectedProfileCard -Name $selectedProfile
+            try{
+                Show-ProfileEditor -ProfileName $selectedProfile
+                Update-SelectedProfileCard -Name $selectedProfile
+            }catch{Write-Log ('Editor failed: '+$_.Exception.Message) 'ERROR'}
+        }.GetNewClosure())
+        $card.Controls.Add($edit,3,0)
+        $profilesGrid.Controls.Add($card,0,($Index-5))
+    }else{
+        $button.Add_Click({
+            Write-Log ('Clicked: '+$this.Text)
+            try { & $actionToRun }
             catch {
-                Write-Log ('Graphics button failed for '+$selectedProfile+': '+$_.Exception.Message) 'ERROR'
-                [void][System.Windows.Forms.MessageBox]::Show(
-                    ('Unable to apply '+$selectedProfile+' graphics: '+$_.Exception.Message),
-                    'CS2 Graphics','OK','Warning')
+                Write-Log ('Button error: '+$_.Exception.Message) 'ERROR'
+                [void][System.Windows.Forms.MessageBox]::Show($_.Exception.Message,'CafeLauncher','OK','Warning')
             }
         }.GetNewClosure())
-        $form.Controls.Add($graphics)
-
-        $edit = New-Object System.Windows.Forms.Button
-        $edit.Text = "Edit $EditProfile settings"
-        $edit.Location = [System.Drawing.Point]::new($x, ($y + 48))
-        $edit.Size = New-Object System.Drawing.Size(235,22)
-        $edit.Font = New-Object System.Drawing.Font('Segoe UI',8)
-        $edit.FlatStyle = 'Flat'
-        $edit.FlatAppearance.BorderSize = 0
-        $edit.BackColor = [System.Drawing.Color]::FromArgb(58,67,83)
-        $edit.ForeColor = $WHITE
-        $edit.Cursor = [System.Windows.Forms.Cursors]::Hand
-        $selectedProfile = $EditProfile
-        $edit.Add_Click({
-            Write-Log "Clicked: Edit $selectedProfile settings"
-            try { Show-ProfileEditor -ProfileName $selectedProfile }
-            catch { Write-Log "Profile editor failed: $($_.Exception.Message)" 'ERROR' }
-        }.GetNewClosure())
-        $form.Controls.Add($edit)
+        if($Index -eq 0){
+            $button.Dock='Fill'
+            $rightGrid.Controls.Add($button,0,5)
+        }else{
+            $button.Size=New-Object System.Drawing.Size(198,58)
+            $toolsFlow.Controls.Add($button)
+        }
     }
 }
 
@@ -3165,23 +3460,23 @@ New-Tile "Check for Updates" 16 { Check-CafeLauncherUpdates -Manual }
 New-Tile "Exit" 17 { $form.Close() }
 # Editable DPI input replaces the fixed-800 live button in tile 18.
 $manualDpiPanel=New-Object System.Windows.Forms.Panel
-$manualDpiPanel.Location=New-Object System.Drawing.Point(25,653)
-$manualDpiPanel.Size=New-Object System.Drawing.Size(235,70)
+$manualDpiPanel.Dock='Fill'
+$manualDpiPanel.Margin=New-Object System.Windows.Forms.Padding(5,8,5,8)
 $manualDpiPanel.BackColor=$PANEL
-$form.Controls.Add($manualDpiPanel)
+$rightGrid.Controls.Add($manualDpiPanel,0,4)
 
 $manualDpiLabel=New-Object System.Windows.Forms.Label
 $manualDpiLabel.Text='DPI (100 - 25600)'
-$manualDpiLabel.Location=New-Object System.Drawing.Point(10,7)
-$manualDpiLabel.Size=New-Object System.Drawing.Size(108,20)
+$manualDpiLabel.Location=New-Object System.Drawing.Point(12,8)
+$manualDpiLabel.Size=New-Object System.Drawing.Size(220,20)
 $manualDpiLabel.Font=New-Object System.Drawing.Font('Segoe UI',8)
 $manualDpiLabel.ForeColor=$WHITE
 $manualDpiPanel.Controls.Add($manualDpiLabel)
 
 $script:ManualDpiInput=New-Object System.Windows.Forms.TextBox
 $script:ManualDpiInput.Text='800'
-$script:ManualDpiInput.Location=New-Object System.Drawing.Point(10,32)
-$script:ManualDpiInput.Size=New-Object System.Drawing.Size(105,26)
+$script:ManualDpiInput.Location=New-Object System.Drawing.Point(12,38)
+$script:ManualDpiInput.Size=New-Object System.Drawing.Size(110,30)
 $script:ManualDpiInput.MaxLength=5
 $script:ManualDpiInput.Font=New-Object System.Drawing.Font('Segoe UI',11)
 $script:ManualDpiInput.ForeColor=$WHITE
@@ -3190,8 +3485,8 @@ $manualDpiPanel.Controls.Add($script:ManualDpiInput)
 
 $script:ManualDpiChangeButton=New-Object System.Windows.Forms.Button
 $script:ManualDpiChangeButton.Text='Change DPI'
-$script:ManualDpiChangeButton.Location=New-Object System.Drawing.Point(121,10)
-$script:ManualDpiChangeButton.Size=New-Object System.Drawing.Size(105,50)
+$script:ManualDpiChangeButton.Location=New-Object System.Drawing.Point(130,32)
+$script:ManualDpiChangeButton.Size=New-Object System.Drawing.Size(142,40)
 $script:ManualDpiChangeButton.Font=New-Object System.Drawing.Font('Segoe UI',9,[System.Drawing.FontStyle]::Bold)
 $script:ManualDpiChangeButton.FlatStyle='Flat'
 $script:ManualDpiChangeButton.FlatAppearance.BorderSize=0
@@ -3220,63 +3515,68 @@ $script:ManualDpiInput.Add_KeyDown({
 })
 # New-Tile "Set DPI 800 (Onboard)" 19 { Invoke-LogitechDpiButton -Onboard } # disabled until hardware tested
 
-# Live diagnostic log panel (visible only while the launcher is open)
-$logTitle = New-Object System.Windows.Forms.Label
-$logTitle.Text = "LIVE LOGS  |  Errors and button activity"
-$logTitle.Location = New-Object System.Drawing.Point(28,755)
-$logTitle.Size = New-Object System.Drawing.Size(500,22)
-$logTitle.Font = New-Object System.Drawing.Font("Segoe UI",9,[System.Drawing.FontStyle]::Bold)
-$logTitle.ForeColor = $WHITE
-$form.Controls.Add($logTitle)
 
-$clearLogs = New-Object System.Windows.Forms.Button
-$clearLogs.Text = "Clear Logs"
-$clearLogs.Location = New-Object System.Drawing.Point(670,751)
-$clearLogs.Size = New-Object System.Drawing.Size(100,27)
-$clearLogs.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
-$clearLogs.FlatAppearance.BorderSize = 0
-$clearLogs.BackColor = $PANEL
-$clearLogs.ForeColor = $WHITE
-$clearLogs.Add_Click({
-    if ($script:LogBox) { $script:LogBox.Clear() }
-    try { Set-Content -LiteralPath $script:LogPath -Value "" -Encoding UTF8 } catch {}
-    Write-Log "Logs cleared."
+$logPane=New-Object System.Windows.Forms.TableLayoutPanel
+$logPane.Dock='Fill'
+$logPane.ColumnCount=3
+$logPane.RowCount=2
+$logPane.BackColor=$PANEL
+$logPane.Margin=New-Object System.Windows.Forms.Padding(15,0,15,0)
+[void]$logPane.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle('Percent',100)))
+[void]$logPane.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle('Absolute',110)))
+[void]$logPane.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle('Absolute',110)))
+[void]$logPane.RowStyles.Add((New-Object System.Windows.Forms.RowStyle('Absolute',42)))
+[void]$logPane.RowStyles.Add((New-Object System.Windows.Forms.RowStyle('Percent',100)))
+$root.Controls.Add($logPane,0,2)
+$statusLine=New-CafeLabel -Text 'Ready - check logs for detailed operation results.' -FontSize 9
+$script:StatusLine=$statusLine
+$logPane.Controls.Add($statusLine,0,0)
+$logToggle=New-Object System.Windows.Forms.Button
+$logToggle.Text='Show Logs'
+Style-CafeButton -Button $logToggle
+$logToggle.Dock='Fill'
+$logPane.Controls.Add($logToggle,1,0)
+$clearLogs=New-Object System.Windows.Forms.Button
+$clearLogs.Text='Clear Logs'
+Style-CafeButton -Button $clearLogs
+$clearLogs.Dock='Fill'
+$logPane.Controls.Add($clearLogs,2,0)
+$script:LogBox=New-Object System.Windows.Forms.TextBox
+$script:LogBox.Dock='Fill'
+$script:LogBox.Multiline=$true
+$script:LogBox.ReadOnly=$true
+$script:LogBox.ScrollBars=[System.Windows.Forms.ScrollBars]::Vertical
+$script:LogBox.WordWrap=$false
+$script:LogBox.BackColor=[System.Drawing.Color]::FromArgb(12,15,20)
+$script:LogBox.ForeColor=[System.Drawing.Color]::FromArgb(190,220,190)
+$script:LogBox.Font=New-Object System.Drawing.Font('Consolas',9)
+$logPane.Controls.Add($script:LogBox,0,1)
+$logPane.SetColumnSpan($script:LogBox,3)
+$script:LogBox.Visible=$false
+$script:LogsExpanded=$false
+$logToggle.Add_Click({
+    $script:LogsExpanded= -not $script:LogsExpanded
+    $root.RowStyles[2].Height=if($script:LogsExpanded){185}else{44}
+    $script:LogBox.Visible=$script:LogsExpanded
+    $logToggle.Text=if($script:LogsExpanded){'Hide Logs'}else{'Show Logs'}
 })
-$form.Controls.Add($clearLogs)
-
-$script:LogBox = New-Object System.Windows.Forms.TextBox
-$script:LogBox.Location = New-Object System.Drawing.Point(28,782)
-$script:LogBox.Size = New-Object System.Drawing.Size(742,168)
-$script:LogBox.Multiline = $true
-$script:LogBox.ReadOnly = $true
-$script:LogBox.ScrollBars = [System.Windows.Forms.ScrollBars]::Vertical
-$script:LogBox.WordWrap = $false
-$script:LogBox.BackColor = [System.Drawing.Color]::FromArgb(12,15,20)
-$script:LogBox.ForeColor = [System.Drawing.Color]::FromArgb(190,220,190)
-$script:LogBox.Font = New-Object System.Drawing.Font("Consolas",9)
-try {
-    $script:LogBox.Text = Get-Content -LiteralPath $script:LogPath -Raw -ErrorAction Stop
-    $script:LogBox.SelectionStart = $script:LogBox.TextLength
-    $script:LogBox.ScrollToCaret()
-} catch {}
-$form.Controls.Add($script:LogBox)
-Write-Log "Launcher ready. Log file: $script:LogPath"
-
-# Footer
-$footer = New-Object System.Windows.Forms.Label
-$footer.Text = "GAMING CAFE  |  WINDOWS TOOLKIT  |  LOG: %TEMP%\CafeLauncher.log"
-$footer.Location = New-Object System.Drawing.Point(28,970)
-$footer.Size = New-Object System.Drawing.Size(740,22)
-$footer.Font = New-Object System.Drawing.Font("Segoe UI",8)
-$footer.ForeColor = $MUTED
-$form.Controls.Add($footer)
+$clearLogs.Add_Click({
+    if($script:LogBox){$script:LogBox.Clear()}
+    try{Set-Content -LiteralPath $script:LogPath -Value '' -Encoding UTF8}catch{}
+    Write-Log 'Logs cleared.'
+})
+try {$script:LogBox.Text=Get-Content -LiteralPath $script:LogPath -Raw -ErrorAction Stop}catch{}
+Write-Log ('CafeLauncher dashboard ready. Log file: '+$script:LogPath)
+Update-SelectedProfileCard -Name 'FabMode'
+$footer=New-CafeLabel -Text '  CAFE LAUNCHER | production dashboard | %TEMP%\CafeLauncher.log' -FontSize 9
+$root.Controls.Add($footer,0,3)
 
 $form.Add_FormClosed({
     if($script:LogihubDownloadTimer){$script:LogihubDownloadTimer.Stop();$script:LogihubDownloadTimer.Dispose();$script:LogihubDownloadTimer=$null}
     $script:LogihubRequestedDPI=$null
     if ($script:ColorWatchTimer) {
-        try { $script:ColorWatchTimer.Stop(); $script:ColorWatchTimer.Dispose() } catch {}
-        Write-Log "Color Watch stopped because the launcher closed."
+        try {$script:ColorWatchTimer.Stop();$script:ColorWatchTimer.Dispose()}catch{}
+        Write-Log 'Color Watch stopped because the launcher closed.'
     }
 })
 # On first display, automatically inventory the machine and check GitHub for
