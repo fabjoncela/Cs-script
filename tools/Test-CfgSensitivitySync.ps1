@@ -119,7 +119,7 @@ $failureMessage=''
 try{Sync-ProfileToGitHub -ProfileName 'FabMode' -Token ('testtoken-'+'x'*22)}
 catch{$failureMessage=$_.Exception.Message}
 $script:FailJsonPut=$false
-Assert-True ($failureMessage.Contains('PARTIAL SYNC')) 'Partial upload must be clearly reported.'
+Assert-True ($failureMessage.Contains('PARTIAL SYNC')) ('Partial upload must be clearly reported. Actual error: '+$failureMessage)
 Assert-True ($script:FakeFiles['fab.cfg'].Contains('sensitivity "3.3"')) 'CFG should be updated before a later JSON failure.'
 Assert-True ($script:FakeFiles['profiles/FabMode.json'] -ceq $beforeJson) 'Failed JSON write must not pretend to be saved.'
 $script:FakeWrites.Clear()
