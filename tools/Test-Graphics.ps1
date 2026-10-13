@@ -97,27 +97,38 @@ try {
     Remove-Item -LiteralPath $sandbox -Recurse -Force -ErrorAction SilentlyContinue
 }
 
+# All profile graphics files stay independent; four currently share the
+# same validated video settings. BrileMode intentionally keeps its defaults.
 $profileNames=@('FabMode','ArliMode','BrileMode','ArmlMode','OliMode')
+$identicalToFab=@('FabMode','ArliMode','ArmlMode','OliMode')
+$fabPreset=Get-Content -LiteralPath (Join-Path $root 'graphics\FabMode.json') -Raw | ConvertFrom-Json
+$fabValues=ConvertTo-VideoGraphicsSettings -Preset $fabPreset
+if ([int]$fabValues['Width'] -ne 1280 -or [int]$fabValues['Height'] -ne 960 -or
+    [int]$fabValues['RefreshHz'] -ne 360 -or [int]$fabValues['AspectRatioMode'] -ne 0 -or
+    [int]$fabValues['Fullscreen'] -ne 1){
+    throw 'FabMode must specify 1280x960, 4:3, fullscreen, 360Hz.'
+}
 foreach($name in $profileNames){
     $file=Join-Path $root ('graphics\'+$name+'.json')
-    $json=Get-Content -LiteralPath $file -Raw|ConvertFrom-Json
+    $json=Get-Content -LiteralPath $file -Raw | ConvertFrom-Json
     if([int]$json.SchemaVersion -ne 1 -or $json.ProfileName -cne $name){throw 'Preset schema/name mismatch.'}
     $values=ConvertTo-VideoGraphicsSettings -Preset $json
     if($values.Count -lt 5){throw ('Too few actual video settings in '+$name+' preset.')}
-    # FabMode deliberately requests its own CS2 1280x960 @ 360Hz mode.
-    # The graphics editor validates this against the actual monitor before writing;
-    # unlike other profiles, FabMode must not be forced to keep native resolution.
-    if($name -eq 'FabMode'){
-        if(-not $values.Contains('Width') -or -not $values.Contains('Height') -or
-           -not $values.Contains('RefreshHz') -or
-           [int]$values['Width'] -ne 1280 -or [int]$values['Height'] -ne 960 -or
-           [int]$values['RefreshHz'] -ne 360 -or
-           [int]$values['AspectRatioMode'] -ne 0 -or [int]$values['Fullscreen'] -ne 1){
-            throw 'FabMode must specify 1280x960, 4:3, fullscreen, 360Hz.'
+    if($name -in $identicalToFab){
+        if($values.Count -ne $fabValues.Count){throw ($name+' graphics field count differs from FabMode.')}
+        foreach($key in $fabValues.Keys){
+            if(-not $values.Contains($key) -or [int]$values[$key] -ne [int]$fabValues[$key]){
+                throw ($name+' graphics setting '+$key+' differs from FabMode.')
+            }
         }
     }else{
-        if($values.Contains('Width') -or $values.Contains('Height') -or $values.Contains('RefreshHz')){
-            throw ($name + ' must preserve PC-specific display modes unless explicitly customized.')
+        if($values.Contains('Width') -or $values.Contains('Height') -or $values.Contains('RefreshHz') -or
+           $values.Contains('AspectRatioMode') -or $values.Contains('Fullscreen')){
+            throw 'BrileMode must preserve the existing PC-specific display settings.'
+        }
+        if([int]$values['MSAASamples'] -ne 2 -or [int]$values['TextureDetail'] -ne 0 -or
+           [int]$values['NvidiaReflex'] -ne 1){
+            throw 'BrileMode original advanced-video defaults changed unexpectedly.'
         }
     }
 }
