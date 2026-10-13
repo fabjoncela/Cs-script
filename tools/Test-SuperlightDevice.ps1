@@ -12,17 +12,34 @@ $select=@($defs | Where-Object Name -eq 'Select-SuperlightDevice')
 if($select.Count -ne 1){throw 'Superlight selector function not found'}
 Invoke-Expression $select[0].Extent.Text
 function Test-Select([string]$Model,[int]$Index){
-    $json=@(@{index=0;type='receiver';model_id=$null;display_name='receiver';status='ok'},
-            @{index=$Index;type='wireless device';model_id=$Model;display_name='PRO X SUPERLIGHT';status='ok'}) | ConvertTo-Json
+    $json=@(@{index=0;type='receiver';model_id=$null;display_name='receiver';status='connected'},
+            @{index=$Index;type='wireless device';model_id=$Model;display_name='PRO X SUPERLIGHT';status='connected'}) | ConvertTo-Json
     $v=Select-SuperlightDevice -Json $json
     if($v.Index -ne $Index -or $v.Model -ne $Model){throw "Wrong selected mouse $Model"}
 }
 Test-Select 'pro_x_wireless_mouse' 3
 Test-Select 'pro_x_2_wireless_mouse' 8
+# A switched-off Superlight 1 keeps its pairing record but reports unreachable.
+$twoDongles=@(
+    @{index=1;type='receiver';model_id=$null;display_name=$null;status='connected'},
+    @{index=2;type='wireless device';model_id='pro_x_wireless_mouse';display_name='PRO X SUPERLIGHT';status='unreachable: HID++ timeout'},
+    @{index=3;type='receiver';model_id=$null;display_name=$null;status='connected'},
+    @{index=4;type='wireless device';model_id='pro_x_2_wireless_mouse';display_name='PRO X SUPERLIGHT 2';status='connected'}
+) | ConvertTo-Json
+$active=Select-SuperlightDevice -Json $twoDongles
+if($active.Index -ne 4 -or $active.Model -ne 'pro_x_2_wireless_mouse'){
+    throw 'Powered-off Superlight 1 dongle must not block active Superlight 2.'
+}
+try {
+    $off=@(@{index=2;type='wireless device';model_id='pro_x_wireless_mouse';display_name='PRO X SUPERLIGHT';status='unreachable: HID++ timeout'}) | ConvertTo-Json
+    [void](Select-SuperlightDevice -Json $off)
+    throw 'Powered-off mouse should not be selected'
+}catch{if($_.Exception.Message -notmatch 'No supported'){throw}}
+
 try {
     [void](Select-SuperlightDevice -Json ((@(
-        @{index=1;type='wireless device';model_id='pro_x_wireless_mouse';display_name='PRO X SUPERLIGHT';status='ok'},
-        @{index=2;type='wireless device';model_id='pro_x_2_wireless_mouse';display_name='PRO X SUPERLIGHT 2';status='ok'}
+        @{index=1;type='wireless device';model_id='pro_x_wireless_mouse';display_name='PRO X SUPERLIGHT';status='connected'},
+        @{index=2;type='wireless device';model_id='pro_x_2_wireless_mouse';display_name='PRO X SUPERLIGHT 2';status='connected'}
     )) | ConvertTo-Json))
     throw 'Expected refusal for two connected mice'
 }catch{

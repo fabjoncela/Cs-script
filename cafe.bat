@@ -4,7 +4,7 @@ start "" powershell.exe -NoProfile -ExecutionPolicy Bypass -STA -WindowStyle Hid
 exit /b
 
 # POWERSHELL_GUI
-# CAFE_RELEASE=2026.10.13.15
+# CAFE_RELEASE=2026.10.13.16
 
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
@@ -2675,7 +2675,7 @@ function Select-SuperlightDevice {
         # Trust the CLI model_id, not a receiver name containing 'Superlight'.
         if($model -notin @('pro_x_wireless_mouse','pro_x_2_wireless_mouse')){continue}
         if(([string]$row.type) -match '^(receiver)$'){continue}
-        if(([string]$row.status) -match '(?i)^(open failed|error|offline|disconnected)'){continue}
+        if(([string]$row.status) -ne 'connected'){continue} # paired but powered-off mice report 'unreachable: ...'
         $idx=0
         if(-not [int]::TryParse(([string]$row.index),[ref]$idx) -or $idx -lt 0){continue}
         $matches.Add([pscustomobject]@{Index=$idx;Model=$model;Name=$name})
