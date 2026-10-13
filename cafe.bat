@@ -2835,7 +2835,7 @@ function Invoke-GamingProfile {
         } catch {
             Write-Log ("$ProfileName step failed: " + $step.Name + ": " + $_.Exception.Message) 'ERROR'
         } finally {
-            if($step.Name -eq 'Logitech live DPI' -and $script:LogihubDownloadProcess -and -not $script:LogihubDownloadProcess.HasExited){
+            if($step.Name -eq 'Logitech live DPI' -and $script:LogihubDownloadProcess){
                 $script:StepScope=$null
                 Set-StepResult -Run $ProfileName -Step $step.Name -Status PENDING -Detail 'Helper downloading; live DPI not yet applied.'
             }else{Complete-StepScope}
