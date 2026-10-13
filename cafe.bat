@@ -4,7 +4,7 @@ start "" powershell.exe -NoProfile -ExecutionPolicy Bypass -STA -WindowStyle Hid
 exit /b
 
 # POWERSHELL_GUI
-# CAFE_RELEASE=2026.10.13.10
+# CAFE_RELEASE=2026.10.13.11
 
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
@@ -2578,7 +2578,7 @@ function Start-CS2WithProfileCfg {
 # Strict hash pin prevents executing unreviewed modified remote module code.
 function Invoke-GraphicsOnly {
     param([Parameter(Mandatory=$true)][string]$ModeName)
-    $expected='1a9b183b01aaf2758cbe14400e51f0835143a7c8'
+    $expected='f6dbb6d21ceeecc32166c73a14e0d8d2e9066971'
     $source='https://raw.githubusercontent.com/fabjoncela/Cs-script/main/graphics/ApplyGraphics.ps1'
     $cache=Join-Path $env:LOCALAPPDATA 'CafeLauncher\graphics-module.ps1'
     $parent=Split-Path -Parent $cache

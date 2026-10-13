@@ -4,7 +4,7 @@ A portable Windows **CS2 internet-café setup launcher**. A single hybrid `cafe.
 
 [Technical architecture and maintenance notes](./context.md)
 
-> Documents the current main-branch launcher at **2026.10.13.10**. Some features depend on PC hardware, installed programs and user permissions.
+> Documents the current main-branch launcher at **2026.10.13.11**. Some features depend on PC hardware, installed programs and user permissions.
 
 ## Quick start
 
@@ -39,6 +39,8 @@ Supported JSON fields are `Width`, `Height`, `RefreshHz`, `AspectRatioMode`, `Fu
 If CS2 isn't installed/signed in yet, open and save its video settings at least once to create `cs2_video.txt`. Close CS2 before applying graphics; the game writes these settings itself and could overwrite edits while running.
 
 The graphics-only PowerShell module is downloaded only when needed, checked against a **Git blob hash embedded in the BAT** (not code signing), and cached for offline reuse. Launch CS2 afterward to read the new graphics settings.
+
+**Graphics save fix (v2026.10.13.11):** Corrected a Windows PowerShell 5.1 file-replacement error (`The path is not of a legal form`). The graphics module now supplies a real same-directory backup path to `.NET File.Replace`, keeps the permanent CafeLauncher backup, verifies the result, and attempts restoration if replacement fails. Neither normal profile buttons nor Play + Exec changed.
 
 ## Profile files
 
