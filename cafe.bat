@@ -2901,6 +2901,8 @@ function Start-CS2WithProfileCfg {
 # Strict hash pin prevents executing unreviewed modified remote module code.
 function Invoke-GraphicsOnly {
     param([Parameter(Mandatory=$true)][string]$ModeName)
+    Start-StepScope -Run ('Graphics '+$ModeName) -Step 'Apply Graphics'
+    try {
     $expected='f6dbb6d21ceeecc32166c73a14e0d8d2e9066971'
     $source='https://raw.githubusercontent.com/fabjoncela/Cs-script/main/graphics/ApplyGraphics.ps1'
     $cache=Join-Path $env:LOCALAPPDATA 'CafeLauncher\graphics-module.ps1'
@@ -2926,6 +2928,12 @@ function Invoke-GraphicsOnly {
     }
     . $cache
     Apply-CS2ModeGraphics -ModeName $ModeName
+    } catch {
+        Write-Log ('Graphics module could not complete: '+$_.Exception.Message) 'ERROR'
+    } finally {
+        Complete-StepScope -Detail 'Graphics action finished; inspect applied/skipped video keys and backup logs.'
+        Write-RunSummary -Run ('Graphics '+$ModeName)
+    }
 }
 
 # Backward-compatible entry point.
