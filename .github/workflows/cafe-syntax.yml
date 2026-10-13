@@ -8,6 +8,7 @@ on:
       - 'tools/Test-ProfileSave.ps1'
       - 'tools/Test-SteamLaunchOptions.ps1'
       - 'tools/Test-Graphics.ps1'
+      - 'tools/Test-NvidiaCompatibility.ps1'
       - 'tools/Test-LogitechDPI.ps1'
       - 'graphics/**'
       - '.github/workflows/cafe-syntax.yml'
@@ -19,6 +20,7 @@ on:
       - 'tools/Test-ProfileSave.ps1'
       - 'tools/Test-SteamLaunchOptions.ps1'
       - 'tools/Test-Graphics.ps1'
+      - 'tools/Test-NvidiaCompatibility.ps1'
       - 'graphics/**'
       - '.github/workflows/cafe-syntax.yml'
   workflow_dispatch:
@@ -54,3 +56,7 @@ jobs:
         shell: powershell
         run: |
           & "$env:GITHUB_WORKSPACE\tools\Test-LogitechDPI.ps1"
+      - name: Test NVIDIA driver and display compatibility
+        shell: powershell
+        run: |
+          & "$env:GITHUB_WORKSPACE\tools\Test-NvidiaCompatibility.ps1"
