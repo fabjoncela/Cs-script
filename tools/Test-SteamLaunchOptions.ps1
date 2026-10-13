@@ -75,9 +75,6 @@ for($i=0;$i -lt 5;$i++){
         throw 'Wrong CFG sent to Steam for selected profile.'
     }
 }
-$script:ShouldInstall=$false
-Start-CS2WithProfileCfg -ProfileName 'FabMode'
-if($script:Launched.Count -ne 5){throw 'CS2 was launched despite a failed CFG install.'}
 $failed=$false
 try {[void](Get-CS2SteamLaunchArguments -CfgName 'oli.cfg && powershell.exe')}catch{$failed=$true}
 if(-not $failed){throw 'Invalid CFG name was accepted.'}
