@@ -9,6 +9,6 @@
   "RefreshHz": 360,
   "Vibrance": 75,
   "CS2Sensitivity": "",
-  "CfgDownloadUrl": "",
+  "CfgDownloadUrl": "https://raw.githubusercontent.com/fabjoncela/Cs-script/main/fab.cfg",
   "LaunchApps": true
 }
