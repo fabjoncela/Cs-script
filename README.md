@@ -12,9 +12,9 @@ A portable Windows **CS2 internet-café setup launcher**. A single hybrid `cafe.
 2. Review/trust the script before double-clicking it. Windows may show a normal security warning on a downloaded BAT.
 3. Use **Detect PC** or check the automatic **LIVE LOGS** inventory.
 4. Click **FabMode**, **ArliMode**, **BrileMode**, **ArmlMode**, or **OliMode**. This applies that profile's mouse settings, optionally NVIDIA/display settings, installs its CS2 CFG, and optionally opens gaming apps.
-5. In the CS2 developer console, load the installed file manually with e.g. `exec fab`, `exec arli`, or `exec oli`.
+5. The launcher also attempts to set that Steam account's CS2 Launch Options to `+exec fab.cfg`, `+exec arli.cfg`, etc. Steam then loads the selected config when CS2 starts. The launcher does **not** start CS2 itself.
 
-**The launcher currently installs CFG files; it does not automatically start CS2 or execute the CFG in-game.**
+**Steam safety:** If Steam is running and its launch options need changing, CafeLauncher asks permission to close and restart it first. It never silently shuts Steam down. If the logged-in account cannot be identified, it logs the manual option instead: **Steam → Library → Counter-Strike 2 → Properties → General → Launch Options**. You can still run `exec arli` in the developer console.
 
 ## Profile files
 
@@ -61,6 +61,7 @@ On the next ArliMode run with internet access, CafeLauncher fetches the latest p
 - **Display fallback:** if exact width/height/Hz is not advertised, choose the highest advertised Hz at the preferred resolution; otherwise consider the current resolution. The launcher tests the candidate and logs whether it applied.
 - **NVIDIA:** request Digital Vibrance, driver performance/G-SYNC-related values, and GPU full-screen scaling. PhysX GPU selection, scaling override checkbox, and confirmation of NVIDIA GUI state may still need manual action.
 - **Detected apps:** Steam and libraries, CS2 (app 730) CFG folder, FACEIT AC, G HUB, Chrome, NVIDIA Control Panel, GPUs, monitor modes, mouse settings.
+- **Steam Launch Options:** a successful CFG install attempts to replace the prior `+exec` flag for app 730 while preserving unrelated flags. Only the identified account's `userdata/<account-id>/config/localconfig.vdf` is changed; a timestamped backup is created. It skips modifying an ambiguous account or a running CS2 game.
 - **LAUNCH ALL:** opens Steam, FACEIT AC, FACEIT matchmaking, Spotify, G HUB, and Mouse Pointer Options. It is *not* a guaranteed Steam/FACEIT readiness checker.
 - **Offline CFG fallback:** stored under `%LOCALAPPDATA%\CafeLauncher\cfg-cache`; also tries an adjacent or already installed CFG. FabMode can use bundled `at.cfg` content. First-time offline friend profiles without a cached CFG may be unable to install.
 
@@ -87,6 +88,7 @@ Before publishing launcher changes, run these **from the repository root on Wind
 ```powershell
 powershell.exe -NoProfile -File .\tools\Test-CafeLauncher.ps1
 powershell.exe -NoProfile -File .\tools\Test-ProfileSave.ps1
+powershell.exe -NoProfile -File .\tools\Test-SteamLaunchOptions.ps1
 ```
 
 [GitHub Actions](./.github/workflows/cafe-syntax.yml) runs the syntax and save regression tests for relevant pushes and PRs. These do **not** replace live Windows/NVIDIA/CS2 testing, and a failed workflow does not block pushes without separately configured branch rules. Keep `cafe.bat` in Windows CRLF format and increment the release marker for each launcher release.
