@@ -6,6 +6,15 @@ A portable Windows **CS2 internet-café setup launcher**. A single hybrid `cafe.
 
 > Documents the current main-branch launcher at **2026.10.13.11**. Some features depend on PC hardware, installed programs and user permissions.
 
+## Experimental UI preview — separate branch
+
+The `ui/dashboard-tabbed-editor-preview` branch is a **test-only** version of the same portable `cafe.bat`. Its redesigned interface has a profile dashboard, independent Apply / Play + Exec / Graphics / Edit controls, a Tools & Apps tab, selected-profile summary, manual live DPI, and collapsible logs. Each profile editor has Mouse, NVIDIA / Display, and CS2 / Apps tabs with table-layout fields to avoid label overlap.
+
+- **Test only the preview:** download `https://raw.githubusercontent.com/fabjoncela/Cs-script/ui/dashboard-tabbed-editor-preview/cafe.bat` directly. Save it as `cafe-preview.bat` and open that copy. Do **not** use Check for Updates from the production BAT to fetch the preview.
+- **Production untouched:** `main` is not modified by these UI changes, and this preview intentionally disables automatic/main-branch updater actions.
+- **Preview writes:** Save Locally works; Save & Sync to GitHub is intentionally disabled to prevent a preview settings edit from changing the production profile JSON. The preview still downloads public CFG/profile/graphics data from main.
+- **Validation:** CI runs Windows PowerShell 5.1 syntax and non-device checks. Test tab navigation, editor layout at your Windows scaling, DPI, profile Apply, Play + Exec and Apply Graphics on a machine before considering merge.
+
 ## Quick start
 
 1. Download [cafe.bat](https://raw.githubusercontent.com/fabjoncela/Cs-script/main/cafe.bat) or open a previously downloaded Google Drive copy.
