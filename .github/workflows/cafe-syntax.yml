@@ -8,6 +8,7 @@ on:
       - 'tools/Test-ProfileSave.ps1'
       - 'tools/Test-SteamLaunchOptions.ps1'
       - 'tools/Test-Graphics.ps1'
+      - 'tools/Test-LogitechDPI.ps1'
       - 'graphics/**'
       - '.github/workflows/cafe-syntax.yml'
   push:
@@ -49,3 +50,7 @@ jobs:
         shell: powershell
         run: |
           & "$env:GITHUB_WORKSPACE\tools\Test-Graphics.ps1"
+      - name: Test Logitech DPI controls and safety
+        shell: powershell
+        run: |
+          & "$env:GITHUB_WORKSPACE\tools\Test-LogitechDPI.ps1"
