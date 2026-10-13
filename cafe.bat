@@ -1,10 +1,10 @@
 @echo off
 set "CAFE_SCRIPT=%~f0"
-start "" powershell.exe -NoProfile -ExecutionPolicy Bypass -STA -WindowStyle Hidden -Command "$l=Get-Content -LiteralPath $env:CAFE_SCRIPT; $i=[Array]::IndexOf($l,'# POWERSHELL_GUI'); if($i -ge 0){Invoke-Expression ($l[($i+1)..($l.Length-1)] -join [Environment]::NewLine)}"
+start "" powershell.exe -NoProfile -ExecutionPolicy Bypass -STA -WindowStyle Hidden -Command "try { $l=[IO.File]::ReadAllLines($env:CAFE_SCRIPT); $i=[Array]::IndexOf($l,'# POWERSHELL_GUI'); if($i -lt 0){throw 'PowerShell script marker not found'}; $code=($l[($i+1)..($l.Length-1)] -join [Environment]::NewLine); $t=$null; $er=$null; [void][System.Management.Automation.Language.Parser]::ParseInput($code,[ref]$t,[ref]$er); if($er.Count -gt 0){throw ('PowerShell syntax: '+$er[0].ToString())}; Invoke-Expression $code } catch { $msg=$_.ToString()+' '+$_.ScriptStackTrace; try { [IO.File]::WriteAllText((Join-Path $env:TEMP 'CafeLauncher-startup-error.log'),$msg) } catch {}; try { Add-Type -AssemblyName System.Windows.Forms; [void][System.Windows.Forms.MessageBox]::Show($msg,'CafeLauncher Startup Error') } catch {} }"
 exit /b
 
 # POWERSHELL_GUI
-# CAFE_RELEASE=2026.10.13.4
+# CAFE_RELEASE=2026.10.13.5
 
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
@@ -1880,14 +1880,44 @@ function Check-CafeLauncherUpdates {
                 (Get-GitBlobSha -Bytes $bytes) -ne $remote.sha) { throw 'Downloaded BAT failed GitHub blob hash and size verification.' }
             $text=[Text.Encoding]::UTF8.GetString($bytes)
             if (-not $text.StartsWith('@echo off') -or -not $text.Contains('# POWERSHELL_GUI')) { throw 'Downloaded launcher structure check failed.' }
+            # Verify that the embedded PowerShell can be PARSED before installing it.
+            # In earlier releases, a correct GitHub hash was incorrectly treated as proof
+            # that the replacement could launch. A hash does not verify syntax.
+            $downloadLines=[IO.File]::ReadAllLines($temp)
+            $marker=[Array]::IndexOf($downloadLines,'# POWERSHELL_GUI')
+            if ($marker -lt 0 -or $marker -ge ($downloadLines.Length - 1)) { throw 'Update has no valid PowerShell section.' }
+            $downloadScript=($downloadLines[($marker+1)..($downloadLines.Length-1)] -join [Environment]::NewLine)
+            $parseTokens=$null
+            $parseErrors=$null
+            [void][System.Management.Automation.Language.Parser]::ParseInput($downloadScript,[ref]$parseTokens,[ref]$parseErrors)
+            if ($parseErrors.Count -gt 0) {
+                throw ('Refusing update with PowerShell syntax errors: ' + $parseErrors[0].ToString())
+            }
+            # Raw GitHub .bat content can use LF-only line endings. cmd.exe on Windows
+            # expects CRLF for reliable BAT interpretation. Verify original bytes above,
+            # then normalize the verified payload BEFORE placing it on disk.
+            $windowsText=$text.Replace("`r`n","`n").Replace("`r","`n").Replace("`n","`r`n")
+            [IO.File]::WriteAllText($temp,$windowsText,(New-Object System.Text.UTF8Encoding($false)))
             $backupDir=Join-Path $env:LOCALAPPDATA 'CafeLauncher\backups'
             if (-not (Test-Path -LiteralPath $backupDir)) { New-Item -ItemType Directory -Path $backupDir -Force -ErrorAction Stop | Out-Null }
             $backup=Join-Path $backupDir ("cafe-before-update-{0}.bat" -f (Get-Date -Format 'yyyyMMdd-HHmmss'))
             try {
-                # Backup first, then attempt to replace the file downloaded from Drive.
-                Copy-Item -LiteralPath $source -Destination $backup -ErrorAction Stop
-                Copy-Item -LiteralPath $temp -Destination $source -Force -ErrorAction Stop
-                Write-Log "Update downloaded, verified and installed at $source; backup: $backup"
+                # Stage beside the original and replace atomically when supported;
+                # this avoids leaving a partially overwritten BAT after a crash.
+                $staged=Join-Path (Split-Path -Parent $source) ('.CafeLauncher-update-' + [Guid]::NewGuid().ToString('N') + '.bat')
+                try {
+                    Copy-Item -LiteralPath $temp -Destination $staged -ErrorAction Stop
+                    try {
+                        [IO.File]::Replace($staged,$source,$backup)
+                    } catch {
+                        # File.Replace can be unavailable on network/FAT volumes.
+                        Copy-Item -LiteralPath $source -Destination $backup -ErrorAction Stop
+                        Copy-Item -LiteralPath $staged -Destination $source -Force -ErrorAction Stop
+                    }
+                } finally {
+                    Remove-Item -LiteralPath $staged -Force -ErrorAction SilentlyContinue
+                }
+                Write-Log "Update downloaded, syntax-checked, CRLF-normalized and installed at $source; backup: $backup"
                 [System.Windows.Forms.MessageBox]::Show("CafeLauncher updated successfully at:`n$source`n`nClose and reopen the BAT to use the latest version.", 'Update Installed', 'OK', 'Information') | Out-Null
             } catch {
                 $dest=Join-Path $env:USERPROFILE 'Downloads\CafeLauncher_latest.bat'
