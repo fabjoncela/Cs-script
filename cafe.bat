@@ -2531,9 +2531,7 @@ try {
     Remove-Item -LiteralPath $Temp -Force -ErrorAction SilentlyContinue
 }
 '@
-    $encoded=[Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($worker))
-    $args='-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -EncodedCommand '+$encoded+
-        ' -Temp "'+$temp+'" -Destination "'+$exe+'" -Status "'+$status+'" -Expected "'+$expected+'"'
+
     # EncodedCommand with positional parameters does not reliably bind flags after
     # the encoded script; instead pass required data as environment-safe literals
     # embedded before encoding (validated, generated local paths).
