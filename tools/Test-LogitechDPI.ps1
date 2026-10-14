@@ -24,8 +24,21 @@ if($apply -notmatch 'Request-LogitechLiveDPI\s+-DPI\s+\(\[int\]\$profile\.Logite
     throw 'Profiles must apply their own saved LIVE DPI.'
 }
 if($apply -match 'Set-LogitechOnboardDPI|onboard.*set-dpi'){throw 'Profile apply must NEVER write onboard memory.'}
-if($functions['Set-LogitechLiveDPI'] -match 'onboard\s|Stop-Process|Stop-Service'){
-    throw 'Live DPI must never modify onboard memory or stop G HUB.'
+$liveDpi=$functions['Set-LogitechLiveDPI']
+if($liveDpi -match "'onboard'\s*,\s*'set-dpi'|onboard.*set-dpi|Stop-Process|Stop-Service"){
+    throw 'Live DPI must never write onboard DPI memory or stop G HUB.'
+}
+foreach($phrase in @(
+    'pro_x_wireless_mouse',
+    'Test-SameSuperlight',
+    'Get-LogitechOnboardMode',
+    "'onboard','mode','set','off'",
+    "'onboard','mode','set','on'",
+    'verifiedMode -ne ''host''',
+    'Invoke-LogitechDPISetAndReadback',
+    'Onboard-mode restoration was not verified'
+)){
+    if($liveDpi -notmatch $phrase){throw ('Superlight 1 guarded host-mode fallback missing check: '+$phrase)}
 }
 $onboard=$functions['Set-LogitechOnboardDPI']
 foreach($phrase in @('onboard.*dump','onboard.*set-dpi','onboard.*mode','DialogResult]::Yes','Test-Path')){
