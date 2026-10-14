@@ -443,6 +443,11 @@ public static class FabDisplayNative {
     public static bool IsAdvertisedMode(int w, int h, int hz) {
         const string device = @"\\.\DISPLAY1";
         if(w < 640 || h < 480 || hz < 0) return false;
+        DEVMODE current=NewMode();
+        if(EnumDisplaySettings(device,-1,ref current) &&
+           current.dmBitsPerPel >= 24 && (current.dmDisplayFlags & 2) == 0 &&
+           current.dmPelsWidth == w && current.dmPelsHeight == h &&
+           (hz == 0 || current.dmDisplayFrequency == hz)) return true;
         for(int i=0;i<4096;i++){
             DEVMODE dm=NewMode();
             if(!EnumDisplaySettings(device,i,ref dm)) break;
@@ -457,7 +462,8 @@ public static class FabDisplayNative {
     public static string GetDisplayModesReport() {
         const string device = @"\\.\DISPLAY1";
         DEVMODE current = NewMode();
-        string active = EnumDisplaySettings(device, -1, ref current)
+        bool hasCurrent = EnumDisplaySettings(device, -1, ref current);
+        string active = hasCurrent
             ? current.dmPelsWidth + "x" + current.dmPelsHeight + " @" + current.dmDisplayFrequency + "Hz"
             : "unknown";
         SortedSet<int> requested1080 = new SortedSet<int>();
@@ -474,9 +480,15 @@ public static class FabDisplayNative {
             if (dm.dmPelsWidth == current.dmPelsWidth && dm.dmPelsHeight == current.dmPelsHeight)
                 atCurrent.Add(dm.dmDisplayFrequency);
         }
-        return device + ": active " + active + "; 1080p Hz: " +
+        if (hasCurrent && current.dmDisplayFrequency >= 24 && current.dmBitsPerPel >= 24 &&
+            (current.dmDisplayFlags & 2) == 0) {
+            if (current.dmPelsWidth == 1920 && current.dmPelsHeight == 1080)
+                requested1080.Add(current.dmDisplayFrequency);
+            atCurrent.Add(current.dmDisplayFrequency);
+        }
+        return device + ": active " + active + "; 1080p Hz (available modes + active): " +
             (requested1080.Count > 0 ? String.Join(", ", requested1080) : "not advertised") +
-            "; current-resolution Hz: " +
+            "; current-resolution Hz (available modes + active): " +
             (atCurrent.Count > 0 ? String.Join(", ", atCurrent) : "not advertised") +
             "; modes checked=" + count + ".";
     }
@@ -490,6 +502,14 @@ public static class FabDisplayNative {
         }
         DEVMODE candidate = NewMode();
         int tier = -1;  // 2 = preferred resolution/Hz; 1 = preferred resolution; 0 = current resolution
+        if (current.dmBitsPerPel >= 24 && current.dmDisplayFrequency >= 24 &&
+            (current.dmDisplayFlags & 2) == 0) {
+            candidate = current;
+            if (current.dmPelsWidth == desiredWidth && current.dmPelsHeight == desiredHeight)
+                tier = current.dmDisplayFrequency == desiredHz ? 2 : 1;
+            else
+                tier = 0;
+        }
         int count = 0;
         for (int i=0; i<4096; i++) {
             DEVMODE dm = NewMode();
@@ -1274,7 +1294,7 @@ function Get-NvidiaCompatibilityScan {
         try {
             $result.ExactMode=[FabDisplayNative]::IsAdvertisedMode($Width,$Height,$RefreshHz)
             $report.Add(('Requested '+$Width+'x'+$Height+' @'+$RefreshHz+'Hz: '+
-                $(if($result.ExactMode){'advertised'}else{'not advertised; existing safest available mode fallback will be used'})))
+                $(if($result.ExactMode){'available or already active'}else{'not available; trying the highest advertised Hz at the requested resolution, then the current resolution'})))
             $report.Add([FabDisplayNative]::GetDisplayModesReport())
         }catch{
             $report.Add('Monitor mode enumeration unavailable: '+$_.Exception.Message)
@@ -1327,7 +1347,11 @@ function Apply-NvidiaGamingSettings {
             $displayReport = ""
             $displayOk = [FabDisplayNative]::TrySetDisplayMode($Width, $Height, $RefreshHz, [ref]$displayReport)
             if ($displayOk) {
-                Write-Log $displayReport
+                if($displayReport -match 'requested Hz unavailable|preferred resolution unavailable'){
+                    Write-Log $displayReport "WARN"
+                }else{
+                    Write-Log $displayReport
+                }
             } else {
                 Write-Log $displayReport "WARN"
             }
