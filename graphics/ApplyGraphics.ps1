@@ -73,7 +73,7 @@ function Assert-CS2GraphicsDisplayPolicy {
 function Get-CS2ModeGraphicsPreset {
     param([string]$ModeName)
     if($ModeName -notin @('FabMode','ArliMode','BrileMode','ArmlMode','OliMode')){throw 'Invalid graphics mode name.'}
-    $url="https://raw.githubusercontent.com/fabjoncela/Cs-script/codex/fabmode-bugfix/graphics/$ModeName.json"
+    $url="https://raw.githubusercontent.com/fabjoncela/Cs-script/main/graphics/$ModeName.json"
     $cache=Join-Path $env:LOCALAPPDATA ("CafeLauncher\graphics-cache\"+$ModeName+'.json')
     $local=Join-Path (Split-Path -Parent $env:CAFE_SCRIPT) ("graphics\"+$ModeName+'.json')
     try{

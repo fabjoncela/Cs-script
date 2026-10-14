@@ -17,6 +17,10 @@ $pinPattern=[regex]::Escape('$expected=')+[char]39+[regex]::Escape($moduleBlobHa
 if($launcher -notmatch $pinPattern){
     throw 'Launcher graphics-module pin does not match the reviewed local module blob.'
 }
+if($source -notmatch 'raw\.githubusercontent\.com/fabjoncela/Cs-script/main/graphics/\$ModeName\.json' -or
+   $launcher -notmatch 'raw\.githubusercontent\.com/fabjoncela/Cs-script/main/graphics/ApplyGraphics\.ps1'){
+    throw 'Production graphics downloads must follow main after this branch is merged.'
+}
 $tok=$null;$errors=$null
 [void][System.Management.Automation.Language.Parser]::ParseInput($source,[ref]$tok,[ref]$errors)
 if(@($errors).Count -gt 0){throw ('Graphics module syntax error: '+$errors[0].Message)}
