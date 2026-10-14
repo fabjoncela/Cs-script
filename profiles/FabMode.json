@@ -1,7 +1,7 @@
 {
     "SchemaVersion":  1,
     "ProfileName":  "FabMode",
-    "PointerSpeed":  10,
+    "PointerSpeed":  20,
     "LogitechDPI":  800,
     "DisableAcceleration":  true,
     "ApplyNvidia":  true,
