@@ -31,6 +31,13 @@ $tok=$null;$errors=$null
 if(@($errors).Count -gt 0){throw ('Graphics module syntax error: '+$errors[0].Message)}
 . $module
 function Write-Log {param([string]$Message,[string]$Level='INFO')}
+$script:AllowLocalGraphics=$true
+$script:LocalGraphicsConfirmCalls=New-Object System.Collections.ArrayList
+function Confirm-CS2GraphicsPresetUse {
+    param([string]$ModeName,[string]$Path,[switch]$Unsynced)
+    [void]$script:LocalGraphicsConfirmCalls.Add([pscustomobject]@{ModeName=$ModeName;Path=$Path;Unsynced=[bool]$Unsynced})
+    return [bool]$script:AllowLocalGraphics
+}
 $fixture=@'
 "video.cfg"
 {
@@ -286,12 +293,17 @@ try{
     $localSettings|ConvertTo-Json -Depth 8|Set-Content -LiteralPath (Join-Path $localSandbox 'CafeLauncher\profiles.json') -Encoding UTF8
     $localApplied=Get-CS2ModeGraphicsPreset -ModeName 'FabMode'
     if([int]$localApplied.Settings.MSAASamples -ne 4){throw 'Unsynced local graphics edits were not preferred.'}
+    if(-not $script:LocalGraphicsConfirmCalls[-1].Unsynced){throw 'Unsynced local graphics path did not request explicit confirmation.'}
+    $script:AllowLocalGraphics=$false
+    $cancelled=$false
+    try{[void](Get-CS2ModeGraphicsPreset -ModeName 'FabMode')}catch{$cancelled=$_.Exception.Message -like '*canceled*'}
+    if(-not $cancelled){throw 'Declining local graphics confirmation must cancel Apply Graphics.'}
 }finally{
     $env:LOCALAPPDATA=$oldLocalAppData
     $env:CAFE_SCRIPT=$oldCafeScript
     Remove-Item -LiteralPath $localSandbox -Recurse -Force -ErrorAction SilentlyContinue
 }
-Write-Host 'PASS: unsynced local CS2 graphics customizations are preferred for Apply Graphics.'
+Write-Host 'PASS: unsynced local CS2 graphics require confirmation and cancellation prevents application.'
 
 # A current cloud graphics preset must come from the Contents API, with the
 # exact path and base64 payload validated before cache/application.

@@ -9,6 +9,14 @@ $code=[string]::Join([Environment]::NewLine,[string[]]$lines[($marker+1)..($line
 $t=$null;$err=$null
 $ast=[System.Management.Automation.Language.Parser]::ParseInput($code,[ref]$t,[ref]$err)
 if(@($err).Count){throw 'Launcher has syntax errors.'}
+$confirm=@($ast.FindAll({param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst]},$true) | Where-Object {$_.Name -eq 'Confirm-LocalProfileApply'})
+if($confirm.Count -ne 1 -or $confirm[0].Extent.Text -notmatch "'YesNo','Warning','Button2'"){
+    throw 'Local profile fallback must require an explicit Yes confirmation with No as the default.'
+}
+$apply=@($ast.FindAll({param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst]},$true) | Where-Object {$_.Name -eq 'Invoke-GamingProfile'})
+if($apply.Count -ne 1 -or $apply[0].Extent.Text -notmatch '(?s)Refresh-ProfileFromGitHub.*?Confirm-LocalProfileApply.*?\{return\}.*?Clear-RunOutcomes'){
+    throw 'Profile Apply must confirm local fallback before starting or clearing run state.'
+}
 $a=$code.IndexOf('function Show-ProfileEditor {',[StringComparison]::Ordinal)
 $b=$code.IndexOf('function Invoke-GamingProfile {',[StringComparison]::Ordinal)
 if($a -lt 0 -or $b -le $a){throw 'Editor function not found.'}
@@ -30,6 +38,7 @@ function Write-Log {param([string]$Message,[string]$Level='INFO');Write-Host $Me
 $p=@{PointerSpeed=10;LogitechDPI=800;DisableAcceleration=$true;ApplyNvidia=$true;Width=1920;Height=1080;RefreshHz=360;Vibrance=75;Hue=-1;ScalingMode=2;CS2Sensitivity='';CfgDownloadUrl='';LaunchApps=$true}
 $script:GamingProfiles=[ordered]@{FabMode=$p.Clone();OliMode=$p.Clone()}
 $script:PendingSync=@{FabMode=$false;OliMode=$false}
+$script:VerifiedProfileState=@{OliMode=@{BlobSha=('a'*40);CommitSha=('b'*40)}}
 $script:GraphicsPresets=[ordered]@{OliMode=[pscustomobject]@{SchemaVersion=1;ProfileName='OliMode';RefreshPolicy='Highest';ScalingMode=2;Settings=[ordered]@{Width=1280;Height=960;MSAASamples=8}}}
 $folder=Join-Path $env:TEMP ('CafeLauncher-SaveTest-'+[guid]::NewGuid().ToString('N'))
 $script:ProfileSettingsPath=Join-Path $folder 'profiles.json'
@@ -47,7 +56,7 @@ function Test-CapturedSave {
 try {
     Test-CapturedSave 'OliMode' $true
     $result=Get-Content -LiteralPath $script:ProfileSettingsPath -Raw | ConvertFrom-Json
-    if($result.OliMode.SyncPending -ne $true -or $result.OliMode.PointerSpeed -ne 10 -or $result.OliMode.LogitechDPI -ne 800 -or $result.OliMode.GraphicsSettings.Settings.MSAASamples -ne 8){throw 'Local save did not persist profile and CS2 graphics JSON.'}
+    if($result.OliMode.SyncPending -ne $true -or $result.OliMode.PointerSpeed -ne 10 -or $result.OliMode.LogitechDPI -ne 800 -or $result.OliMode.GraphicsSettings.Settings.MSAASamples -ne 8 -or $result.OliMode.GitHubVerifiedProfileSha -ne $script:VerifiedProfileState['OliMode'].BlobSha -or $result.OliMode.GitHubVerifiedCommitSha -ne $script:VerifiedProfileState['OliMode'].CommitSha){throw 'Local save did not persist profile, CS2 graphics, and verified GitHub version metadata.'}
     $script:GamingProfiles['OliMode']['LogitechDPI']=1600
     Test-CapturedSave 'OliMode' $false
     $result=Get-Content -LiteralPath $script:ProfileSettingsPath -Raw | ConvertFrom-Json

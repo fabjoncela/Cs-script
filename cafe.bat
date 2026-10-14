@@ -4,7 +4,7 @@ start "" powershell.exe -NoProfile -ExecutionPolicy Bypass -STA -WindowStyle Hid
 exit /b
 
 # POWERSHELL_GUI
-# CAFE_RELEASE=2026.10.14.21
+# CAFE_RELEASE=2026.10.14.23
 
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
@@ -2826,6 +2826,7 @@ $script:GamingProfiles = [ordered]@{
 }
 $script:ProfileSettingsPath = Join-Path $env:LOCALAPPDATA 'CafeLauncher\profiles.json'
 $script:PendingSync = @{}
+$script:VerifiedProfileState = @{}
 $script:GraphicsPresets = [ordered]@{}
 foreach ($name in @($script:GamingProfiles.Keys)) { $script:PendingSync[$name] = $false }
 
@@ -3217,6 +3218,12 @@ function Load-ProfileSettings {
             } else {
                 $script:PendingSync[$name] = $true
             }
+            $verifiedBlob=$savedProfile.Value.PSObject.Properties['GitHubVerifiedProfileSha']
+            $verifiedCommit=$savedProfile.Value.PSObject.Properties['GitHubVerifiedCommitSha']
+            if($verifiedBlob -and [string]$verifiedBlob.Value -match '^[a-fA-F0-9]{40}$' -and
+               $verifiedCommit -and [string]$verifiedCommit.Value -match '^[a-fA-F0-9]{40}$'){
+                $script:VerifiedProfileState[$name]=@{BlobSha=[string]$verifiedBlob.Value;CommitSha=[string]$verifiedCommit.Value}
+            }
         }
         Write-Log "Loaded local profile settings from $script:ProfileSettingsPath."
     } catch {
@@ -3255,6 +3262,10 @@ function Save-ProfileSettings {
             $snapshot['GraphicsSettings']=$script:GraphicsPresets[$name]
         }
         $snapshot['SyncPending'] = [bool]$script:PendingSync[$name]
+        if($script:VerifiedProfileState.ContainsKey($name)){
+            $snapshot['GitHubVerifiedProfileSha']=[string]$script:VerifiedProfileState[$name].BlobSha
+            $snapshot['GitHubVerifiedCommitSha']=[string]$script:VerifiedProfileState[$name].CommitSha
+        }
         $settings[$name] = $snapshot
     }
     $dir = Split-Path -Parent $script:ProfileSettingsPath
@@ -3282,7 +3293,8 @@ function Get-GitHubJsonFromContentsApi {
         [Parameter(Mandatory=$true)][string]$Repo,
         [Parameter(Mandatory=$true)][string]$Branch,
         [Parameter(Mandatory=$true)][string]$Path,
-        [int64]$MaxBytes=65536
+        [int64]$MaxBytes=65536,
+        [switch]$IncludeMetadata
     )
     if($Path -notmatch '^(profiles|graphics)/[A-Za-z0-9_-]+\.json$' -or $MaxBytes -lt 1 -or $MaxBytes -gt 1048576){
         throw 'GitHub JSON path or size limit is invalid.'
@@ -3313,7 +3325,23 @@ function Get-GitHubJsonFromContentsApi {
     if ($remote.ProfileName -cne $expectedName -or [int]$remote.SchemaVersion -ne 1) {
         throw "Unexpected JSON profile/schema for $Path."
     }
+    if($IncludeMetadata){return [pscustomobject]@{Profile=$remote;BlobSha=[string]$file.sha}}
     return $remote
+}
+
+function Get-LatestGitHubFileCommit {
+    param([Parameter(Mandatory=$true)][string]$Repo,[Parameter(Mandatory=$true)][string]$Branch,
+        [Parameter(Mandatory=$true)][string]$Path)
+    if($Path -notmatch '^(profiles|graphics)/[A-Za-z0-9_-]+\.json$'){throw 'GitHub commit path is invalid.'}
+    $encodedBranch=[Uri]::EscapeDataString($Branch)
+    $encodedPath=[Uri]::EscapeDataString($Path)
+    $uri="https://api.github.com/repos/$Repo/commits?path=$encodedPath&per_page=1&sha=$encodedBranch"
+    $headers=@{Accept='application/vnd.github+json';'User-Agent'='CafeLauncher-ProfileRefresh';'X-GitHub-Api-Version'='2022-11-28';'Cache-Control'='no-cache';Pragma='no-cache'}
+    $commits=@(Invoke-RestMethod -Uri $uri -Method Get -Headers $headers -TimeoutSec 12 -MaximumRedirection 0 -ErrorAction Stop)
+    if($commits.Count -lt 1 -or [string]$commits[0].sha -notmatch '^[a-fA-F0-9]{40}$'){
+        throw "GitHub did not return a valid latest commit for $Path."
+    }
+    return [string]$commits[0].sha
 }
 
 function Refresh-ProfileFromGitHub {
@@ -3321,16 +3349,50 @@ function Refresh-ProfileFromGitHub {
     if (-not $script:GamingProfiles.Contains($ProfileName)) { throw "Unknown profile: $ProfileName" }
     if ($script:PendingSync[$ProfileName]) {
         Write-Log "$ProfileName has local edits not synced to GitHub; keeping local settings." 'INFO'
-        return
+        return 'LocalPending'
     }
     try {
-        $remote=Get-GitHubJsonFromContentsApi -Repo $script:GithubRepo -Branch $script:GithubBranch -Path "profiles/$ProfileName.json"
+        $path="profiles/$ProfileName.json"
+        $verifiedState=$script:VerifiedProfileState[$ProfileName]
+        # Every refresh checks the latest commit touching the profile, even on
+        # a fresh install with no local verification metadata. Load by immutable
+        # commit SHA so a stale mutable branch response cannot win over GitHub.
+        $latestCommit=Get-LatestGitHubFileCommit -Repo $script:GithubRepo -Branch $script:GithubBranch -Path $path
+        if($verifiedState -and $latestCommit -ceq $verifiedState.CommitSha){
+            Write-Log "$ProfileName latest GitHub profile commit matches the last verified sync; using those verified values."
+            return 'VerifiedGitHub'
+        }
+        $remoteRead=Get-GitHubJsonFromContentsApi -Repo $script:GithubRepo -Branch $latestCommit -Path $path -IncludeMetadata
+        $remote=$remoteRead.Profile
+        $script:VerifiedProfileState[$ProfileName]=@{BlobSha=[string]$remoteRead.BlobSha;CommitSha=$latestCommit}
+        if($verifiedState){Write-Log "$ProfileName changed on GitHub after the last verified sync; loaded the profile from its latest immutable commit."}
+        else{Write-Log "$ProfileName loaded from its latest immutable GitHub commit."}
         Import-ProfileValues -ProfileName $ProfileName -SavedProfile $remote -SourceLabel 'GitHub'
         try { Save-ProfileSettings } catch { Write-Log "Unable to cache cloud settings: $($_.Exception.Message)" 'WARN' }
         Write-Log "$ProfileName settings downloaded from GitHub (no login needed)."
+        return 'GitHub'
     } catch {
         Write-Log "Could not refresh $ProfileName settings from GitHub; using cached/local values. $($_.Exception.Message)" 'WARN'
+        return 'LocalFallback'
     }
+}
+
+function Confirm-LocalProfileApply {
+    param([Parameter(Mandatory=$true)][string]$ProfileName,[Parameter(Mandatory=$true)][string]$Source)
+    if($Source -notin @('LocalPending','LocalFallback')){return $true}
+    $reason=if($Source -eq 'LocalPending'){
+        'This profile has local changes that have not been synced to GitHub.'
+    }else{
+        'CafeLauncher could not verify the latest profile on GitHub.'
+    }
+    $message="$reason`r`n`r`nApplying now will use the local saved values, which may be older than GitHub. Choose Yes to apply local values anyway, or No to cancel and try again when GitHub is available."
+    $answer=[System.Windows.Forms.MessageBox]::Show($message,'Confirm local profile settings','YesNo','Warning','Button2')
+    if($answer -eq [System.Windows.Forms.DialogResult]::Yes){
+        Write-Log "$ProfileName local settings apply explicitly confirmed ($Source)." 'WARN'
+        return $true
+    }
+    Write-Log "$ProfileName apply canceled; local settings were not applied because GitHub priority could not be confirmed." 'INFO'
+    return $false
 }
 
 function Get-GitHubSyncPersonalToken {
@@ -3922,6 +3984,7 @@ function Sync-ProfileToGitHub {
         }
         $script:GraphicsPresets[$ProfileName]=$verifiedGraphics
         $script:GamingProfiles[$ProfileName].ScalingMode=[int]$verifiedGraphics.ScalingMode
+        $script:VerifiedProfileState[$ProfileName]=@{BlobSha=[string]$remoteProfile.sha;CommitSha=[string]$result.commit.sha}
         $readbackFailed=$false
         if($graphicsChanged){
             Write-Log ("GitHub sync and read-back verified: "+$path+" and "+$graphicsPath+"; "+$cfgName+" "+$cfgStatus+"; profile commit="+$result.commit.sha+"; graphics commit="+$graphicsResult.commit.sha)
@@ -4061,7 +4124,7 @@ function Add-EditorTabWide {
 
 function Show-ProfileEditor {
     param([Parameter(Mandatory=$true)][string]$ProfileName)
-    Refresh-ProfileFromGitHub -ProfileName $ProfileName
+    $null=Refresh-ProfileFromGitHub -ProfileName $ProfileName
     $graphicsPreset=Get-ProfileGraphicsPreset -ProfileName $ProfileName
     $p = $script:GamingProfiles[$ProfileName]
     if (-not $p) { throw "Unknown profile: $ProfileName" }
@@ -4575,8 +4638,10 @@ function Show-ProfileEditor {
         $graphicsPreset=ConvertTo-CafeGraphicsPreset -ProfileName $ProfileName -Preset $graphicsPreset
         $graphicsPresetState[$ProfileName]=$graphicsPreset
         $p.ScalingMode=$scalingMode
-        if($pointerSpeedSelectionState.UserChanged){
-            $p.PointerSpeed=[int](& $readChoiceValue $pointer)
+        $selectedPointerSpeed=[int](& $readChoiceValue $pointer)
+        $initialPointerChoice=[int]$pointerSpeedValues[$pointerSpeedSelectedIndex]
+        if($pointerSpeedSelectionState.UserChanged -or $selectedPointerSpeed -ne $initialPointerChoice){
+            $p.PointerSpeed=$selectedPointerSpeed
         }else{
             $p.PointerSpeed=$pointerSpeedOriginalValue
         }
@@ -4989,10 +5054,11 @@ function Invoke-GamingProfile {
         Write-Log "Unknown gaming profile: $ProfileName" 'ERROR'
         return
     }
+    $profileSource=Refresh-ProfileFromGitHub -ProfileName $ProfileName
+    if(-not (Confirm-LocalProfileApply -ProfileName $ProfileName -Source $profileSource)){return}
     $script:ActiveRunName=$ProfileName
     $script:StepResults.Clear()
     Clear-RunOutcomes -Run $ProfileName
-    Refresh-ProfileFromGitHub -ProfileName $ProfileName
     $profile = $script:GamingProfiles[$ProfileName]
     Write-Log "$ProfileName full routine started: mouse, NVIDIA, CS2 config, applications."
 
@@ -5068,7 +5134,8 @@ function Start-CS2WithProfileCfg {
         ) | Out-Null
         return
     }
-    Refresh-ProfileFromGitHub -ProfileName $ProfileName
+    $profileSource=Refresh-ProfileFromGitHub -ProfileName $ProfileName
+    if(-not (Confirm-LocalProfileApply -ProfileName $ProfileName -Source $profileSource)){return}
     $profile = $script:GamingProfiles[$ProfileName]
     $cfgName = [string]$profile.ConfigFile
     if ($cfgName -notmatch '^[A-Za-z0-9_-]+\.cfg$') { throw "Invalid CFG filename for $ProfileName." }
@@ -5105,7 +5172,7 @@ function Invoke-GraphicsOnly {
     Clear-RunOutcomes -Run $graphicsRun
     Start-StepScope -Run $graphicsRun -Step 'Apply Graphics'
     try {
-    $expected='d78a41e2a25f5c4224f75ba897eeb85e544ab7ce'
+    $expected='0f30b0ae6af34e60e9a6b68eafcf8baf78bd7a3c'
     $source=Add-CafeCacheBust -Uri 'https://raw.githubusercontent.com/fabjoncela/Cs-script/main/graphics/ApplyGraphics.ps1'
     $cache=Join-Path $env:LOCALAPPDATA 'CafeLauncher\graphics-module.ps1'
     $parent=Split-Path -Parent $cache

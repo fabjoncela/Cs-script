@@ -47,6 +47,7 @@ $script:Launched=@()
 $script:ShouldInstall=$true
 function Write-Log {param([string]$Message,[string]$Level='INFO')}
 function Refresh-ProfileFromGitHub {param([string]$ProfileName)}
+function Confirm-LocalProfileApply {param([string]$ProfileName,[string]$Source);return $true}
 function Get-Process {[CmdletBinding()] param([string]$Name); return $null}
 function Get-SteamExecutable {return 'C:\Dummy\Steam\steam.exe'}
 function Install-AtCfg {

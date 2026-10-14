@@ -77,6 +77,13 @@ function Assert-CS2GraphicsDisplayPolicy {
     if($scalingMode -notin @(2,3,5)){throw ('Unsupported NVIDIA scaling mode: '+$scalingMode)}
     return $policy
 }
+function Confirm-CS2GraphicsPresetUse {
+    param([string]$ModeName,[string]$Path,[switch]$Unsynced)
+    $reason=if($Unsynced){'This profile has local graphics changes that have not been synced to GitHub.'}else{'CafeLauncher could not verify the latest graphics preset on GitHub.'}
+    $message="$reason`r`n`r`nApply the local graphics values from:`r`n$Path`r`n`r`nThey may be older than GitHub. Choose Yes to use them anyway, or No to cancel."
+    $answer=[System.Windows.Forms.MessageBox]::Show($message,'Confirm local CS2 graphics','YesNo','Warning','Button2')
+    return ($answer -eq [System.Windows.Forms.DialogResult]::Yes)
+}
 function Get-CS2ModeGraphicsPreset {
     param([string]$ModeName)
     if($ModeName -notin @('FabMode','ArliMode','BrileMode','ArmlMode','OliMode')){throw 'Invalid graphics mode name.'}
@@ -98,6 +105,9 @@ function Get-CS2ModeGraphicsPreset {
                 if($preset.ProfileName -cne $ModeName -or [int]$preset.SchemaVersion -ne 1){throw 'Local graphics profile/schema mismatch.'}
                 [void](Assert-CS2GraphicsDisplayPolicy -Preset $preset)
                 [void](ConvertTo-VideoGraphicsSettings -Preset $preset)
+                if(-not (Confirm-CS2GraphicsPresetUse -ModeName $ModeName -Path $profileSettingsPath -Unsynced)){
+                    throw 'Apply Graphics canceled; unsynced local settings were not applied.'
+                }
                 Write-Log ("Using unsynced local "+$ModeName+" graphics customization.")
                 return $preset
             }
@@ -138,6 +148,9 @@ function Get-CS2ModeGraphicsPreset {
             if($preset.ProfileName -cne $ModeName -or [int]$preset.SchemaVersion -ne 1){throw 'Preset profile/schema mismatch.'}
             [void](Assert-CS2GraphicsDisplayPolicy -Preset $preset)
             [void](ConvertTo-VideoGraphicsSettings -Preset $preset)
+            if(-not (Confirm-CS2GraphicsPresetUse -ModeName $ModeName -Path $file)){
+                throw 'Apply Graphics canceled; local fallback settings were not applied.'
+            }
             Write-Log ("Using offline graphics preset: "+$file) 'WARN'
             return $preset
         }catch{Write-Log ("Invalid offline graphics preset: "+$_.Exception.Message) 'WARN'}

@@ -10,7 +10,7 @@ $code=[string]::Join([Environment]::NewLine,[string[]]$lines[($marker+1)..($line
 $tokens=$null;$errors=$null
 $ast=[Management.Automation.Language.Parser]::ParseInput($code,[ref]$tokens,[ref]$errors)
 if(@($errors).Count){throw ('Launcher syntax failed: '+$errors[0].Message)}
-foreach($name in @('Set-CS2CfgSensitivityText','Sync-ProfileToGitHub','Export-ProfileValues','Get-ProfileGraphicsPreset','Get-GitHubJsonFromContentsApi','ConvertTo-CafeGraphicsPreset')){
+foreach($name in @('Set-CS2CfgSensitivityText','Sync-ProfileToGitHub','Export-ProfileValues','Get-ProfileGraphicsPreset','Get-GitHubJsonFromContentsApi','ConvertTo-CafeGraphicsPreset','Refresh-ProfileFromGitHub','Get-LatestGitHubFileCommit','Import-ProfileValues')){
     $funcs=@($ast.FindAll({param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst]},$true) |
         Where-Object {$_.Name -eq $name})
     if($funcs.Count -ne 1){throw ('Missing or duplicate sync function: '+$name)}
@@ -46,6 +46,7 @@ $script:GithubRepo='fabjoncela/Cs-script'
 $script:GithubBranch='main'
 $script:GamingProfiles=[ordered]@{}
 $script:PendingSync=@{}
+$script:VerifiedProfileState=@{}
 $script:GraphicsPresets=[ordered]@{}
 $script:FakeFiles=@{}
 $script:FakeWrites=New-Object System.Collections.ArrayList
@@ -53,8 +54,11 @@ $script:FakeCalls=New-Object System.Collections.ArrayList
 $script:FailJsonPut=$false
 $script:CorruptProfileReadback=$false
 $script:CorruptGraphicsReadback=$false
-$script:FakeSha=('a'*40)
+$script:FakeCommitSha=('b'*40)
+$script:FakeLatestCommitSha=$script:FakeCommitSha
 function Write-Log {param([string]$Message,[string]$Level='INFO')}
+function Save-ProfileSettings {}
+function Get-FakeBlobSha {param([string]$Text);$hash=[Security.Cryptography.SHA1]::Create();try{return ([BitConverter]::ToString($hash.ComputeHash([Text.Encoding]::UTF8.GetBytes($Text)))).Replace('-','').ToLowerInvariant()}finally{$hash.Dispose()}}
 # Sync invalidates history after a successful write. Keep this test isolated
 # from the user's real per-profile history cache.
 function Clear-ProfileGraphicsHistoryCache {param([string]$ProfileName)}
@@ -78,6 +82,11 @@ function Invoke-RestMethod {
     [CmdletBinding()]
     param([string]$Uri,[string]$Method,[hashtable]$Headers,[int]$TimeoutSec,
         [int]$MaximumRedirection,[string]$ContentType,[string]$Body)
+    if($Uri -match '/commits\?path='){
+        $commitPath=[regex]::Match($Uri,'path=(?<path>[^&]+)').Groups['path'].Value
+        [void]$script:FakeCalls.Add(('CommitGet:'+ $commitPath))
+        return ,@([pscustomobject]@{sha=$script:FakeLatestCommitSha})
+    }
     $m=[regex]::Match($Uri,'/contents/(?<path>[^?]+)')
     if(-not $m.Success){throw ('Mock caught an unexpected GitHub URL: '+$Uri)}
     $path=$m.Groups['path'].Value
@@ -96,7 +105,7 @@ function Invoke-RestMethod {
             $text=$stale|ConvertTo-Json -Depth 6
         }
         return [pscustomobject]@{
-            sha=$script:FakeSha
+            sha=(Get-FakeBlobSha -Text $text)
             type='file'
             path=$path
             encoding='base64'
@@ -107,13 +116,14 @@ function Invoke-RestMethod {
     if($Method -ne 'Put'){throw ('Unexpected request method: '+$Method)}
     if($script:FailJsonPut -and $path -like 'graphics/*.json'){throw 'Simulated GitHub graphics write failure'}
     $payload=$Body|ConvertFrom-Json
-    if($payload.sha -ne $script:FakeSha -or $payload.branch -ne 'main'){
+    if($payload.sha -ne (Get-FakeBlobSha -Text $script:FakeFiles[$path]) -or $payload.branch -ne 'main'){
         throw ('Missing GitHub SHA / incorrect target branch for '+$path)
     }
     $newText=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($payload.content))
     $script:FakeFiles[$path]=$newText
     [void]$script:FakeWrites.Add($path)
-    return [pscustomobject]@{commit=[pscustomobject]@{sha='mock-commit'}}
+    $script:FakeLatestCommitSha=$script:FakeCommitSha
+    return [pscustomobject]@{commit=[pscustomobject]@{sha=$script:FakeCommitSha}}
 }
 # Test each profile uses its own matching cfg and JSON, never another player's.
 foreach($name in @('FabMode','ArliMode','BrileMode','ArmlMode','OliMode')){
@@ -133,8 +143,30 @@ foreach($name in @('FabMode','ArliMode','BrileMode','ArmlMode','OliMode')){
     Assert-True ($graphics.ProfileName -eq $name -and $graphics.Settings.Width -eq 1280) ($name+' graphics preset differs.')
     Assert-True ($script:FakeCalls[-2] -eq ('Get:profiles/'+$name+'.json') -and $script:FakeCalls[-1] -eq ('Get:graphics/'+$name+'.json')) ($name+' did not read both saved JSON files back after upload.')
 }
+# Reproduce a stale post-sync refresh: a differing file blob must be checked
+# against the latest path commit before it can replace verified values.
+$script:GamingProfiles['FabMode'].PointerSpeed=16
+$script:PendingSync['FabMode']=$true
+Sync-ProfileToGitHub -ProfileName 'FabMode' -Token ('testtoken-'+'x'*22)
+$script:PendingSync['FabMode']=$false
+$staleProfile=$script:FakeFiles['profiles/FabMode.json']|ConvertFrom-Json
+$staleProfile.PointerSpeed=2
+$script:FakeFiles['profiles/FabMode.json']=$staleProfile|ConvertTo-Json -Depth 5
+$script:FakeLatestCommitSha=$script:VerifiedProfileState['FabMode'].CommitSha
+Refresh-ProfileFromGitHub -ProfileName 'FabMode'
+Assert-True ($script:GamingProfiles['FabMode'].PointerSpeed -eq 16) 'Immediate post-sync refresh replaced the verified pointer speed with stale data.'
+Assert-True ($script:FakeCalls[-1] -like 'CommitGet:*') 'A differing profile blob was not checked against the latest path commit.'
+# A genuine later profile edit is loaded from the exact immutable commit.
+$newerProfile=$script:FakeFiles['profiles/FabMode.json']|ConvertFrom-Json
+$newerProfile.PointerSpeed=12
+$script:FakeFiles['profiles/FabMode.json']=$newerProfile|ConvertTo-Json -Depth 5
+$script:FakeLatestCommitSha=('c'*40)
+Refresh-ProfileFromGitHub -ProfileName 'FabMode'
+Assert-True ($script:GamingProfiles['FabMode'].PointerSpeed -eq 12) 'A confirmed newer GitHub profile commit was not applied.'
+Assert-True ($script:VerifiedProfileState['FabMode'].CommitSha -eq $script:FakeLatestCommitSha) 'The newer immutable commit was not recorded locally.'
 # Blank means "leave original CFG unchanged".
 $script:GamingProfiles['FabMode'].CS2Sensitivity=''
+$script:PendingSync['FabMode']=$true
 $cfgBefore=$script:FakeFiles['fab.cfg']
 $script:FakeWrites.Clear()
 Sync-ProfileToGitHub -ProfileName 'FabMode' -Token ('testtoken-'+'x'*22)
@@ -178,4 +210,4 @@ try{Sync-ProfileToGitHub -ProfileName 'OliMode' -Token ('testtoken-'+'x'*22)}
 catch{$failureMessage=$_.Exception.Message}
 Assert-True ($failureMessage.Contains('unexpected CFG')) 'Cross-profile CFG path must be blocked.'
 Assert-True ($script:FakeWrites.Count -eq 0) 'Unsafe CFG path must not write anything.'
-Write-Host 'PASS: 5 profile, graphics, and CFG syncs; authenticated profile/graphics read-back; mismatch rejection; safe sensitivity rewrite; blank override; retry; partial failure; path validation.'
+Write-Host 'PASS: 5 profile, graphics, and CFG syncs; authenticated read-back; commit-anchored profile refresh; stale profile/graphics rejection; safe sensitivity rewrite; blank override; retry; partial failure; path validation.'
