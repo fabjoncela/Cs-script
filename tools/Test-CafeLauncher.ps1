@@ -79,7 +79,9 @@ if($psSource -notmatch 'function Apply-NvidiaGamingSettings' -or
 }
 foreach($requiredEditorFeature in @(
     '$cs2Page.Text=''CS2 / Apps''',
-    '$cs2Grid=New-EditorTabGrid -Page $cs2Page -Rows 18',
+    '$cs2Grid=New-EditorTabGrid -Page $cs2Page -Rows 19',
+    '$captureGraphics.Text=''Capture from CS2''',
+    'Get-CafeCS2GraphicsCapture -ProfileName $ProfileName -BasePreset $graphicsPreset',
     'New-EditorTabNumber -Grid $cs2Grid -Title ''CS2 resolution width''',
     'New-EditorTabChoice -Grid $cs2Grid -Title ''Stretch / scaling''',
     'Stretch / scaling',

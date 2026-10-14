@@ -4,7 +4,7 @@ start "" powershell.exe -NoProfile -ExecutionPolicy Bypass -STA -WindowStyle Hid
 exit /b
 
 # POWERSHELL_GUI
-# CAFE_RELEASE=2026.10.14.11
+# CAFE_RELEASE=2026.10.14.12
 
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
@@ -2841,6 +2841,101 @@ function ConvertTo-CafeGraphicsPreset {
     return [pscustomobject]@{SchemaVersion=1;ProfileName=$ProfileName;DisplayPolicy='ApplyPreset';RefreshPolicy=$refreshPolicy;ScalingMode=$scaling;Settings=$settings}
 }
 
+function Get-CafeActiveSteamVideoFile {
+    try{$active=Get-ItemProperty -LiteralPath 'HKCU:\Software\Valve\Steam\ActiveProcess' -ErrorAction Stop}
+    catch{throw 'Could not read Steam ActiveProcess. Sign in to Steam, then retry capture.'}
+    if($null -eq $active.ActiveUser){throw 'Steam has no active signed-in account. Sign in, then retry capture.'}
+    $accountNumber=0L
+    if(-not [long]::TryParse([string]$active.ActiveUser,[ref]$accountNumber)){throw 'Steam returned an invalid active account ID.'}
+    if($accountNumber -lt 0){$accountNumber=$accountNumber -band 4294967295L}
+    if($accountNumber -le 0){throw 'Steam has no active signed-in account. Sign in, then retry capture.'}
+
+    $steamProcesses=@(Get-Process -Name 'steam' -ErrorAction SilentlyContinue | Where-Object {$_.Path -and (Test-Path -LiteralPath $_.Path -PathType Leaf)})
+    if($steamProcesses.Count -ne 1){throw 'Could not identify exactly one running Steam client. Start Steam and retry capture.'}
+    $steamRoot=Split-Path -Parent ([string]$steamProcesses[0].Path)
+    if([string]::IsNullOrWhiteSpace($steamRoot)){throw 'Could not determine the running Steam installation path.'}
+    $accountId=$accountNumber.ToString([Globalization.CultureInfo]::InvariantCulture)
+    $videoPath=Join-Path $steamRoot ('userdata\'+$accountId+'\730\local\cfg\cs2_video.txt')
+    return [pscustomobject]@{Path=$videoPath;AccountID=$accountId;SteamRoot=$steamRoot}
+}
+
+function ConvertFrom-CafeCS2VideoText {
+    param([Parameter(Mandatory=$true)][string]$ProfileName,[Parameter(Mandatory=$true)][string]$Text,
+        [Parameter(Mandatory=$true)]$BasePreset,[string]$Path,[string]$AccountID)
+    if($Text -notmatch '(?m)^[ \t]*"video\.cfg"[ \t]*\r?$' -or
+       $Text -notmatch '(?m)^[ \t]*\{[ \t]*\r?$' -or $Text -notmatch '(?m)^[ \t]*\}[ \t]*\r?$'){
+        throw 'The active account cs2_video.txt format is not recognized; nothing was imported.'
+    }
+    $validatedBase=ConvertTo-CafeGraphicsPreset -ProfileName $ProfileName -Preset $BasePreset
+    $settings=[ordered]@{}
+    foreach($field in $validatedBase.Settings.Keys){$settings[$field]=[int]$validatedBase.Settings[$field]}
+    $keyMap=[ordered]@{
+        Width='setting.defaultres';Height='setting.defaultresheight';AspectRatioMode='setting.aspectratiomode';Fullscreen='setting.fullscreen'
+        MSAASamples='setting.msaa_samples';ShadowQuality='setting.videocfg_shadow_quality';DynamicShadows='setting.videocfg_dynamic_shadows'
+        TextureDetail='setting.videocfg_texture_detail';ShaderQuality='setting.shaderquality';ParticleDetail='setting.videocfg_particle_detail'
+        AmbientOcclusion='setting.videocfg_ao_detail';HDRDetail='setting.videocfg_hdr_detail';NvidiaReflex='setting.r_low_latency'
+        TextureFiltering='setting.r_texturefilteringquality';FSRDetail='setting.videocfg_fsr_detail';VSync='setting.mat_vsync';CMAA='setting.r_csgo_cmaa_enable'
+    }
+    $captured=New-Object 'System.Collections.Generic.List[string]'
+    $missing=New-Object 'System.Collections.Generic.List[string]'
+    foreach($field in $keyMap.Keys){
+        $pattern='(?m)^[ \t]*"'+[regex]::Escape($keyMap[$field])+'"[ \t]+"(?<value>[^"\r\n]*)"[ \t]*(?://[^\r\n]*)?\r?$'
+        $matches=[regex]::Matches($Text,$pattern)
+        if($matches.Count -gt 1){throw ('Duplicate CS2 video setting: '+$keyMap[$field])}
+        if($matches.Count -eq 0){$missing.Add($field);continue}
+        $value=0
+        if(-not [int]::TryParse($matches[0].Groups['value'].Value,[Globalization.NumberStyles]::Integer,[Globalization.CultureInfo]::InvariantCulture,[ref]$value)){
+            throw ('Invalid CS2 video value for '+$keyMap[$field]+'. Nothing was imported.')
+        }
+        $settings[$field]=$value
+        $captured.Add($field)
+    }
+    $numerator=0.0;$denominator=0.0
+    $numeratorMatches=[regex]::Matches($Text,'(?m)^[ \t]*"setting\.refreshrate_numerator"[ \t]+"(?<value>[^"\r\n]*)"[ \t]*(?://[^\r\n]*)?\r?$')
+    $denominatorMatches=[regex]::Matches($Text,'(?m)^[ \t]*"setting\.refreshrate_denominator"[ \t]+"(?<value>[^"\r\n]*)"[ \t]*(?://[^\r\n]*)?\r?$')
+    if($numeratorMatches.Count -gt 1 -or $denominatorMatches.Count -gt 1){throw 'Duplicate CS2 refresh-rate value; nothing was imported.'}
+    if($numeratorMatches.Count -eq 1 -and $denominatorMatches.Count -eq 1){
+        $numerator=0.0;$denominator=0.0
+        if(-not [double]::TryParse($numeratorMatches[0].Groups['value'].Value,[Globalization.NumberStyles]::Float,[Globalization.CultureInfo]::InvariantCulture,[ref]$numerator) -or
+           -not [double]::TryParse($denominatorMatches[0].Groups['value'].Value,[Globalization.NumberStyles]::Float,[Globalization.CultureInfo]::InvariantCulture,[ref]$denominator) -or
+           [double]::IsNaN($numerator) -or [double]::IsInfinity($numerator) -or $numerator -le 0 -or
+           [double]::IsNaN($denominator) -or [double]::IsInfinity($denominator) -or $denominator -le 0){
+            throw 'CS2 refresh-rate numerator or denominator is invalid; nothing was imported.'
+        }
+        $exactHz=$numerator/$denominator
+        if($exactHz -lt 24 -or $exactHz -gt 600){throw 'CS2 refresh rate is outside the supported 24–600 Hz range; nothing was imported.'}
+        $roundedHz=[int][Math]::Round($exactHz,0,[MidpointRounding]::AwayFromZero)
+        $settings['RefreshHz']=$roundedHz
+        $captured.Add('RefreshHz')
+        [void]$missing.Remove('RefreshHz')
+    }else{$missing.Add('RefreshHz')}
+
+    $preset=[pscustomobject]@{
+        SchemaVersion=1;ProfileName=$ProfileName;DisplayPolicy='ApplyPreset'
+        RefreshPolicy=$(if($captured.Contains('RefreshHz')){'Exact'}else{$validatedBase.RefreshPolicy})
+        ScalingMode=[int]$validatedBase.ScalingMode;Settings=$settings
+    }
+    $preset=ConvertTo-CafeGraphicsPreset -ProfileName $ProfileName -Preset $preset
+    return [pscustomobject]@{
+        Preset=$preset;AccountID=$AccountID;Path=$Path;CapturedFields=$captured.ToArray();MissingFields=$missing.ToArray()
+        RefreshWasRounded=($captured.Contains('RefreshHz') -and [Math]::Abs(($numerator/$denominator)-[int]$settings.RefreshHz) -gt 0.000001)
+    }
+}
+
+function Get-CafeCS2GraphicsCapture {
+    param([Parameter(Mandatory=$true)][string]$ProfileName,[Parameter(Mandatory=$true)]$BasePreset)
+    if(@(Get-Process -Name 'cs2' -ErrorAction SilentlyContinue).Count){throw 'Close CS2 after saving its settings, then capture again.'}
+    $source=Get-CafeActiveSteamVideoFile
+    if(-not (Test-Path -LiteralPath $source.Path -PathType Leaf)){throw ('No cs2_video.txt was found for active Steam account '+$source.AccountID+'. Launch CS2 once, save video settings, and close it before capture.')}
+    $file=Get-Item -LiteralPath $source.Path -ErrorAction Stop
+    if($file.Length -lt 32 -or $file.Length -gt 1048576){throw 'The active account cs2_video.txt has an implausible size; nothing was imported.'}
+    $reader=New-Object System.IO.StreamReader($source.Path,$true)
+    try{$text=$reader.ReadToEnd()}finally{$reader.Dispose()}
+    $current=Get-CafeActiveSteamVideoFile
+    if($current.AccountID -cne $source.AccountID -or $current.Path -ine $source.Path){throw 'The active Steam account changed during capture. Nothing was imported; retry.'}
+    return ConvertFrom-CafeCS2VideoText -ProfileName $ProfileName -Text $text -BasePreset $BasePreset -Path $source.Path -AccountID $source.AccountID
+}
+
 function Get-ProfileGraphicsPreset {
     param([Parameter(Mandatory=$true)][string]$ProfileName,[switch]$Canonical)
     if(-not $Canonical -and $script:PendingSync[$ProfileName] -and $script:GraphicsPresets.Contains($ProfileName)){
@@ -3627,7 +3722,7 @@ function Show-ProfileEditor {
     $nv.Checked=[bool]$p.ApplyNvidia
     Add-EditorTabWide -Grid $displayGrid -Control $nv -Row 4
 
-    $cs2Grid=New-EditorTabGrid -Page $cs2Page -Rows 18
+    $cs2Grid=New-EditorTabGrid -Page $cs2Page -Rows 19
     $cfgFile=New-Object System.Windows.Forms.TextBox
     $cfgFile.Text=[string]$p.ConfigFile
     $cfgFile.ReadOnly=$true
@@ -3710,6 +3805,12 @@ function Show-ProfileEditor {
     $restoreHistory.FlatStyle='Flat'
     $restoreHistory.Enabled=$false
     [void](Add-EditorTabField -Grid $cs2Grid -Title 'Loads into editor; save to keep' -Control $restoreHistory -Column 1 -Row 17)
+    $captureGraphics=New-Object System.Windows.Forms.Button
+    $captureGraphics.Text='Capture from CS2'
+    $captureGraphics.BackColor=[System.Drawing.Color]::FromArgb(58,67,83)
+    $captureGraphics.ForeColor=$WHITE
+    $captureGraphics.FlatStyle='Flat'
+    [void](Add-EditorTabField -Grid $cs2Grid -Title 'Game must be closed; review, then Save & Sync' -Control $captureGraphics -Column 0 -Row 18)
 
     $editorFooter=New-Object System.Windows.Forms.TableLayoutPanel
     $editorFooter.Dock='Fill'
@@ -3917,6 +4018,34 @@ function Show-ProfileEditor {
                 ('Could not load the selected graphics version:`n'+$_.Exception.Message),
                 'Restore Graphics Version','OK','Warning')|Out-Null
         }finally{$dialog.Cursor=[System.Windows.Forms.Cursors]::Default}
+    }.GetNewClosure())
+    $captureGraphics.Add_Click({
+        try{
+            $captureGraphics.Enabled=$false
+            $dialog.Cursor=[System.Windows.Forms.Cursors]::WaitCursor
+            $capture=Get-CafeCS2GraphicsCapture -ProfileName $ProfileName -BasePreset $graphicsPreset
+            $missing=@($capture.MissingFields)
+            $preview='Read '+$capture.CapturedFields.Count+' CS2 graphics values from account '+$capture.AccountID+".`n"+
+                'Resolution: '+$capture.Preset.Settings.Width+'x'+$capture.Preset.Settings.Height+'; aspect mode: '+$capture.Preset.Settings.AspectRatioMode+'; fullscreen: '+$capture.Preset.Settings.Fullscreen+".`n"
+            if($capture.CapturedFields -contains 'RefreshHz'){
+                $preview+='Refresh: '+$capture.Preset.Settings.RefreshHz+' Hz'+$(if($capture.RefreshWasRounded){' (rounded from the game value)'}else{''})+".`n"
+            }else{$preview+='Refresh value was missing; current profile refresh choice will be kept.'+"`n"}
+            if($missing.Count){$preview+='Missing values will keep this profile current values: '+($missing -join ', ')+".`n"}
+            $preview+='NVIDIA scaling mode is not stored in cs2_video.txt and will stay as configured for this profile.'+"`n`n"+
+                'Load these values into the editor? This does not change CS2 or GitHub. Review them, then click Save & Sync to publish.'
+            $answer=[System.Windows.Forms.MessageBox]::Show($preview,'Capture CS2 Graphics','YesNo','Question')
+            if($answer -ne [System.Windows.Forms.DialogResult]::Yes){return}
+            [void](& $applyGraphicsPresetToEditor $capture.Preset)
+            $status.Text=('Captured CS2 settings from Steam account '+$capture.AccountID+'. Review them, then Save & Sync to publish; nothing has been saved or applied yet.')
+            $status.ForeColor=[System.Drawing.Color]::FromArgb(255,190,105)
+            Write-Log ('Captured '+$capture.CapturedFields.Count+' CS2 graphics values from '+$capture.Path+' for '+$ProfileName+'; missing values kept the current preset. No game, local profile, or GitHub data was changed.')
+        }catch{
+            Write-Log ('CS2 graphics capture for '+$ProfileName+' failed: '+$_.Exception.Message) 'WARN'
+            [void][System.Windows.Forms.MessageBox]::Show(('Could not capture CS2 graphics:`n'+$_.Exception.Message),'Capture CS2 Graphics','OK','Warning')|Out-Null
+        }finally{
+            $captureGraphics.Enabled=$true
+            if(-not $dialog.IsDisposed){$dialog.Cursor=[System.Windows.Forms.Cursors]::Default}
+        }
     }.GetNewClosure())
     $saveLocal=New-Object System.Windows.Forms.Button
     $saveLocal.Text='Save Locally'
