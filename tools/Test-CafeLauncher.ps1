@@ -350,14 +350,41 @@ $page.Dispose()
 $dashboardSource=$psSource.Substring($psSource.IndexOf('# Modern CafeLauncher dashboard.'))
 if($dashboardSource -notmatch 'New-Object System.Windows.Forms.TabControl' -or
    $dashboardSource -notmatch 'Update-SelectedProfileCard' -or
-   $dashboardSource -notmatch 'Refresh-DashboardProfiles' -or
+   $dashboardSource -match 'Refresh-DashboardProfiles' -or
    $dashboardSource -notmatch 'Show Logs' -or
    $dashboardSource -notmatch 'Tools & Apps'){
-    throw 'Main dashboard, profile summary, tools, or collapsible logs are missing.'
+    throw 'Main dashboard, profile summary, tools, or collapsible logs are missing, or dashboard still refreshes every profile.'
 }
-if($editorSource -notmatch 'Refresh-ProfileOnDashboard -Name \$ProfileName' -or
+if($editorSource -notmatch 'Refresh-ProfileFromGitHub -ProfileName \$ProfileName' -or
+   $editorSource -notmatch 'Get-ProfileGraphicsPreset -ProfileName \$ProfileName -RequireGitHub' -or
+   $editorSource -notmatch 'Resolve-PendingProfileChanges -ProfileName \$ProfileName' -or
+   $editorSource -notmatch 'Confirm-LocalProfileApply -ProfileName \$ProfileName -Source \$profileSource -Action edit' -or
    $editorSource -notmatch '\[void\]\$dialog\.ShowDialog\(\$form\)'){
-    throw 'Closing the profile editor must refresh that profile and update its dashboard card.'
+    throw 'Opening the profile editor must refresh its profile and graphics from GitHub and require explicit local fallback confirmation.'
+}
+$graphicsReader=@($psAst.FindAll({param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Get-ProfileGraphicsPreset'},$true))
+if($graphicsReader.Count -ne 1 -or $graphicsReader[0].Extent.Text -notmatch '\[switch\]\$RequireGitHub' -or
+   $graphicsReader[0].Extent.Text -notmatch 'if\(\$RequireGitHub\)\{throw'){
+    throw 'Editor GitHub graphics refresh must fail closed so local fallback requires a separate user confirmation.'
+}
+$startupSource=$dashboardSource.Substring($dashboardSource.IndexOf('$startupTimer = New-Object System.Windows.Forms.Timer'))
+if($startupSource -match 'Refresh-DashboardProfiles|Refresh-ProfileFromGitHub'){
+    throw 'Dashboard startup must not spend GitHub requests refreshing all profiles.'
+}
+$pendingResolver=@($psAst.FindAll({param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Resolve-PendingProfileChanges'},$true))
+if($pendingResolver.Count -ne 1 -or
+   $pendingResolver[0].Extent.Text -notmatch 'YesNoCancel' -or
+   $pendingResolver[0].Extent.Text -notmatch 'Sync-ProfileToGitHub' -or
+   $pendingResolver[0].Extent.Text -notmatch 'Refresh-ProfileFromGitHub -ProfileName \$ProfileName -NoSave -ForceLoad' -or
+   $pendingResolver[0].Extent.Text -notmatch 'Get-ProfileGraphicsPreset -ProfileName \$ProfileName -RequireGitHub' -or
+   $pendingResolver[0].Extent.Text -notmatch '\$script:PendingSync\[\$ProfileName\]=\$true'){
+    throw 'Pending edits must offer sync/discard/cancel and retain local state if fresh GitHub reads fail.'
+}
+$profileApply=@($psAst.FindAll({param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Invoke-GamingProfile'},$true))
+$graphicsApply=@($psAst.FindAll({param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Invoke-GraphicsOnly'},$true))
+if($profileApply.Count -ne 1 -or $profileApply[0].Extent.Text -notmatch 'Resolve-PendingProfileChanges' -or
+   $graphicsApply.Count -ne 1 -or $graphicsApply[0].Extent.Text -notmatch 'Resolve-PendingProfileChanges'){
+    throw 'Profile and graphics apply actions must resolve unsynced edits before using cloud settings.'
 }
 if($dashboardSource -match "New-CafeLabel -Text 'v\d{4}\.\d{2}\.\d{2}\.\d+'" -or
    $dashboardSource -notmatch "New-CafeLabel -Text \('v'\+\(Get-CafeLauncherRelease\)\)" -or
