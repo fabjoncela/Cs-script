@@ -4,7 +4,7 @@ start "" powershell.exe -NoProfile -ExecutionPolicy Bypass -STA -WindowStyle Hid
 exit /b
 
 # POWERSHELL_GUI
-# CAFE_RELEASE=2026.10.14.30
+# CAFE_RELEASE=2026.10.14.31
 
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
@@ -5316,6 +5316,23 @@ function Invoke-GamingProfile {
     if(-not (Resolve-PendingProfileChanges -ProfileName $ProfileName)){return}
     $profileSource=Refresh-ProfileFromGitHub -ProfileName $ProfileName
     if(-not (Confirm-LocalProfileApply -ProfileName $ProfileName -Source $profileSource)){return}
+    if([bool]$script:GamingProfiles[$ProfileName].ApplyNvidia){
+        try{
+            # ScalingMode is also stored in profiles/<Profile>.json for
+            # compatibility, but graphics/<Profile>.json is authoritative.
+            # Refresh and validate it before any profile action so Apply
+            # Profile and Apply Graphics cannot choose different scaling.
+            $graphicsPreset=Get-ProfileGraphicsPreset -ProfileName $ProfileName -RequireGitHub
+            $script:GamingProfiles[$ProfileName].ScalingMode=[int]$graphicsPreset.ScalingMode
+            Write-Log ("$ProfileName profile apply verified graphics/$ProfileName.json on GitHub; authoritative ScalingMode="+$graphicsPreset.ScalingMode+'.')
+            try{Save-ProfileSettings}catch{Write-Log ("Unable to cache the verified $ProfileName scaling mode locally: "+$_.Exception.Message) 'WARN'}
+        }catch{
+            $message="Could not verify the latest GitHub CS2 graphics settings for $ProfileName. No profile actions were applied, to avoid using a different scaling mode than Apply Graphics.`r`n`r`n$($_.Exception.Message)"
+            Write-Log ("$ProfileName profile apply canceled: "+$message) 'ERROR'
+            [void][System.Windows.Forms.MessageBox]::Show($message,'GitHub Graphics Refresh Failed','OK','Warning')
+            return
+        }
+    }
     $script:ActiveRunName=$ProfileName
     $script:StepResults.Clear()
     Clear-RunOutcomes -Run $ProfileName
