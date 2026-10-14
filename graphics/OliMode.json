@@ -1,6 +1,8 @@
 {
   "SchemaVersion": 1,
   "ProfileName": "OliMode",
+  "RefreshPolicy": "Highest",
+  "ScalingMode": 2,
   "Settings": {
     "Width": 1280,
     "Height": 960,

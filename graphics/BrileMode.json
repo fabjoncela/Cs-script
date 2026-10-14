@@ -2,6 +2,8 @@
   "SchemaVersion": 1,
   "ProfileName": "BrileMode",
   "DisplayPolicy": "ApplyPreset",
+  "RefreshPolicy": "Highest",
+  "ScalingMode": 2,
   "Settings": {
     "Width": 1920,
     "Height": 1080,

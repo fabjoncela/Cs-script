@@ -1,0 +1,23 @@
+#!/bin/sh
+set -eu
+
+repo_root=$(git rev-parse --show-toplevel)
+cd "$repo_root"
+
+if command -v powershell.exe >/dev/null 2>&1; then
+    ps_host=powershell.exe
+elif command -v pwsh >/dev/null 2>&1; then
+    ps_host=pwsh
+else
+    echo "Context hook needs Windows PowerShell 5.1 or PowerShell 7." >&2
+    exit 1
+fi
+
+context_script="$repo_root/tools/Update-Context.ps1"
+if "$ps_host" -NoProfile -ExecutionPolicy Bypass -File "$context_script" -Check >/dev/null 2>&1; then
+    exit 0
+fi
+
+"$ps_host" -NoProfile -ExecutionPolicy Bypass -File "$context_script"
+echo "Git operation stopped: review and commit context.md, then retry." >&2
+exit 1

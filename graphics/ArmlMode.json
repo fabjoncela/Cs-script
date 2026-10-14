@@ -1,6 +1,8 @@
 {
   "SchemaVersion": 1,
   "ProfileName": "ArmlMode",
+  "RefreshPolicy": "Highest",
+  "ScalingMode": 2,
   "Settings": {
     "Width": 1280,
     "Height": 960,

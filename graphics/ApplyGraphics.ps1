@@ -68,6 +68,13 @@ function Assert-CS2GraphicsDisplayPolicy {
             }
         }
     }
+    $refreshPolicy=if($Preset.PSObject.Properties['RefreshPolicy'] -and $Preset.RefreshPolicy){[string]$Preset.RefreshPolicy}else{'Highest'}
+    if($refreshPolicy -notin @('Highest','Exact')){throw ('Unknown graphics refresh policy: '+$refreshPolicy)}
+    if($refreshPolicy -eq 'Exact' -and (-not $Preset.Settings.PSObject.Properties['RefreshHz'] -or $null -eq $Preset.Settings.RefreshHz)){
+        throw 'Exact refresh policy requires a RefreshHz value.'
+    }
+    $scalingMode=if($Preset.PSObject.Properties['ScalingMode'] -and $null -ne $Preset.ScalingMode){[int]$Preset.ScalingMode}else{2}
+    if($scalingMode -notin @(2,3,5)){throw ('Unsupported NVIDIA scaling mode: '+$scalingMode)}
     return $policy
 }
 function Get-CS2ModeGraphicsPreset {
@@ -76,6 +83,26 @@ function Get-CS2ModeGraphicsPreset {
     $url="https://raw.githubusercontent.com/fabjoncela/Cs-script/main/graphics/$ModeName.json"
     $cache=Join-Path $env:LOCALAPPDATA ("CafeLauncher\graphics-cache\"+$ModeName+'.json')
     $local=Join-Path (Split-Path -Parent $env:CAFE_SCRIPT) ("graphics\"+$ModeName+'.json')
+    # An explicitly saved local customization wins until the user syncs it.
+    # This lets the editor's Save Locally button work offline and prevents the
+    # next online Apply Graphics click from silently replacing those edits.
+    $profileSettingsPath=Join-Path $env:LOCALAPPDATA 'CafeLauncher\profiles.json'
+    if(Test-Path -LiteralPath $profileSettingsPath -PathType Leaf){
+        try{
+            $savedProfiles=Get-Content -LiteralPath $profileSettingsPath -Raw -ErrorAction Stop|ConvertFrom-Json -ErrorAction Stop
+            $savedProfile=$savedProfiles.PSObject.Properties[$ModeName]
+            $pendingProperty=if($savedProfile){$savedProfile.Value.PSObject.Properties['SyncPending']}else{$null}
+            $graphicsProperty=if($savedProfile){$savedProfile.Value.PSObject.Properties['GraphicsSettings']}else{$null}
+            if($savedProfile -and $pendingProperty -and [bool]$pendingProperty.Value -and $graphicsProperty -and $graphicsProperty.Value){
+                $preset=$graphicsProperty.Value
+                if($preset.ProfileName -cne $ModeName -or [int]$preset.SchemaVersion -ne 1){throw 'Local graphics profile/schema mismatch.'}
+                [void](Assert-CS2GraphicsDisplayPolicy -Preset $preset)
+                [void](ConvertTo-VideoGraphicsSettings -Preset $preset)
+                Write-Log ("Using unsynced local "+$ModeName+" graphics customization.")
+                return $preset
+            }
+        }catch{throw ("Could not safely read local graphics state; refusing to replace it with a cloud preset. "+$_.Exception.Message)}
+    }
     try{
         [Net.ServicePointManager]::SecurityProtocol=[Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
         $preset=Invoke-RestMethod -Uri $url -Method Get -TimeoutSec 10 -Headers @{'Cache-Control'='no-cache'} -ErrorAction Stop
@@ -230,6 +257,8 @@ function Apply-CS2ModeGraphics {
         if(Get-Process -Name cs2 -ErrorAction SilentlyContinue){throw 'CS2 is running. Close it before applying graphics.'}
         $preset=Get-CS2ModeGraphicsPreset -ModeName $ModeName
         $displayPolicy=Assert-CS2GraphicsDisplayPolicy -Preset $preset
+        $refreshPolicy=if($preset.PSObject.Properties['RefreshPolicy'] -and $preset.RefreshPolicy){[string]$preset.RefreshPolicy}else{'Highest'}
+        $scalingMode=if($preset.PSObject.Properties['ScalingMode'] -and $null -ne $preset.ScalingMode){[int]$preset.ScalingMode}else{2}
         $settings=ConvertTo-VideoGraphicsSettings -Preset $preset
         if($settings.Count -eq 0){throw 'Graphics preset has no values selected.'}
         if($displayPolicy -eq 'PreserveCurrent'){
@@ -267,17 +296,29 @@ function Apply-CS2ModeGraphics {
             }else{
                 $requestedHz=if($settings.Contains('RefreshHz')){[int]$settings['RefreshHz']}else{0}
                 $hz=0
-                if('FabDisplayNative' -as [type]){$hz=[FabDisplayNative]::GetHighestRefreshForResolution($w,$h)}
-                if($hz -ge 24){
+                $modeFound=$false
+                if('FabDisplayNative' -as [type]){
+                    if($refreshPolicy -eq 'Exact' -and $requestedHz -ge 24){
+                        $modeFound=[FabDisplayNative]::IsAdvertisedMode($w,$h,$requestedHz)
+                        if($modeFound){$hz=$requestedHz}
+                    }else{
+                        $hz=[FabDisplayNative]::GetHighestRefreshForResolution($w,$h)
+                        $modeFound=$hz -ge 24
+                    }
+                }
+                if($modeFound -and $hz -ge 24){
                     $settings['RefreshHz']=$hz
-                    if($requestedHz -gt 0 -and $requestedHz -ne $hz){
+                    if($refreshPolicy -eq 'Exact'){
+                        Write-Log ("CS2 display mode "+$w+'x'+$h+": applying selected refresh "+$hz+'Hz (Exact).')
+                    }elseif($requestedHz -gt 0 -and $requestedHz -ne $hz){
                         Write-Log ("CS2 display mode "+$w+'x'+$h+": using highest advertised refresh "+$hz+'Hz instead of preset '+$requestedHz+'Hz.')
                     }else{
                         Write-Log ("CS2 display mode "+$w+'x'+$h+": using highest advertised refresh "+$hz+'Hz.')
                     }
                 }else{
                     $skipDisplay=$true
-                    Write-Log ("DISPLAY1 has no supported progressive refresh mode for CS2 resolution "+$w+'x'+$h+"; preserving the existing resolution and refresh.") 'WARN'
+                    $fallback=if($refreshPolicy -eq 'Exact'){"does not advertise the selected "+$requestedHz+'Hz at '}else{'has no supported progressive refresh mode at '}
+                    Write-Log ("DISPLAY1 "+$fallback+"CS2 resolution "+$w+'x'+$h+"; preserving all existing display settings.") 'WARN'
                 }
             }
         }
@@ -291,16 +332,24 @@ function Apply-CS2ModeGraphics {
         $edit=Update-CS2VideoGraphicsText -Text $before -Settings $settings -SkipDisplay:$skipDisplay
         foreach($skipped in $edit.Skipped){Write-Log ("Skipped graphics key: "+$skipped) 'WARN'}
         if($edit.Applied.Count -eq 0){throw 'No compatible video setting keys found; nothing changed.'}
-        if(-not $edit.Changed){Write-Log ($ModeName+' graphics already match; no file write.');return}
-        if(Get-Process -Name cs2 -ErrorAction SilentlyContinue){throw 'CS2 started during preparation; original file kept.'}
-        $backupFolder=Join-Path $env:LOCALAPPDATA ("CafeLauncher\graphics-backups\"+$active.AccountID)
-        if(-not (Test-Path -LiteralPath $backupFolder)){[void](New-Item -ItemType Directory -Path $backupFolder -Force)}
-        $backup=Join-Path $backupFolder ("cs2_video-"+$ModeName+'-'+(Get-Date -Format 'yyyyMMdd-HHmmss-fff')+'.txt')
-        Save-CS2VideoFileWithBackup -VideoPath $active.Path -ExpectedAccountID $active.AccountID -UpdatedText $edit.Text -Encoding $encoding -BackupPath $backup
-        Write-Log ("Applied "+$edit.Applied.Count+' graphics keys for '+$ModeName+' (Steam '+$active.AccountID+'). Backup: '+$backup)
+        $backup=$null
+        if($edit.Changed){
+            if(Get-Process -Name cs2 -ErrorAction SilentlyContinue){throw 'CS2 started during preparation; original file kept.'}
+            $backupFolder=Join-Path $env:LOCALAPPDATA ("CafeLauncher\graphics-backups\"+$active.AccountID)
+            if(-not (Test-Path -LiteralPath $backupFolder)){[void](New-Item -ItemType Directory -Path $backupFolder -Force)}
+            $backup=Join-Path $backupFolder ("cs2_video-"+$ModeName+'-'+(Get-Date -Format 'yyyyMMdd-HHmmss-fff')+'.txt')
+            Save-CS2VideoFileWithBackup -VideoPath $active.Path -ExpectedAccountID $active.AccountID -UpdatedText $edit.Text -Encoding $encoding -BackupPath $backup
+        }else{Write-Log ($ModeName+' CS2 video settings already match; no file write.')}
+        if('FabNvApi' -as [type]){
+            $scalingReport=''
+            if([FabNvApi]::TrySetGpuScalingMode($scalingMode,[ref]$scalingReport)){Write-Log $scalingReport}
+            else{Write-Log ('CS2 graphics saved, but NVIDIA scaling was not verified: '+$scalingReport) 'WARN'}
+        }else{Write-Log 'CS2 graphics saved; NVIDIA scaling could not be changed because NVAPI is unavailable.' 'WARN'}
+        if($edit.Changed){Write-Log ("Applied "+$edit.Applied.Count+' graphics keys for '+$ModeName+' (Steam '+$active.AccountID+'). Backup: '+$backup)}
+        else{Write-Log ("Verified/applied NVIDIA scaling mode for "+$ModeName+' (Steam '+$active.AccountID+').')}
         [void][System.Windows.Forms.MessageBox]::Show(
-            ($ModeName+' graphics applied. Launch CS2 to use them.'+[Environment]::NewLine+
-             'Backup: '+$backup),'CS2 Graphics Applied','OK','Information')
+            ($ModeName+' graphics preset processed. Launch CS2 to use video settings.'+[Environment]::NewLine+
+             $(if($backup){'Backup: '+$backup}else{'Video settings already matched; no backup needed.'})),'CS2 Graphics Applied','OK','Information')
     }catch{
         Write-Log ("Apply Graphics failed for "+$ModeName+': '+$_.Exception.Message) 'ERROR'
         [void][System.Windows.Forms.MessageBox]::Show(

@@ -77,6 +77,20 @@ if($psSource -notmatch 'function Apply-NvidiaGamingSettings' -or
    $psSource -notmatch 'Apply-NvidiaGamingSettings -Width'){
     throw 'Profile-level NVIDIA and CS2 CFG functions must remain accessible.'
 }
+foreach($requiredEditorFeature in @(
+    '$cs2Page.Text=''CS2 / Apps''',
+    '$cs2Grid=New-EditorTabGrid -Page $cs2Page -Rows 15',
+    'New-EditorTabNumber -Grid $cs2Grid -Title ''CS2 resolution width''',
+    'New-EditorTabChoice -Grid $cs2Grid -Title ''Stretch / scaling''',
+    'Stretch / scaling',
+    '$graphicsPresetState[$ProfileName]=$graphicsPreset',
+    'GraphicsSettings',
+    'graphics/$ProfileName.json'
+)){
+    if($psSource -notmatch [regex]::Escape($requiredEditorFeature)){
+        throw ('CS2 Graphics editor/local/cloud persistence feature missing: '+$requiredEditorFeature)
+    }
+}
 
 # Launch All button should still start G HUB, but every player-profile
 # LaunchApps path must skip it so the external DPI helper stays in control.

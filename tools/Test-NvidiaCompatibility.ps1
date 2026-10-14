@@ -25,7 +25,7 @@ if($apply -notmatch 'Write-NvidiaCompatibilityScan' -or
    $apply -notmatch '\$compat\.NVAPI'){
     throw 'NVIDIA apply must preflight and gate unsupported display/NVAPI operations.'
 }
-foreach($required in @('TrySetDisplayMode','TrySetDigitalVibrance','TryApplyPerformanceProfile','TrySetGpuFullscreenScaling')){
+foreach($required in @('TrySetDisplayMode','TrySetDigitalVibrance','TryApplyPerformanceProfile','TrySetGpuScalingMode')){
     if(-not $apply.Contains($required)){throw ('Must preserve independent apply step '+$required)}
 }
 if($functions['Get-PCDiagnostics'] -notmatch 'Get-NvidiaCompatibilityScan'){throw 'Detect PC must include NVIDIA scan.'}

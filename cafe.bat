@@ -4,7 +4,7 @@ start "" powershell.exe -NoProfile -ExecutionPolicy Bypass -STA -WindowStyle Hid
 exit /b
 
 # POWERSHELL_GUI
-# CAFE_RELEASE=2026.10.13.24
+# CAFE_RELEASE=2026.10.14.1
 
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
@@ -1061,6 +1061,14 @@ public static class FabNvApi {
     }
 
     public static bool TrySetGpuFullscreenScaling(out string report) {
+        return TrySetGpuScalingMode(2, out report);
+    }
+
+    public static bool TrySetGpuScalingMode(int requestedScaling, out string report) {
+        if (requestedScaling != 2 && requestedScaling != 3 && requestedScaling != 5) {
+            report = "Unsupported NVIDIA scaling mode " + requestedScaling + ".";
+            return false;
+        }
         NvApiUnload unload = null;
         bool initialized = false;
         IntPtr pathArray = IntPtr.Zero;
@@ -1196,7 +1204,7 @@ public static class FabNvApi {
                 throw new Exception("NVIDIA did not return advanced settings for the selected display.");
 
             int oldScaling = Marshal.ReadInt32(selectedTarget.details, 8);
-            Marshal.WriteInt32(selectedTarget.details, 8, 2); // NV_SCALING_GPU_SCALING_TO_NATIVE = Force GPU - Full Screen
+            Marshal.WriteInt32(selectedTarget.details, 8, requestedScaling);
 
             // Validate the updated current topology first. This is a dry run and
             // should not change display settings if NVIDIA rejects the configuration.
@@ -1223,10 +1231,12 @@ public static class FabNvApi {
                 (NvDisplayConfigTargetInfoV2)Marshal.PtrToStructure(selectedTargetPtr, typeof(NvDisplayConfigTargetInfoV2));
             int actualScaling = Marshal.ReadInt32(selectedTarget.details, 8);
 
-            if (actualScaling != 2)
-                throw new Exception("NVIDIA did not retain Force GPU - Full Screen. Driver reports scaling mode " + actualScaling + " (previous " + oldScaling + ").");
+            if (actualScaling != requestedScaling)
+                throw new Exception("NVIDIA did not retain scaling mode " + requestedScaling + ". Driver reports mode " + actualScaling + " (previous " + oldScaling + ").");
 
-            report = "GPU scaling set and verified using NvAPI_DISP_SetDisplayConfig: Force GPU - Full Screen (mode 2). Previous mode " +
+            string scalingName = requestedScaling == 2 ? "GPU full-screen stretch" :
+                requestedScaling == 3 ? "centered, no scaling" : "preserve aspect ratio";
+            report = "GPU scaling set and verified using NvAPI_DISP_SetDisplayConfig: " + scalingName + " (mode " + requestedScaling + "). Previous mode " +
                 oldScaling + "; selected path " + targetPath + ", target " + targetIndex +
                 (exactNameResolved ? ", matched DISPLAY1 by display ID." : ", matched Windows GDI-primary display because DISPLAY1 name could not be mapped.");
             return true;
@@ -1373,7 +1383,8 @@ function Apply-NvidiaGamingSettings {
         [ValidateRange(640,7680)][int]$Width = 1920,
         [ValidateRange(480,4320)][int]$Height = 1080,
         [ValidateRange(30,600)][int]$RefreshHz = 360,
-        [ValidateRange(0,100)][int]$Vibrance = 75
+        [ValidateRange(0,100)][int]$Vibrance = 75,
+        [ValidateSet(2,3,5)][int]$ScalingMode = 2
     )
     Write-Log "NVIDIA gaming-settings apply started (profile resolution: ${Width}x${Height}; highest advertised refresh; configured refresh ${RefreshHz}Hz; vibrance ${Vibrance}%)."
     $compat=$null
@@ -1439,7 +1450,7 @@ function Apply-NvidiaGamingSettings {
 
         try {
             $scalingReport = ""
-            $scalingOk = [FabNvApi]::TrySetGpuFullscreenScaling([ref]$scalingReport)
+            $scalingOk = [FabNvApi]::TrySetGpuScalingMode($ScalingMode, [ref]$scalingReport)
             if ($scalingOk) {
                 Write-Log $scalingReport
             } else {
@@ -2161,39 +2172,122 @@ $script:GithubBranch = 'main'
 $script:FabCfgCloudUrl = 'https://raw.githubusercontent.com/fabjoncela/Cs-script/main/fab.cfg'
 $script:GamingProfiles = [ordered]@{
     FabMode = @{
-        PointerSpeed=10; LogitechDPI=800; DisableAcceleration=$true; ApplyNvidia=$true
+        PointerSpeed=10; LogitechDPI=800; DisableAcceleration=$true; ApplyNvidia=$true; ScalingMode=2
         Width=1920; Height=1080; RefreshHz=360; Vibrance=75
         CS2Sensitivity=''; ConfigFile='fab.cfg'; CfgDownloadUrl=$script:FabCfgCloudUrl; LaunchApps=$true
     }
     ArliMode = @{
-        PointerSpeed=10; LogitechDPI=800; DisableAcceleration=$true; ApplyNvidia=$true
+        PointerSpeed=10; LogitechDPI=800; DisableAcceleration=$true; ApplyNvidia=$true; ScalingMode=2
         Width=1920; Height=1080; RefreshHz=360; Vibrance=75
         CS2Sensitivity=''; ConfigFile='arli.cfg'; CfgDownloadUrl='https://raw.githubusercontent.com/fabjoncela/Cs-script/main/arli.cfg'; LaunchApps=$true
     }
     BrileMode = @{
-        PointerSpeed=10; LogitechDPI=800; DisableAcceleration=$true; ApplyNvidia=$true
+        PointerSpeed=10; LogitechDPI=800; DisableAcceleration=$true; ApplyNvidia=$true; ScalingMode=2
         Width=1920; Height=1080; RefreshHz=360; Vibrance=75
         CS2Sensitivity=''; ConfigFile='brile.cfg'; CfgDownloadUrl='https://raw.githubusercontent.com/fabjoncela/Cs-script/main/brile.cfg'; LaunchApps=$true
     }
     ArmlMode = @{
-        PointerSpeed=10; LogitechDPI=800; DisableAcceleration=$true; ApplyNvidia=$true
+        PointerSpeed=10; LogitechDPI=800; DisableAcceleration=$true; ApplyNvidia=$true; ScalingMode=2
         Width=1920; Height=1080; RefreshHz=360; Vibrance=75
         CS2Sensitivity=''; ConfigFile='arml.cfg'; CfgDownloadUrl='https://raw.githubusercontent.com/fabjoncela/Cs-script/main/arml.cfg'; LaunchApps=$true
     }
     OliMode = @{
-        PointerSpeed=10; LogitechDPI=800; DisableAcceleration=$true; ApplyNvidia=$true
+        PointerSpeed=10; LogitechDPI=800; DisableAcceleration=$true; ApplyNvidia=$true; ScalingMode=2
         Width=1920; Height=1080; RefreshHz=360; Vibrance=75
         CS2Sensitivity=''; ConfigFile='oli.cfg'; CfgDownloadUrl='https://raw.githubusercontent.com/fabjoncela/Cs-script/main/oli.cfg'; LaunchApps=$true
     }
 }
 $script:ProfileSettingsPath = Join-Path $env:LOCALAPPDATA 'CafeLauncher\profiles.json'
 $script:PendingSync = @{}
+$script:GraphicsPresets = [ordered]@{}
 foreach ($name in @($script:GamingProfiles.Keys)) { $script:PendingSync[$name] = $false }
+
+function ConvertTo-CafeGraphicsPreset {
+    param([string]$ProfileName,$Preset)
+    if(-not $script:GamingProfiles.Contains($ProfileName) -or $null -eq $Preset -or $null -eq $Preset.Settings){
+        throw 'Graphics preset profile/settings are missing.'
+    }
+    if($Preset.ProfileName -and $Preset.ProfileName -cne $ProfileName){throw 'Graphics preset profile name mismatch.'}
+    $rules=[ordered]@{
+        Width=@{Min=640;Max=7680};Height=@{Min=480;Max=4320};RefreshHz=@{Min=24;Max=600}
+        AspectRatioMode=@{Allowed=@(0,1,2)};Fullscreen=@{Allowed=@(0,1)};MSAASamples=@{Allowed=@(0,2,4,8,16)}
+        ShadowQuality=@{Allowed=@(0,1,2,3)};DynamicShadows=@{Allowed=@(0,1)};TextureDetail=@{Allowed=@(0,1,2,3)}
+        ShaderQuality=@{Allowed=@(0,1,2)};ParticleDetail=@{Allowed=@(0,1,2,3)};AmbientOcclusion=@{Allowed=@(0,1,2,3)}
+        HDRDetail=@{Allowed=@(-1,0,1,2,3)};NvidiaReflex=@{Allowed=@(0,1,2)};TextureFiltering=@{Allowed=@(0,1,2,3,4,5)}
+        FSRDetail=@{Allowed=@(0,1,2,3,4)};VSync=@{Allowed=@(0,1)};CMAA=@{Allowed=@(0,1)}
+    }
+    $settings=[ordered]@{}
+    $settingsSource=$Preset.Settings
+    foreach($field in $rules.Keys){
+        if($settingsSource -is [System.Collections.IDictionary]){
+            if(-not $settingsSource.Contains($field)){continue}
+            $rawValue=$settingsSource[$field]
+        }else{
+            $property=$settingsSource.PSObject.Properties[$field]
+            if(-not $property){continue}
+            $rawValue=$property.Value
+        }
+        if($null -eq $rawValue){continue}
+        $value=0
+        if(-not [int]::TryParse([string]$rawValue,[ref]$value)){throw ('Invalid graphics value: '+$field)}
+        $rule=$rules[$field]
+        if(($rule.ContainsKey('Allowed') -and $value -notin $rule.Allowed) -or
+           ($rule.ContainsKey('Min') -and $value -lt $rule.Min) -or
+           ($rule.ContainsKey('Max') -and $value -gt $rule.Max)){throw ('Out-of-range graphics value: '+$field)}
+        $settings[$field]=$value
+    }
+    if($settings.Contains('Width') -xor $settings.Contains('Height')){
+        throw 'Graphics preset must specify both Width and Height, or neither.'
+    }
+    if(-not $settings.Contains('Width')){
+        $settings['Width']=if($ProfileName -eq 'BrileMode'){1920}else{1280}
+        $settings['Height']=if($ProfileName -eq 'BrileMode'){1080}else{960}
+    }
+    foreach($field in @('AspectRatioMode','Fullscreen','MSAASamples','ShadowQuality','DynamicShadows','TextureDetail','ShaderQuality','ParticleDetail','AmbientOcclusion','HDRDetail','NvidiaReflex','TextureFiltering','FSRDetail','VSync','CMAA')){
+        if(-not $settings.Contains($field)){throw ('Graphics preset is missing '+$field+'.')}
+    }
+    $refreshPolicy=if($Preset.PSObject.Properties['RefreshPolicy'] -and $Preset.RefreshPolicy){[string]$Preset.RefreshPolicy}else{'Highest'}
+    if($refreshPolicy -notin @('Highest','Exact')){throw 'RefreshPolicy must be Highest or Exact.'}
+    if($refreshPolicy -eq 'Exact' -and -not $settings.Contains('RefreshHz')){throw 'Exact refresh policy requires RefreshHz.'}
+    $scaling=if($Preset.PSObject.Properties['ScalingMode'] -and $null -ne $Preset.ScalingMode){[int]$Preset.ScalingMode}else{[int]$script:GamingProfiles[$ProfileName].ScalingMode}
+    if($scaling -notin @(2,3,5)){throw 'ScalingMode must be 2, 3, or 5.'}
+    return [pscustomobject]@{SchemaVersion=1;ProfileName=$ProfileName;DisplayPolicy='ApplyPreset';RefreshPolicy=$refreshPolicy;ScalingMode=$scaling;Settings=$settings}
+}
+
+function Get-ProfileGraphicsPreset {
+    param([Parameter(Mandatory=$true)][string]$ProfileName)
+    if($script:PendingSync[$ProfileName] -and $script:GraphicsPresets.Contains($ProfileName)){
+        return $script:GraphicsPresets[$ProfileName]
+    }
+    $cache=Join-Path $env:LOCALAPPDATA ("CafeLauncher\graphics-cache\"+$ProfileName+'.json')
+    $local=Join-Path (Split-Path -Parent $env:CAFE_SCRIPT) ("graphics\"+$ProfileName+'.json')
+    try{
+        $url="https://raw.githubusercontent.com/$($script:GithubRepo)/$($script:GithubBranch)/graphics/$ProfileName.json"
+        $remote=Invoke-RestMethod -Uri $url -Method Get -TimeoutSec 10 -Headers @{'Cache-Control'='no-cache'} -ErrorAction Stop
+        $preset=ConvertTo-CafeGraphicsPreset -ProfileName $ProfileName -Preset $remote
+        $script:GraphicsPresets[$ProfileName]=$preset
+        $script:GamingProfiles[$ProfileName].ScalingMode=[int]$preset.ScalingMode
+        try{$dir=Split-Path -Parent $cache;if(-not(Test-Path -LiteralPath $dir)){[void](New-Item -ItemType Directory -Path $dir -Force)};[IO.File]::WriteAllText($cache,($preset|ConvertTo-Json -Depth 6),(New-Object Text.UTF8Encoding($false)))}catch{Write-Log ('Graphics preset cache warning: '+$_.Exception.Message) 'WARN'}
+        return $preset
+    }catch{Write-Log ('Graphics preset download unavailable: '+$_.Exception.Message) 'WARN'}
+    foreach($file in @($cache,$local)){
+        if(-not(Test-Path -LiteralPath $file -PathType Leaf)){continue}
+        try{
+            $raw=Get-Content -LiteralPath $file -Raw -ErrorAction Stop|ConvertFrom-Json -ErrorAction Stop
+            $preset=ConvertTo-CafeGraphicsPreset -ProfileName $ProfileName -Preset $raw
+            $script:GraphicsPresets[$ProfileName]=$preset
+            $script:GamingProfiles[$ProfileName].ScalingMode=[int]$preset.ScalingMode
+            return $preset
+        }catch{Write-Log ('Invalid graphics preset '+$file+': '+$_.Exception.Message) 'WARN'}
+    }
+    if($script:GraphicsPresets.Contains($ProfileName)){return $script:GraphicsPresets[$ProfileName]}
+    throw ('No graphics preset for '+$ProfileName+'. Connect once to download it, then local editing works offline.')
+}
 
 function Import-ProfileValues {
     param([string]$ProfileName, $SavedProfile, [string]$SourceLabel = 'local')
     if (-not $script:GamingProfiles.Contains($ProfileName) -or -not $SavedProfile) { return }
-    foreach ($setting in @('PointerSpeed','LogitechDPI','DisableAcceleration','ApplyNvidia','Width','Height','RefreshHz','Vibrance','CS2Sensitivity','CfgDownloadUrl','LaunchApps')) {
+    foreach ($setting in @('PointerSpeed','LogitechDPI','DisableAcceleration','ApplyNvidia','Width','Height','RefreshHz','Vibrance','ScalingMode','CS2Sensitivity','CfgDownloadUrl','LaunchApps')) {
         $saved = $SavedProfile.PSObject.Properties[$setting]
         if (-not $saved) { continue }
         $value = $saved.Value
@@ -2204,6 +2298,7 @@ function Import-ProfileValues {
                 'Width'        { $value=[int]$value; if ($value -lt 640 -or $value -gt 7680) { throw 'range' } }
                 'Height'       { $value=[int]$value; if ($value -lt 480 -or $value -gt 4320) { throw 'range' } }
                 'RefreshHz'    { $value=[int]$value; if ($value -lt 30 -or $value -gt 600) { throw 'range' } }
+                'ScalingMode'  { $value=[int]$value; if ($value -notin @(2,3,5)) { throw 'unsupported NVIDIA scaling mode' } }
                 'Vibrance'     { $value=[int]$value; if ($value -lt 0 -or $value -gt 100) { throw 'range' } }
                 'CS2Sensitivity' {
                     $value=[string]$value
@@ -2226,6 +2321,11 @@ function Import-ProfileValues {
             }
             $script:GamingProfiles[$ProfileName][$setting] = $value
         } catch { Write-Log "Ignored invalid $SourceLabel $ProfileName/$setting value." 'WARN' }
+    }
+    $graphicsProperty=$SavedProfile.PSObject.Properties['GraphicsSettings']
+    if($graphicsProperty -and $graphicsProperty.Value){
+        try{$script:GraphicsPresets[$ProfileName]=ConvertTo-CafeGraphicsPreset -ProfileName $ProfileName -Preset $graphicsProperty.Value}
+        catch{Write-Log "Ignored invalid $SourceLabel $ProfileName graphics settings: $($_.Exception.Message)" 'WARN'}
     }
 }
 
@@ -2258,7 +2358,7 @@ function Export-ProfileValues {
     $profileValues = [ordered]@{
         PointerSpeed=[int]$p.PointerSpeed; LogitechDPI=[int]$p.LogitechDPI; DisableAcceleration=[bool]$p.DisableAcceleration
         ApplyNvidia=[bool]$p.ApplyNvidia; Width=[int]$p.Width; Height=[int]$p.Height
-        RefreshHz=[int]$p.RefreshHz; Vibrance=[int]$p.Vibrance
+        RefreshHz=[int]$p.RefreshHz; Vibrance=[int]$p.Vibrance; ScalingMode=[int]$p.ScalingMode
         CS2Sensitivity=[string]$p.CS2Sensitivity; CfgDownloadUrl=[string]$p.CfgDownloadUrl
         LaunchApps=[bool]$p.LaunchApps
     }
@@ -2278,6 +2378,9 @@ function Save-ProfileSettings {
         }
         $snapshot = [ordered]@{}
         foreach ($key in @($values.Keys)) { $snapshot[$key] = $values[$key] }
+        if($script:GraphicsPresets.Contains($name)){
+            $snapshot['GraphicsSettings']=$script:GraphicsPresets[$name]
+        }
         $snapshot['SyncPending'] = [bool]$script:PendingSync[$name]
         $settings[$name] = $snapshot
     }
@@ -2426,6 +2529,8 @@ function Sync-ProfileToGitHub {
     }
     $path = "profiles/$ProfileName.json"
     $uri = "https://api.github.com/repos/$($script:GithubRepo)/contents/$path"
+    $graphicsPath="graphics/$ProfileName.json"
+    $graphicsUri="https://api.github.com/repos/$($script:GithubRepo)/contents/$graphicsPath"
     $headers = @{
         'Authorization'="Bearer $Token"
         'Accept'='application/vnd.github+json'
@@ -2433,6 +2538,9 @@ function Sync-ProfileToGitHub {
         'X-GitHub-Api-Version'='2022-11-28'
     }
     $existingSha = $null
+    $existingGraphicsSha=$null
+    $graphicsUploaded=$false
+    $profileUploaded=$false
     $cfgBody=$null
     $cfgUploaded=$false
     $cfgStatus='left unchanged because sensitivity is blank'
@@ -2445,6 +2553,20 @@ function Sync-ProfileToGitHub {
         $responseProp=$_.Exception.PSObject.Properties['Response']
         if($responseProp -and $responseProp.Value){$status=[int]$responseProp.Value.StatusCode}
         if ($status -ne 404) { throw "GitHub authorization or file read failed (HTTP $status)." }
+    }
+
+    try {
+        $currentGraphics=Invoke-RestMethod -Uri ($graphicsUri+'?ref='+$script:GithubBranch) -Method Get -Headers $headers -TimeoutSec 20 -MaximumRedirection 0 -ErrorAction Stop
+        if($currentGraphics.type -ne 'file' -or $currentGraphics.path -ne $graphicsPath -or
+           [string]$currentGraphics.sha -notmatch '^[a-fA-F0-9]{40}$' -or
+           $currentGraphics.encoding -ne 'base64' -or [string]::IsNullOrWhiteSpace([string]$currentGraphics.content) -or
+           [int64]$currentGraphics.size -gt 1048576){throw ('Invalid GitHub graphics metadata for '+$graphicsPath)}
+        $existingGraphicsSha=[string]$currentGraphics.sha
+    }catch{
+        $status=$null
+        $responseProp=$_.Exception.PSObject.Properties['Response']
+        if($responseProp -and $responseProp.Value){$status=[int]$responseProp.Value.StatusCode}
+        if($status -ne 404){throw ('GitHub graphics preset read failed (HTTP '+$status+'): '+$_.Exception.Message)}
     }
 
     $payload = [ordered]@{ SchemaVersion=1; ProfileName=$ProfileName }
@@ -2460,6 +2582,19 @@ function Sync-ProfileToGitHub {
         branch=$script:GithubBranch
     }
     if ($existingSha) { $body.sha = $existingSha }
+    $graphicsPreset=Get-ProfileGraphicsPreset -ProfileName $ProfileName
+    $graphicsPayload=[ordered]@{
+        SchemaVersion=1;ProfileName=$ProfileName;DisplayPolicy='ApplyPreset'
+        RefreshPolicy=[string]$graphicsPreset.RefreshPolicy;ScalingMode=[int]$graphicsPreset.ScalingMode
+        Settings=$graphicsPreset.Settings
+    }
+    $graphicsJson=$graphicsPayload|ConvertTo-Json -Depth 6
+    $graphicsBody=@{
+        message="Update $ProfileName CS2 graphics preset from CafeLauncher"
+        content=[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($graphicsJson+"`n"))
+        branch=$script:GithubBranch
+    }
+    if($existingGraphicsSha){$graphicsBody.sha=$existingGraphicsSha}
     # Stage a matching CFG update after validating its path, blob metadata, and SHA.
     # Empty sensitivity means "use the CFG's value" and does not edit the CFG.
     $sensValue=[string]$values['CS2Sensitivity']
@@ -2494,7 +2629,11 @@ function Sync-ProfileToGitHub {
         }
         $result = Invoke-RestMethod -Uri $uri -Method Put -Headers $headers -ContentType 'application/json' -Body ($body | ConvertTo-Json -Depth 5 -Compress) -TimeoutSec 25 -MaximumRedirection 0 -ErrorAction Stop
         if (-not $result.commit.sha) { throw 'GitHub did not return a successful commit.' }
-        Write-Log ("GitHub sync completed: "+$path+" updated; "+$cfgName+" "+$cfgStatus+"; commit="+$result.commit.sha)
+        $profileUploaded=$true
+        $graphicsResult=Invoke-RestMethod -Uri $graphicsUri -Method Put -Headers $headers -ContentType 'application/json' -Body ($graphicsBody|ConvertTo-Json -Depth 6 -Compress) -TimeoutSec 25 -MaximumRedirection 0 -ErrorAction Stop
+        if(-not $graphicsResult.commit.sha){throw ('GitHub did not confirm '+$graphicsPath+' update.')}
+        $graphicsUploaded=$true
+        Write-Log ("GitHub sync completed: "+$path+" and "+$graphicsPath+" updated; "+$cfgName+" "+$cfgStatus+"; graphics commit="+$graphicsResult.commit.sha)
     } catch {
         $status = $null
         $responseProp=$_.Exception.PSObject.Properties['Response']
@@ -2504,14 +2643,20 @@ function Sync-ProfileToGitHub {
         } elseif($status -eq 409 -or $status -eq 422) {
             'GitHub file versions changed; reload and retry.'
         } else { $_.Exception.Message }
-        if($cfgUploaded){
-            throw ("PARTIAL SYNC: "+$cfgName+" was updated, but "+$path+" was not confirmed saved. Retry Save & Sync. "+$detail)
+        if($cfgUploaded -or $profileUploaded){
+            $savedFiles=New-Object 'System.Collections.Generic.List[string]'
+            $remainingFiles=New-Object 'System.Collections.Generic.List[string]'
+            if($cfgUploaded){$savedFiles.Add($cfgName)}elseif($cfgBody){$remainingFiles.Add($cfgName)}
+            if($profileUploaded){$savedFiles.Add($path)}else{$remainingFiles.Add($path)}
+            if($graphicsUploaded){$savedFiles.Add($graphicsPath)}else{$remainingFiles.Add($graphicsPath)}
+            throw ("PARTIAL SYNC: saved ["+($savedFiles -join ', ')+"]. Not confirmed ["+($remainingFiles -join ', ') +"]. Retry Save & Sync. "+$detail)
         }
         throw ("GitHub sync failed; neither file was confirmed updated. "+$detail)
     } finally {
         $headers.Authorization = $null
         $body.content = $null
         if($cfgBody){$cfgBody.content=$null}
+        if($graphicsBody){$graphicsBody.content=$null}
     }
 }
 
@@ -2587,6 +2732,20 @@ function New-EditorTabNumber {
     [void](Add-EditorTabField -Grid $Grid -Title $Title -Control $numeric -Column $Column -Row $Row)
     return $numeric
 }
+function New-EditorTabChoice {
+    param($Grid,[string]$Title,[int]$Column,[int]$Row,[string[]]$Labels,[object[]]$Values,[object]$SelectedValue)
+    if($Labels.Count -ne $Values.Count -or $Labels.Count -lt 1){throw 'Choice control options are invalid.'}
+    $choice=New-Object System.Windows.Forms.ComboBox
+    $choice.DropDownStyle='DropDownList'
+    [void]$choice.Items.AddRange([object[]]$Labels)
+    $choice.Tag=$Values
+    $choice.SelectedIndex=0
+    for($i=0;$i -lt $Values.Count;$i++){
+        if([string]$Values[$i] -ceq [string]$SelectedValue){$choice.SelectedIndex=$i;break}
+    }
+    [void](Add-EditorTabField -Grid $Grid -Title $Title -Control $choice -Column $Column -Row $Row)
+    return $choice
+}
 function Add-EditorTabWide {
     param($Grid,$Control,[int]$Row)
     $Control.Dock='Fill'
@@ -2599,12 +2758,14 @@ function Add-EditorTabWide {
 function Show-ProfileEditor {
     param([Parameter(Mandatory=$true)][string]$ProfileName)
     Refresh-ProfileFromGitHub -ProfileName $ProfileName
+    $graphicsPreset=Get-ProfileGraphicsPreset -ProfileName $ProfileName
     $p = $script:GamingProfiles[$ProfileName]
     if (-not $p) { throw "Unknown profile: $ProfileName" }
     # GetNewClosure() creates a new dynamic module scope. The script: scope
     # inside a captured click handler is NOT the original launcher's script:
     # scope. Capture a reference to the real pending-sync dictionary here.
     $pendingSyncState = $script:PendingSync
+    $graphicsPresetState = $script:GraphicsPresets
     if ($null -eq $pendingSyncState -or $pendingSyncState -isnot [System.Collections.IDictionary]) {
         throw 'Profile sync state is missing; cannot safely edit this profile.'
     }
@@ -2693,7 +2854,7 @@ function Show-ProfileEditor {
     $nv.Checked=[bool]$p.ApplyNvidia
     Add-EditorTabWide -Grid $displayGrid -Control $nv -Row 2
 
-    $cs2Grid=New-EditorTabGrid -Page $cs2Page -Rows 4
+    $cs2Grid=New-EditorTabGrid -Page $cs2Page -Rows 15
     $cfgFile=New-Object System.Windows.Forms.TextBox
     $cfgFile.Text=[string]$p.ConfigFile
     $cfgFile.ReadOnly=$true
@@ -2714,6 +2875,36 @@ function Show-ProfileEditor {
     $cs2Hint.ForeColor=$MUTED
     Add-EditorTabWide -Grid $cs2Grid -Control $cs2Hint -Row 3
 
+    $graphicsHint=New-Object System.Windows.Forms.Label
+    $graphicsHint.Text='CS2 video settings: highest supported refresh is recommended; stretch mode uses NVIDIA scaling.'
+    $graphicsHint.ForeColor=$MUTED
+    Add-EditorTabWide -Grid $cs2Grid -Control $graphicsHint -Row 4
+    $gs=$graphicsPreset.Settings
+    $gameWidth=New-EditorTabNumber -Grid $cs2Grid -Title 'CS2 resolution width' -Column 0 -Row 5 -Min 640 -Max 7680 -Value ([int]$gs.Width)
+    $gameHeight=New-EditorTabNumber -Grid $cs2Grid -Title 'CS2 resolution height' -Column 1 -Row 5 -Min 480 -Max 4320 -Value ([int]$gs.Height)
+    $aspectChoice=New-EditorTabChoice -Grid $cs2Grid -Title 'CS2 aspect ratio' -Column 0 -Row 6 -Labels @('4:3','16:9','16:10') -Values @('0','1','2') -SelectedValue ([string]$gs.AspectRatioMode)
+    $fullscreenChoice=New-EditorTabChoice -Grid $cs2Grid -Title 'Display mode' -Column 1 -Row 6 -Labels @('Fullscreen','Windowed') -Values @('1','0') -SelectedValue ([string]$gs.Fullscreen)
+    $refreshPolicyChoice=New-EditorTabChoice -Grid $cs2Grid -Title 'CS2 refresh selection' -Column 0 -Row 7 -Labels @('Highest supported (recommended)','Use specific Hz') -Values @('Highest','Exact') -SelectedValue ([string]$graphicsPreset.RefreshPolicy)
+    $gameRefresh=New-EditorTabNumber -Grid $cs2Grid -Title 'Specific CS2 refresh (Hz)' -Column 1 -Row 7 -Min 24 -Max 600 -Value ([int]$(if($gs.RefreshHz){$gs.RefreshHz}else{360}))
+    $gameRefresh.Enabled=([string]$graphicsPreset.RefreshPolicy -eq 'Exact')
+    $refreshPolicyChoice.Add_SelectedIndexChanged({
+        $gameRefresh.Enabled=([string]$refreshPolicyChoice.Tag[$refreshPolicyChoice.SelectedIndex] -eq 'Exact')
+    }.GetNewClosure())
+    $scalingChoice=New-EditorTabChoice -Grid $cs2Grid -Title 'Stretch / scaling' -Column 0 -Row 8 -Labels @('Stretch to fill','Keep aspect ratio','Center without scaling') -Values @('2','5','3') -SelectedValue ([string]$graphicsPreset.ScalingMode)
+    $msaaChoice=New-EditorTabChoice -Grid $cs2Grid -Title 'Anti-aliasing (MSAA)' -Column 1 -Row 8 -Labels @('Off','2×','4×','8×','16×') -Values @('0','2','4','8','16') -SelectedValue ([string]$gs.MSAASamples)
+    $shadowChoice=New-EditorTabChoice -Grid $cs2Grid -Title 'Shadow quality' -Column 0 -Row 9 -Labels @('Low','Medium','High','Very high') -Values @('0','1','2','3') -SelectedValue ([string]$gs.ShadowQuality)
+    $dynamicShadowChoice=New-EditorTabChoice -Grid $cs2Grid -Title 'Dynamic shadows' -Column 1 -Row 9 -Labels @('Off','On') -Values @('0','1') -SelectedValue ([string]$gs.DynamicShadows)
+    $textureChoice=New-EditorTabChoice -Grid $cs2Grid -Title 'Texture detail' -Column 0 -Row 10 -Labels @('Low','Medium','High','Very high') -Values @('0','1','2','3') -SelectedValue ([string]$gs.TextureDetail)
+    $shaderChoice=New-EditorTabChoice -Grid $cs2Grid -Title 'Shader quality' -Column 1 -Row 10 -Labels @('Low','Medium','High') -Values @('0','1','2') -SelectedValue ([string]$gs.ShaderQuality)
+    $particleChoice=New-EditorTabChoice -Grid $cs2Grid -Title 'Particle detail' -Column 0 -Row 11 -Labels @('Low','Medium','High','Very high') -Values @('0','1','2','3') -SelectedValue ([string]$gs.ParticleDetail)
+    $aoChoice=New-EditorTabChoice -Grid $cs2Grid -Title 'Ambient occlusion' -Column 1 -Row 11 -Labels @('Off','Low','Medium','High') -Values @('0','1','2','3') -SelectedValue ([string]$gs.AmbientOcclusion)
+    $hdrChoice=New-EditorTabChoice -Grid $cs2Grid -Title 'HDR detail' -Column 0 -Row 12 -Labels @('Game default','Level 0','Level 1','Level 2','Level 3') -Values @('-1','0','1','2','3') -SelectedValue ([string]$gs.HDRDetail)
+    $reflexChoice=New-EditorTabChoice -Grid $cs2Grid -Title 'NVIDIA Reflex' -Column 1 -Row 12 -Labels @('Off','On','On + Boost') -Values @('0','1','2') -SelectedValue ([string]$gs.NvidiaReflex)
+    $filterChoice=New-EditorTabChoice -Grid $cs2Grid -Title 'Texture filtering level' -Column 0 -Row 13 -Labels @('Level 0','Level 1','Level 2','Level 3','Level 4','Level 5') -Values @('0','1','2','3','4','5') -SelectedValue ([string]$gs.TextureFiltering)
+    $fsrChoice=New-EditorTabChoice -Grid $cs2Grid -Title 'FSR level' -Column 1 -Row 13 -Labels @('Off','Level 1','Level 2','Level 3','Level 4') -Values @('0','1','2','3','4') -SelectedValue ([string]$gs.FSRDetail)
+    $vsyncChoice=New-EditorTabChoice -Grid $cs2Grid -Title 'Vertical sync' -Column 0 -Row 14 -Labels @('Off','On') -Values @('0','1') -SelectedValue ([string]$gs.VSync)
+    $cmaaChoice=New-EditorTabChoice -Grid $cs2Grid -Title 'CMAA' -Column 1 -Row 14 -Labels @('Off','On') -Values @('0','1') -SelectedValue ([string]$gs.CMAA)
+
     $editorFooter=New-Object System.Windows.Forms.TableLayoutPanel
     $editorFooter.Dock='Fill'
     $editorFooter.Padding=New-Object System.Windows.Forms.Padding(20,4,20,10)
@@ -2727,7 +2918,7 @@ function Show-ProfileEditor {
     [void]$editorFooter.RowStyles.Add((New-Object System.Windows.Forms.RowStyle('Percent',100)))
     $editorRoot.Controls.Add($editorFooter,0,2)
     $tip=New-Object System.Windows.Forms.Label
-    $tip.Text='Save locally or sync profile JSON + sensitivity to GitHub CFG. Click Apply to use edits.'
+    $tip.Text='Save the profile and CS2 graphics locally, or sync both to GitHub. Click Apply Graphics to use CS2 settings.'
     $tip.ForeColor=$MUTED
     $tip.Dock='Fill'
     $tip.AutoEllipsis=$true
@@ -2764,7 +2955,7 @@ function Show-ProfileEditor {
     $saveSync.FlatStyle='Flat'
     $saveSync.Dock='Fill'
     $editorFooter.Controls.Add($saveSync,1,2)
-    $saveSync.Tag='Sync this profile JSON and, if set, sensitivity in its matching CFG on GitHub.'
+    $saveSync.Tag='Sync this profile, its CS2 graphics preset, and (if set) sensitivity in its matching CFG on GitHub.'
 
     $cancel=New-Object System.Windows.Forms.Button
     $cancel.Text='Cancel'
@@ -2785,6 +2976,36 @@ function Show-ProfileEditor {
         }
         $cfgUrl=$url.Text.Trim()
         if ($cfgUrl) { Assert-ConfigUrl $cfgUrl }
+        $readChoiceValue={param($control)[string]$control.Tag[$control.SelectedIndex]}.GetNewClosure()
+        $graphicsSettings=[ordered]@{
+            Width=[int]$gameWidth.Value;Height=[int]$gameHeight.Value
+            AspectRatioMode=[int](& $readChoiceValue $aspectChoice)
+            Fullscreen=[int](& $readChoiceValue $fullscreenChoice)
+            RefreshHz=[int]$gameRefresh.Value
+            MSAASamples=[int](& $readChoiceValue $msaaChoice)
+            ShadowQuality=[int](& $readChoiceValue $shadowChoice)
+            DynamicShadows=[int](& $readChoiceValue $dynamicShadowChoice)
+            TextureDetail=[int](& $readChoiceValue $textureChoice)
+            ShaderQuality=[int](& $readChoiceValue $shaderChoice)
+            ParticleDetail=[int](& $readChoiceValue $particleChoice)
+            AmbientOcclusion=[int](& $readChoiceValue $aoChoice)
+            HDRDetail=[int](& $readChoiceValue $hdrChoice)
+            NvidiaReflex=[int](& $readChoiceValue $reflexChoice)
+            TextureFiltering=[int](& $readChoiceValue $filterChoice)
+            FSRDetail=[int](& $readChoiceValue $fsrChoice)
+            VSync=[int](& $readChoiceValue $vsyncChoice)
+            CMAA=[int](& $readChoiceValue $cmaaChoice)
+        }
+        $refreshPolicy=[string](& $readChoiceValue $refreshPolicyChoice)
+        if($refreshPolicy -eq 'Highest'){$graphicsSettings.Remove('RefreshHz')}
+        $scalingMode=[int](& $readChoiceValue $scalingChoice)
+        $graphicsPreset=[pscustomobject]@{
+            SchemaVersion=1;ProfileName=$ProfileName;DisplayPolicy='ApplyPreset'
+            RefreshPolicy=$refreshPolicy;ScalingMode=$scalingMode;Settings=$graphicsSettings
+        }
+        $graphicsPreset=ConvertTo-CafeGraphicsPreset -ProfileName $ProfileName -Preset $graphicsPreset
+        $graphicsPresetState[$ProfileName]=$graphicsPreset
+        $p.ScalingMode=$scalingMode
         $p.PointerSpeed=[int]$pointer.Value
         $p.LogitechDPI=[int]$logitechDpi.Value
         Assert-LogitechDPI $p.LogitechDPI
@@ -2800,7 +3021,7 @@ function Show-ProfileEditor {
         # Use the captured shared dictionary, not script: scope in this closure.
         $pendingSyncState[$ProfileName] = $true
         Save-ProfileSettings
-        Write-Log "$ProfileName edited locally: pointer=$($p.PointerSpeed), acceleration enabled=$(-not $p.DisableAcceleration), display=$($p.Width)x$($p.Height)@$($p.RefreshHz), vibrance=$($p.Vibrance)%, LogitechDPI=$($p.LogitechDPI), sensitivity=$sensValue."
+        Write-Log "$ProfileName edited locally: pointer=$($p.PointerSpeed), acceleration enabled=$(-not $p.DisableAcceleration), display=$($p.Width)x$($p.Height)@$($p.RefreshHz), CS2=$($graphicsPreset.Settings.Width)x$($graphicsPreset.Settings.Height) refresh=$refreshPolicy scaling=$scalingMode, vibrance=$($p.Vibrance)%, LogitechDPI=$($p.LogitechDPI), sensitivity=$sensValue."
     }.GetNewClosure()
 
     $saveLocal.Add_Click({
@@ -2820,14 +3041,14 @@ function Show-ProfileEditor {
         try {
             & $saveEditorValues
             $changes=if($sens.Text.Trim()){
-                "profiles/$ProfileName.json AND $($p.ConfigFile) (sensitivity only)"
+                "profiles/$ProfileName.json, graphics/$ProfileName.json AND $($p.ConfigFile) (sensitivity only)"
             }else{
-                "profiles/$ProfileName.json only (CFG unchanged: sensitivity blank)"
+                "profiles/$ProfileName.json and graphics/$ProfileName.json (CFG unchanged: sensitivity blank)"
             }
             $newline=[Environment]::NewLine
             $message="Save these files to GitHub branch $syncTargetBranch?"+$newline+
                 $changes+$newline+$newline+
-                'Other CFG binds and graphics presets will not be changed.'
+                'Only these profile files will be changed; other CFG binds remain untouched.'
             $confirm=[System.Windows.Forms.MessageBox]::Show(
                 $message,'Confirm GitHub sync','YesNo','Question')
             if($confirm -ne [System.Windows.Forms.DialogResult]::Yes){
@@ -2849,7 +3070,7 @@ function Show-ProfileEditor {
                 Sync-ProfileToGitHub -ProfileName $ProfileName -Token $token
                 $pendingSyncState[$ProfileName] = $false
                 Save-ProfileSettings
-                [System.Windows.Forms.MessageBox]::Show("$ProfileName settings committed to GitHub and saved locally.`nOther PCs can now download the new settings without signing in.`nIf CS2 sensitivity was set, it was also synced into the matching .cfg; binds and other commands remain unchanged.", 'GitHub sync complete', 'OK', 'Information') | Out-Null
+                [System.Windows.Forms.MessageBox]::Show("$ProfileName settings and CS2 graphics preset committed to GitHub and saved locally.`nOther PCs can now download the new settings without signing in.`nIf CS2 sensitivity was set, it was also synced into the matching .cfg; binds and other commands remain unchanged.", 'GitHub sync complete', 'OK', 'Information') | Out-Null
                 $dialog.DialogResult=[System.Windows.Forms.DialogResult]::OK
                 $dialog.Close()
             } finally {
@@ -3185,7 +3406,7 @@ function Invoke-GamingProfile {
         } }
     )
     if ($profile.ApplyNvidia) {
-        $steps += @{ Name = 'NVIDIA settings'; Action = { Apply-NvidiaGamingSettings -Width ([int]$profile.Width) -Height ([int]$profile.Height) -RefreshHz ([int]$profile.RefreshHz) -Vibrance ([int]$profile.Vibrance) } }
+        $steps += @{ Name = 'NVIDIA settings'; Action = { Apply-NvidiaGamingSettings -Width ([int]$profile.Width) -Height ([int]$profile.Height) -RefreshHz ([int]$profile.RefreshHz) -Vibrance ([int]$profile.Vibrance) -ScalingMode ([int]$profile.ScalingMode) } }
     }
     $profileCfgName = [string]$profile.ConfigFile
     if (-not [string]::IsNullOrWhiteSpace($profileCfgName)) {
@@ -3281,22 +3502,36 @@ function Invoke-GraphicsOnly {
     param([Parameter(Mandatory=$true)][string]$ModeName)
     Start-StepScope -Run ('Graphics '+$ModeName) -Step 'Apply Graphics'
     try {
-    $expected='c9383d974f94305e2077044718531180ea95270b'
+    $expected='d0e532bb054ba035d4f2e6b92a060a406d0a34fe'
     $source='https://raw.githubusercontent.com/fabjoncela/Cs-script/main/graphics/ApplyGraphics.ps1'
     $cache=Join-Path $env:LOCALAPPDATA 'CafeLauncher\graphics-module.ps1'
     $parent=Split-Path -Parent $cache
     if(-not (Test-Path -LiteralPath $parent)){[void](New-Item -Path $parent -ItemType Directory -Force)}
     $temp=Join-Path $env:TEMP ('CafeLauncher-graphics-module-'+[guid]::NewGuid().ToString('N')+'.ps1')
     try{
-        [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
-        Invoke-WebRequest -Uri $source -OutFile $temp -UseBasicParsing -TimeoutSec 12 -ErrorAction Stop
-        $bytes=[IO.File]::ReadAllBytes($temp)
-        if((Get-GitBlobSha -Bytes $bytes) -ne $expected){throw 'Cloud graphics module SHA does not match the reviewed launcher version.'}
-        $lines=[IO.File]::ReadAllLines($temp)
-        $tokens=$null;$errors=$null
-        [void][System.Management.Automation.Language.Parser]::ParseFile($temp,[ref]$tokens,[ref]$errors)
-        if(@($errors).Count){throw 'Downloaded graphics module has invalid PowerShell syntax.'}
-        Copy-Item -LiteralPath $temp -Destination $cache -Force -ErrorAction Stop
+        $localModule=Join-Path (Split-Path -Parent $env:CAFE_SCRIPT) 'graphics\ApplyGraphics.ps1'
+        $loadedLocal=$false
+        if(Test-Path -LiteralPath $localModule -PathType Leaf){
+            $localBytes=[IO.File]::ReadAllBytes($localModule)
+            if((Get-GitBlobSha -Bytes $localBytes) -eq $expected){
+                $localTokens=$null;$localErrors=$null
+                [void][System.Management.Automation.Language.Parser]::ParseFile($localModule,[ref]$localTokens,[ref]$localErrors)
+                if(@($localErrors).Count){throw 'Local graphics module has invalid PowerShell syntax.'}
+                Copy-Item -LiteralPath $localModule -Destination $cache -Force -ErrorAction Stop
+                $loadedLocal=$true
+                Write-Log 'Loaded the hash-verified graphics module beside this testing launcher.'
+            }
+        }
+        if(-not $loadedLocal){
+            [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+            Invoke-WebRequest -Uri $source -OutFile $temp -UseBasicParsing -TimeoutSec 12 -ErrorAction Stop
+            $bytes=[IO.File]::ReadAllBytes($temp)
+            if((Get-GitBlobSha -Bytes $bytes) -ne $expected){throw 'Cloud graphics module SHA does not match the reviewed launcher version.'}
+            $tokens=$null;$errors=$null
+            [void][System.Management.Automation.Language.Parser]::ParseFile($temp,[ref]$tokens,[ref]$errors)
+            if(@($errors).Count){throw 'Downloaded graphics module has invalid PowerShell syntax.'}
+            Copy-Item -LiteralPath $temp -Destination $cache -Force -ErrorAction Stop
+        }
     }catch{
         Write-Log ('Could not download graphics module: '+$_.Exception.Message) 'WARN'
     }finally{Remove-Item -LiteralPath $temp -Force -ErrorAction SilentlyContinue}

@@ -4,13 +4,15 @@ A portable Windows **CS2 internet-café setup launcher**. A single hybrid `cafe.
 
 [Technical architecture and maintenance notes](./context.md)
 
-> Current production launcher: **2026.10.13.24**. Features depend on the PC's hardware, installed programs and user permissions.
+> Testing branch build: **2026.10.14.1**. Features depend on the PC's hardware, installed programs and user permissions.
 
-## Dashboard and tabbed editor (v2026.10.13.24)
+## Dashboard and tabbed editor (testing build v2026.10.14.1)
 
-CafeLauncher now opens the **production dashboard**: five one-click player cards with independent **Apply**, **Play + Exec**, **Graphics**, and **Edit** actions; a selected-profile summary, the existing manual live DPI field, and collapsible live logs. Less-used shortcuts live on the **Tools & Apps** tab. Each profile editor has **Mouse**, **NVIDIA / Display**, and **CS2 / Apps** tabs with properly separated fields to avoid overlapped labels. The underlying profile and CS2 actions are the same as before.
+This testing build adds per-profile CS2 graphics controls to the existing **CS2 / Apps** tab. Choose the game's resolution, aspect ratio, fullscreen/windowed mode, highest or exact refresh, stretch behavior, and video quality settings using labeled controls. These are separate from the desktop resolution/refresh controls. **Save Locally** keeps the custom preset in `%LOCALAPPDATA%\CafeLauncher\profiles.json`; **Apply Graphics** uses pending local edits even while offline. **Save & Sync to GitHub** uploads the normal profile JSON, `graphics/<ProfileName>.json`, and only the matching CFG's sensitivity command if one is set. Binds and other CFG commands remain untouched.
 
-**Save Locally** retains the existing local JSON behavior. **Save & Sync to GitHub** asks which files will be written, then requests a fine-grained GitHub token: it updates `profiles/<ProfileName>.json` and, if CS2 sensitivity is nonblank, updates **only the matching profile CFG's sensitivity command** on GitHub `main`. Binds, crosshairs, comments and other CFG commands are preserved. If the CFG succeeds but the JSON upload fails, the launcher shows **PARTIAL SYNC** and keeps the local profile marked unsynced for retry. Use this only on a trusted machine; never enter a token on a shared café PC.
+The dashboard still has five independent player cards with **Apply**, **Play + Exec**, **Graphics**, and **Edit** actions, a selected-profile summary, a manual live DPI field, and collapsible live logs. Less-used shortcuts live on the **Tools & Apps** tab.
+
+**Save & Sync to GitHub** asks which files will be written, then requests a fine-grained GitHub token: it updates `profiles/<ProfileName>.json`, `graphics/<ProfileName>.json`, and, if CS2 sensitivity is nonblank, **only the matching profile CFG's sensitivity command** on GitHub `main`. Binds, crosshairs, comments and other CFG commands are preserved. Partial uploads name which files were saved and keep the local profile marked unsynced for retry. Use this only on a trusted machine; never enter a token on a shared café PC.
 
 The production **Check for Updates** and startup update prompt are enabled again. Updating uses GitHub blob verification, a PowerShell syntax check and Windows CRLF normalization. No installation or administrator account is required to open the GUI.
 
@@ -28,9 +30,9 @@ The production **Check for Updates** and startup update prompt are enabled again
 
 Each player row now contains **the original mode**, **Play + Exec**, and **Apply Graphics**. The graphics button does **not** trigger mouse/NVIDIA settings, Steam launch options, CS2 startup, or Launch All. Likewise, mode selection and Play + Exec do **not** automatically edit CS2 graphics.
 
-Graphics presets are **separate JSON files**, independent of the normal profile preferences:
+The canonical graphics presets remain **separate JSON files** so each profile can have its own CS2 configuration. The editor saves a local override in that profile's local settings until it is synced:
 
-| Button | Editable graphics preset |
+| Button | Canonical graphics preset |
 | --- | --- |
 | FabMode → Apply Graphics | [graphics/FabMode.json](./graphics/FabMode.json) |
 | ArliMode → Apply Graphics | [graphics/ArliMode.json](./graphics/ArliMode.json) |
@@ -38,11 +40,11 @@ Graphics presets are **separate JSON files**, independent of the normal profile 
 | ArmlMode → Apply Graphics | [graphics/ArmlMode.json](./graphics/ArmlMode.json) |
 | OliMode → Apply Graphics | [graphics/OliMode.json](./graphics/OliMode.json) |
 
-On click, CafeLauncher downloads the corresponding public JSON (or a previously cached copy), detects the signed-in Steam account via the Windows registry, and edits **only recognized fields** in that account's `userdata/<Steam3ID>/730/local/cfg/cs2_video.txt`. It backs up the original under `%LOCALAPPDATA%\CafeLauncher\graphics-backups\<Steam3ID>` before any change and verifies the result. It refuses to edit while CS2 is running.
+On click, CafeLauncher uses an unsynced local editor preset first; otherwise it downloads the corresponding public JSON (or a previously cached copy). It detects the signed-in Steam account via the Windows registry, and edits **only recognized fields** in that account's `userdata/<Steam3ID>/730/local/cfg/cs2_video.txt`. It backs up the original under `%LOCALAPPDATA%\CafeLauncher\graphics-backups\<Steam3ID>` before any change and verifies the result. It refuses to edit while CS2 is running.
 
-Supported JSON fields are `Width`, `Height`, `RefreshHz`, `AspectRatioMode`, `Fullscreen`, `MSAASamples`, `ShadowQuality`, `DynamicShadows`, `TextureDetail`, `ShaderQuality`, `ParticleDetail`, `AmbientOcclusion`, `HDRDetail`, `NvidiaReflex`, `TextureFiltering`, `FSRDetail`, `VSync`, and `CMAA`. Change each mode's JSON independently on GitHub; **Save & Sync to GitHub in the normal profile editor does not update these files**.
+Supported graphics fields are `Width`, `Height`, `RefreshHz`, `AspectRatioMode`, `Fullscreen`, `MSAASamples`, `ShadowQuality`, `DynamicShadows`, `TextureDetail`, `ShaderQuality`, `ParticleDetail`, `AmbientOcclusion`, `HDRDetail`, `NvidiaReflex`, `TextureFiltering`, `FSRDetail`, `VSync`, and `CMAA`. Each profile owns its own graphics preset, edited in the CS2 / Apps tab.
 
-**Graphics presets:** **FabMode, ArliMode, ArmlMode, and OliMode** currently share identical graphics preferences: **1280×960, 4:3, fullscreen**, 8× MSAA and the same advanced-video options. Each still has its **own editable JSON file**, so they can be customized independently later. **BrileMode** applies **1920×1080, fullscreen 16:9** and its original advanced-video defaults. For every preset, Apply Graphics independently selects the highest progressive refresh rate advertised at that preset's CS2 resolution and writes it into CS2; this can differ from the Windows desktop resolution and refresh. If no supported rate is advertised for that resolution, the launcher preserves the existing CS2 display settings and reports the fallback. Missing CS2 keys are skipped; unrelated and hardware-specific fields (`Version`, `VendorID`, `DeviceID`, monitor index) are preserved.
+**Graphics presets:** **FabMode, ArliMode, ArmlMode, and OliMode** currently share identical graphics preferences: **1280×960, 4:3, fullscreen**, 8× MSAA and the same advanced-video options. Each has its own editable preset. **BrileMode** applies **1920×1080, fullscreen 16:9** and its original advanced-video defaults. Highest refresh is selected for the CS2 game resolution, which can differ from the Windows desktop resolution and refresh. If the selected exact mode or any highest supported mode is unavailable, the launcher preserves the existing CS2 display settings and reports the fallback. Missing CS2 keys are skipped; unrelated and hardware-specific fields (`Version`, `VendorID`, `DeviceID`, monitor index) are preserved.
 
 If CS2 isn't installed/signed in yet, open and save its video settings at least once to create `cs2_video.txt`. Close CS2 before applying graphics; the game writes these settings itself and could overwrite edits while running.
 
@@ -72,7 +74,7 @@ The **Onboard button is currently commented out/disabled** pending hardware test
 
 ## Edit a profile
 
-**Tabbed editor (v2026.10.13.24):** Mouse, NVIDIA / Display, and CS2 / Apps each have their own tab. The new layout prevents width, height, refresh rate and Logitech DPI labels overlapping their input boxes. Profiles still skip G HUB when launching other applications.
+**Tabbed editor:** Mouse, NVIDIA / Display, and CS2 / Apps have their own tabs. CS2 graphics options are grouped with CS2 and app settings in the CS2 / Apps tab. The new layout prevents width, height, refresh rate and Logitech DPI labels overlapping their input boxes. Profiles still skip G HUB when launching other applications.
 
 Click **Edit** on ArliMode's dashboard card (or any other profile) to change:
 
@@ -84,13 +86,13 @@ Click **Edit** on ArliMode's dashboard card (or any other profile) to change:
 
 **Save Locally:** saves to `%LOCALAPPDATA%\CafeLauncher\profiles.json`. No GitHub login. Changes remain local and may be erased by Deep Freeze.
 
-**Save & Sync to GitHub:** saves locally, then asks for a **fine-grained GitHub personal access token** restricted to this repository with **Contents: Read and write**. On success, the launcher updates `profiles/<ProfileName>.json` on `main` and the matching `.cfg` sensitivity when provided; you see a confirmation showing exactly which files will be updated. It does not intentionally save the token. **Never enter a GitHub token on a shared café PC.**
+**Save & Sync to GitHub:** saves locally, then asks for a **fine-grained GitHub personal access token** restricted to this repository with **Contents: Read and write**. On success, the launcher updates `profiles/<ProfileName>.json`, `graphics/<ProfileName>.json`, and the matching `.cfg` sensitivity when provided; the confirmation shows exactly which files will be updated. It does not intentionally save the token. **Never enter a GitHub token on a shared café PC.**
 
 The launcher fetches public cloud JSON when editing or applying a profile **unless it has unsynced local edits**. Those local edits take precedence until synced. Saving an edit does not immediately apply the PC settings: click the profile button to apply.
 
 ### Updating CFG binds and crosshair
 
-**Save & Sync updates the profile's JSON and, when CS2 sensitivity is nonblank, also updates that profile's original `.cfg` sensitivity command on GitHub.** All other CFG binds, crosshair settings, and commands stay unchanged. A blank sensitivity leaves the CFG untouched. If the CFG commits but JSON fails, the launcher warns **PARTIAL SYNC** and keeps the local profile unsynced; retry Save & Sync. To change Arli's other binds, crosshair, or CS2 commands, continue editing `arli.cfg` in your local clone and push:
+**Save & Sync updates the profile JSON and graphics preset and, when CS2 sensitivity is nonblank, also updates that profile's original `.cfg` sensitivity command on GitHub.** All other CFG binds, crosshair settings, and commands stay unchanged. A blank sensitivity leaves the CFG untouched. If one upload fails after earlier commits, the launcher warns **PARTIAL SYNC**, identifies committed files, and keeps the local profile unsynced; retry Save & Sync. To change Arli's other binds, crosshair, or CS2 commands, continue editing `arli.cfg` in your local clone and push:
 
 ```powershell
 git add arli.cfg

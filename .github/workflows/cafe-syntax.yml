@@ -13,6 +13,12 @@ on:
       - 'tools/Test-SuperlightDevice.ps1'
       - 'tools/Test-StepResults.ps1'
       - 'tools/Test-LogitechDPI.ps1'
+      - 'tools/Update-Context.ps1'
+      - 'tools/Test-ContextFreshness.ps1'
+      - 'context.md'
+      - 'AGENTS.md'
+      - '.githooks/**'
+      - 'tools/Install-GitHooks.ps1'
       - 'graphics/**'
       - '.github/workflows/cafe-syntax.yml'
   push:
@@ -27,6 +33,12 @@ on:
       - 'tools/Test-NvidiaCompatibility.ps1'
       - 'tools/Test-SuperlightDevice.ps1'
       - 'tools/Test-StepResults.ps1'
+      - 'tools/Update-Context.ps1'
+      - 'tools/Test-ContextFreshness.ps1'
+      - 'context.md'
+      - 'AGENTS.md'
+      - '.githooks/**'
+      - 'tools/Install-GitHooks.ps1'
       - 'graphics/**'
       - '.github/workflows/cafe-syntax.yml'
   workflow_dispatch:
@@ -42,6 +54,10 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+      - name: Check project context matches launcher release
+        shell: powershell
+        run: |
+          & "$env:GITHUB_WORKSPACE\tools\Test-ContextFreshness.ps1"
       - name: Check embedded PowerShell syntax and Windows line endings
         shell: powershell
         run: |

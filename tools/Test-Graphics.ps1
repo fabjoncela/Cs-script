@@ -154,7 +154,7 @@ foreach($name in $profileNames){
         if([int]$values['Width'] -ne 1920 -or [int]$values['Height'] -ne 1080 -or
            [int]$values['AspectRatioMode'] -ne 1 -or [int]$values['Fullscreen'] -ne 1 -or
            $values.Contains('RefreshHz')){
-            throw 'BrileMode must request native 1920x1080 fullscreen 16:9 and preserve refresh.'
+            throw 'BrileMode must request native 1920x1080 fullscreen 16:9 and use resolution-specific highest refresh.'
         }
         if([int]$values['MSAASamples'] -ne 2 -or [int]$values['TextureDetail'] -ne 0 -or
            [int]$values['NvidiaReflex'] -ne 1){
@@ -179,8 +179,8 @@ $brileSettings=ConvertTo-VideoGraphicsSettings -Preset $brilePreset
 if((Assert-CS2GraphicsDisplayPolicy -Preset $brilePreset) -cne 'ApplyPreset' -or
    [int]$brileSettings['Width'] -ne 1920 -or [int]$brileSettings['Height'] -ne 1080 -or
    [int]$brileSettings['AspectRatioMode'] -ne 1 -or [int]$brileSettings['Fullscreen'] -ne 1 -or
-   $brileSettings.Contains('RefreshHz')){
-    throw 'BrileMode must apply 1920x1080 fullscreen 16:9 and leave refresh rate unchanged.'
+   $brileSettings.Contains('RefreshHz') -or $brilePreset.RefreshPolicy -cne 'Highest'){
+    throw 'BrileMode must apply 1920x1080 fullscreen 16:9 and select the highest advertised refresh for that game resolution.'
 }
 $legacyBrile=[pscustomobject]@{ProfileName='BrileMode';Settings=[pscustomobject]@{Width=$null;Height=$null;RefreshHz=$null;AspectRatioMode=$null;Fullscreen=$null}}
 if((Assert-CS2GraphicsDisplayPolicy -Preset $legacyBrile) -cne 'PreserveCurrent'){
@@ -258,3 +258,25 @@ if($displaySource -notmatch '(?s)function Apply-NvidiaGamingSettings.*?TrySetDis
     throw 'The profile display apply must choose the maximum refresh at the profile resolution.'
 }
 Write-Host 'PASS: Windows File.Replace backups, Steam account guard, desktop and CS2-resolution refresh selection, five graphics presets, and graphics ranges.'
+
+# Locally saved, unsynced graphics must be applied before any cloud/cache fetch.
+$oldLocalAppData=$env:LOCALAPPDATA
+$oldCafeScript=$env:CAFE_SCRIPT
+$localSandbox=Join-Path $env:TEMP ('CafeLauncher-GraphicsLocal-'+[guid]::NewGuid().ToString('N'))
+try{
+    $env:LOCALAPPDATA=$localSandbox
+    $env:CAFE_SCRIPT=(Join-Path $root 'cafe.bat')
+    [void](New-Item -ItemType Directory -Path (Join-Path $localSandbox 'CafeLauncher') -Force)
+    $localSettings=[ordered]@{FabMode=@{SyncPending=$true;GraphicsSettings=[pscustomobject]@{
+        SchemaVersion=1;ProfileName='FabMode';DisplayPolicy='ApplyPreset';RefreshPolicy='Highest';ScalingMode=2
+        Settings=[pscustomobject]@{Width=1280;Height=960;MSAASamples=4}
+    }}}
+    $localSettings|ConvertTo-Json -Depth 8|Set-Content -LiteralPath (Join-Path $localSandbox 'CafeLauncher\profiles.json') -Encoding UTF8
+    $localApplied=Get-CS2ModeGraphicsPreset -ModeName 'FabMode'
+    if([int]$localApplied.Settings.MSAASamples -ne 4){throw 'Unsynced local graphics edits were not preferred.'}
+}finally{
+    $env:LOCALAPPDATA=$oldLocalAppData
+    $env:CAFE_SCRIPT=$oldCafeScript
+    Remove-Item -LiteralPath $localSandbox -Recurse -Force -ErrorAction SilentlyContinue
+}
+Write-Host 'PASS: unsynced local CS2 graphics customizations are preferred for Apply Graphics.'

@@ -27,9 +27,10 @@ foreach($name in @('Export-ProfileValues','Save-ProfileSettings')){
     Invoke-Expression $found[0].Extent.Text
 }
 function Write-Log {param([string]$Message,[string]$Level='INFO');Write-Host $Message}
-$p=@{PointerSpeed=10;LogitechDPI=800;DisableAcceleration=$true;ApplyNvidia=$true;Width=1920;Height=1080;RefreshHz=360;Vibrance=75;CS2Sensitivity='';CfgDownloadUrl='';LaunchApps=$true}
+$p=@{PointerSpeed=10;LogitechDPI=800;DisableAcceleration=$true;ApplyNvidia=$true;Width=1920;Height=1080;RefreshHz=360;Vibrance=75;ScalingMode=2;CS2Sensitivity='';CfgDownloadUrl='';LaunchApps=$true}
 $script:GamingProfiles=[ordered]@{FabMode=$p.Clone();OliMode=$p.Clone()}
 $script:PendingSync=@{FabMode=$false;OliMode=$false}
+$script:GraphicsPresets=[ordered]@{OliMode=[pscustomobject]@{SchemaVersion=1;ProfileName='OliMode';RefreshPolicy='Highest';ScalingMode=2;Settings=[ordered]@{Width=1280;Height=960;MSAASamples=8}}}
 $folder=Join-Path $env:TEMP ('CafeLauncher-SaveTest-'+[guid]::NewGuid().ToString('N'))
 $script:ProfileSettingsPath=Join-Path $folder 'profiles.json'
 function Test-CapturedSave {
@@ -46,7 +47,7 @@ function Test-CapturedSave {
 try {
     Test-CapturedSave 'OliMode' $true
     $result=Get-Content -LiteralPath $script:ProfileSettingsPath -Raw | ConvertFrom-Json
-    if($result.OliMode.SyncPending -ne $true -or $result.OliMode.PointerSpeed -ne 10 -or $result.OliMode.LogitechDPI -ne 800){throw 'Local save did not persist expected JSON.'}
+    if($result.OliMode.SyncPending -ne $true -or $result.OliMode.PointerSpeed -ne 10 -or $result.OliMode.LogitechDPI -ne 800 -or $result.OliMode.GraphicsSettings.Settings.MSAASamples -ne 8){throw 'Local save did not persist profile and CS2 graphics JSON.'}
     $script:GamingProfiles['OliMode']['LogitechDPI']=1600
     Test-CapturedSave 'OliMode' $false
     $result=Get-Content -LiteralPath $script:ProfileSettingsPath -Raw | ConvertFrom-Json
