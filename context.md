@@ -3,7 +3,7 @@
 This file gives Codex and maintainers the operational context needed to work safely in this repository. **Always follow the checked-out source tree.** The generated state block below reports the launcher release marker, not whether that code has shipped to `main`.
 
 <!-- BEGIN GENERATED LAUNCHER STATE -->
-- Launcher release: `2026.10.14.17`
+- Launcher release: `2026.10.14.18`
 - Generated from the unique `# CAFE_RELEASE` marker in `cafe.bat` by `tools/Update-Context.ps1`.
 <!-- END GENERATED LAUNCHER STATE -->
 
@@ -49,6 +49,8 @@ The CS2 / Apps editor can capture saved video settings from the running Steam cl
 The CS2 / Apps editor can load the three previous versions of `graphics/<ProfileName>.json` from GitHub commit history. The commit list is cached per profile for 24 hours; manual refresh bypasses the cache. Restoring fetches the selected file version over the internet, validates it, and fills the editor without saving or applying it. Saving or syncing remains a separate user action. History is not available offline unless it is already listed in the fresh cache; fetching an older preset still requires internet.
 
 Dashboard **Apply Graphics** is a separate action from the normal profile Apply and **Play + Exec** buttons. Saving in the editor does not apply the settings immediately.
+
+- The Mouse tab's pointer-speed editor uses the classic Windows Mouse Properties slider's 11 levels, mapped to the same underlying MouseSensitivity values (1, 2, 4, ..., 20). The apply logic remains unchanged. Existing custom intermediate values are retained unless the user actively chooses a dropdown level.
 
 ### Local and GitHub persistence
 

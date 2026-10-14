@@ -4,7 +4,7 @@ start "" powershell.exe -NoProfile -ExecutionPolicy Bypass -STA -WindowStyle Hid
 exit /b
 
 # POWERSHELL_GUI
-# CAFE_RELEASE=2026.10.14.17
+# CAFE_RELEASE=2026.10.14.18
 
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
@@ -4034,7 +4034,24 @@ function Show-ProfileEditor {
     }
 
     $mouseGrid=New-EditorTabGrid -Page $mousePage -Rows 3
-    $pointer=New-EditorTabNumber -Grid $mouseGrid -Title 'Windows pointer speed (1-20)' -Column 0 -Row 0 -Min 1 -Max 20 -Value ([int]$p.PointerSpeed)
+    $pointerSpeedValues=@(1,2,4,6,8,10,12,14,16,18,20)
+    $pointerSpeedLabels=@(
+        '1/11 - Slowest (1)';'2/11 (2)';'3/11 (4)';'4/11 (6)';'5/11 (8)';
+        '6/11 - Default (10)';'7/11 (12)';'8/11 (14)';'9/11 (16)';'10/11 (18)';'11/11 - Fastest (20)'
+    )
+    $pointerSpeedOriginalValue=[int]$p.PointerSpeed
+    $pointerSpeedSelectedIndex=[Array]::IndexOf([int[]]$pointerSpeedValues,$pointerSpeedOriginalValue)
+    if($pointerSpeedSelectedIndex -lt 0){
+        $pointerSpeedSelectedIndex=0
+        $pointerSpeedDistance=[int]::MaxValue
+        for($i=0;$i -lt $pointerSpeedValues.Count;$i++){
+            $distance=[Math]::Abs([int]$pointerSpeedValues[$i]-$pointerSpeedOriginalValue)
+            if($distance -lt $pointerSpeedDistance){$pointerSpeedDistance=$distance;$pointerSpeedSelectedIndex=$i}
+        }
+    }
+    $pointer=New-EditorTabChoice -Grid $mouseGrid -Title 'Windows pointer speed (11 levels)' -Column 0 -Row 0 -Labels $pointerSpeedLabels -Values $pointerSpeedValues -SelectedValue $pointerSpeedValues[$pointerSpeedSelectedIndex]
+    $pointerSpeedSelectionState=@{UserChanged=$false}
+    $pointer.add_SelectionChangeCommitted({$pointerSpeedSelectionState.UserChanged=$true}.GetNewClosure())
     $logitechDpi=New-EditorTabNumber -Grid $mouseGrid -Title 'Logitech DPI (live, per profile)' -Column 1 -Row 0 -Min 100 -Max 25600 -Value ([int]$p.LogitechDPI)
     $logitechDpi.Increment=50
     $accel=New-Object System.Windows.Forms.CheckBox
@@ -4042,7 +4059,11 @@ function Show-ProfileEditor {
     $accel.Checked= -not [bool]$p.DisableAcceleration
     Add-EditorTabWide -Grid $mouseGrid -Control $accel -Row 1
     $mouseHint=New-Object System.Windows.Forms.Label
-    $mouseHint.Text='Live DPI uses your better-logihub helper. G HUB is not launched by profiles.'
+    if($pointerSpeedOriginalValue -in $pointerSpeedValues){
+        $mouseHint.Text='Choices match Windows Mouse Properties (11 levels). Live DPI uses better-logihub; profiles do not launch G HUB.'
+    }else{
+        $mouseHint.Text="This profile's custom pointer value ($pointerSpeedOriginalValue) is preserved unless you choose a level. Live DPI uses better-logihub; profiles do not launch G HUB."
+    }
     $mouseHint.ForeColor=$MUTED
     Add-EditorTabWide -Grid $mouseGrid -Control $mouseHint -Row 2
 
@@ -4452,7 +4473,11 @@ function Show-ProfileEditor {
         $graphicsPreset=ConvertTo-CafeGraphicsPreset -ProfileName $ProfileName -Preset $graphicsPreset
         $graphicsPresetState[$ProfileName]=$graphicsPreset
         $p.ScalingMode=$scalingMode
-        $p.PointerSpeed=[int]$pointer.Value
+        if($pointerSpeedSelectionState.UserChanged){
+            $p.PointerSpeed=[int](& $readChoiceValue $pointer)
+        }else{
+            $p.PointerSpeed=$pointerSpeedOriginalValue
+        }
         $p.LogitechDPI=[int]$logitechDpi.Value
         Assert-LogitechDPI $p.LogitechDPI
         $p.DisableAcceleration= -not $accel.Checked

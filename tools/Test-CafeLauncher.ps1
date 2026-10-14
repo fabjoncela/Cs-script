@@ -78,6 +78,11 @@ if($psSource -notmatch 'function Apply-NvidiaGamingSettings' -or
     throw 'Profile-level NVIDIA and CS2 CFG functions must remain accessible.'
 }
 foreach($requiredEditorFeature in @(
+    '$pointerSpeedValues=@(1,2,4,6,8,10,12,14,16,18,20)',
+    'New-EditorTabChoice -Grid $mouseGrid -Title ''Windows pointer speed (11 levels)''',
+    '$pointer.add_SelectionChangeCommitted',
+    '$pointerSpeedSelectionState.UserChanged',
+    '$p.PointerSpeed=$pointerSpeedOriginalValue',
     '$cs2Page.Text=''CS2 / Apps''',
     '$cs2Grid=New-EditorTabGrid -Page $cs2Page -Rows 19',
     '$captureGraphics.Text=''Capture from CS2''',
@@ -96,6 +101,24 @@ foreach($requiredEditorFeature in @(
     if($psSource -notmatch [regex]::Escape($requiredEditorFeature)){
         throw ('CS2 Graphics editor/local/cloud persistence feature missing: '+$requiredEditorFeature)
     }
+}
+$pointerValuesAst=@($psAst.FindAll({
+    param($node) $node -is [Management.Automation.Language.AssignmentStatementAst] -and
+        $node.Left.Extent.Text -eq '$pointerSpeedValues'
+},$true))
+$pointerLabelsAst=@($psAst.FindAll({
+    param($node) $node -is [Management.Automation.Language.AssignmentStatementAst] -and
+        $node.Left.Extent.Text -eq '$pointerSpeedLabels'
+},$true))
+if($pointerValuesAst.Count -ne 1 -or $pointerLabelsAst.Count -ne 1){
+    throw 'The pointer-speed dropdown must define one value list and one label list.'
+}
+$pointerValues=@(Invoke-Expression $pointerValuesAst[0].Right.Extent.Text)
+$pointerLabels=@(Invoke-Expression $pointerLabelsAst[0].Right.Extent.Text)
+if($pointerValues.Count -ne 11 -or $pointerLabels.Count -ne 11 -or
+   [string]::Join(',', [string[]]$pointerValues) -ne '1,2,4,6,8,10,12,14,16,18,20' -or
+   [Array]::IndexOf([int[]]$pointerValues,10) -ne 5){
+    throw 'Pointer speed dropdown must have the 11 classic Windows levels and map its default 6/11 position to value 10.'
 }
 $copyHandlerStart=$psSource.IndexOf('$copyGraphics.Add_Click({')
 $copyHandlerEnd=$psSource.IndexOf('$restoreHistory.Add_Click({',$copyHandlerStart)
