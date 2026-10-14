@@ -4,7 +4,7 @@ start "" powershell.exe -NoProfile -ExecutionPolicy Bypass -STA -WindowStyle Hid
 exit /b
 
 # POWERSHELL_GUI
-# CAFE_RELEASE=2026.10.14.15
+# CAFE_RELEASE=2026.10.14.16
 
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
@@ -4200,15 +4200,15 @@ function Show-ProfileEditor {
                 RefreshPolicy=[string]$sourcePreset.RefreshPolicy;ScalingMode=[int]$sourcePreset.ScalingMode
                 Settings=$sourcePreset.Settings
             }
-            [void](& $applyGraphicsPresetToEditor $copyPreset)
+            $copyResult=& $applyGraphicsPresetToEditor $copyPreset
             $status.Text=('Copied '+$sourceName+' CS2 graphics into this editor. Save to keep the changes.')
             $status.ForeColor=[System.Drawing.Color]::FromArgb(255,190,105)
             Write-Log ("Copied CS2 graphics from "+$sourceName+" to "+$ProfileName+" in the editor; changes are not saved yet.")
         }catch{
             Write-Log ("Copy graphics to "+$ProfileName+" failed: "+$_.Exception.Message) 'WARN'
-            [void][System.Windows.Forms.MessageBox]::Show(
+            $null=[System.Windows.Forms.MessageBox]::Show(
                 ("Could not copy "+$sourceName+" graphics:`n"+$_.Exception.Message),
-                'Copy CS2 Graphics','OK','Warning')|Out-Null
+                'Copy CS2 Graphics','OK','Warning')
         }finally{$dialog.Cursor=[System.Windows.Forms.Cursors]::Default}
     }.GetNewClosure())
 
@@ -4216,15 +4216,15 @@ function Show-ProfileEditor {
         try{
             $dialog.Cursor=[System.Windows.Forms.Cursors]::WaitCursor
             $defaults=Get-ProfileGraphicsPreset -ProfileName $ProfileName -Canonical
-            [void](& $applyGraphicsPresetToEditor $defaults)
+            $resetResult=& $applyGraphicsPresetToEditor $defaults
             $status.Text=('Reset '+$ProfileName+' CS2 graphics to its canonical profile defaults. Save to keep the changes.')
             $status.ForeColor=[System.Drawing.Color]::FromArgb(255,190,105)
             Write-Log ("Reset "+$ProfileName+" CS2 graphics in the editor to canonical profile defaults; changes are not saved yet.")
         }catch{
             Write-Log ("Reset graphics for "+$ProfileName+" failed: "+$_.Exception.Message) 'WARN'
-            [void][System.Windows.Forms.MessageBox]::Show(
+            $null=[System.Windows.Forms.MessageBox]::Show(
                 ("Could not load "+$ProfileName+" profile defaults:`n"+$_.Exception.Message),
-                'Reset CS2 Graphics','OK','Warning')|Out-Null
+                'Reset CS2 Graphics','OK','Warning')
         }finally{$dialog.Cursor=[System.Windows.Forms.Cursors]::Default}
     }.GetNewClosure())
 

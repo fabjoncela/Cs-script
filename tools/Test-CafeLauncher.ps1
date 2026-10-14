@@ -97,6 +97,16 @@ foreach($requiredEditorFeature in @(
         throw ('CS2 Graphics editor/local/cloud persistence feature missing: '+$requiredEditorFeature)
     }
 }
+$copyHandlerStart=$psSource.IndexOf('$copyGraphics.Add_Click({')
+$copyHandlerEnd=$psSource.IndexOf('$restoreHistory.Add_Click({',$copyHandlerStart)
+if($copyHandlerStart -lt 0 -or $copyHandlerEnd -le $copyHandlerStart){
+    throw 'Copy/reset graphics event handlers could not be located for PowerShell compatibility checks.'
+}
+$copyAndResetHandlers=$psSource.Substring($copyHandlerStart,$copyHandlerEnd-$copyHandlerStart)
+if($copyAndResetHandlers -match '\[void\]\(& \$applyGraphicsPresetToEditor' -or
+   $copyAndResetHandlers -match '\[void\]\[System\.Windows\.Forms\.MessageBox\]::Show'){
+    throw 'Copy/reset event handlers must avoid void-typed expressions inside try/catch because Windows PowerShell can fail compiling them at click time.'
+}
 # Launch All button should still start G HUB, but every player-profile
 # LaunchApps path must skip it so the external DPI helper stays in control.
 $definitions=@{}
