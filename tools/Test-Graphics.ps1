@@ -5,6 +5,18 @@ $root=Split-Path -Parent $PSScriptRoot
 $module=Join-Path $root 'graphics\ApplyGraphics.ps1'
 $bat=Join-Path $root 'cafe.bat'
 $source=[IO.File]::ReadAllText($module)
+$moduleBytes=[Text.Encoding]::UTF8.GetBytes(($source -replace "`r`n","`n"))
+$hashHeader=[Text.Encoding]::UTF8.GetBytes(('blob '+$moduleBytes.Length+[char]0))
+$hashInput=New-Object byte[] ($hashHeader.Length+$moduleBytes.Length)
+[Array]::Copy($hashHeader,0,$hashInput,0,$hashHeader.Length)
+[Array]::Copy($moduleBytes,0,$hashInput,$hashHeader.Length,$moduleBytes.Length)
+$sha1=[Security.Cryptography.SHA1]::Create()
+try{$moduleBlobHash=([BitConverter]::ToString($sha1.ComputeHash($hashInput))).Replace('-','').ToLowerInvariant()}finally{$sha1.Dispose()}
+$launcher=[IO.File]::ReadAllText((Join-Path $root 'cafe.bat'))
+$pinPattern=[regex]::Escape('$expected=')+[char]39+[regex]::Escape($moduleBlobHash)+[char]39
+if($launcher -notmatch $pinPattern){
+    throw 'Launcher graphics-module pin does not match the reviewed local module blob.'
+}
 $tok=$null;$errors=$null
 [void][System.Management.Automation.Language.Parser]::ParseInput($source,[ref]$tok,[ref]$errors)
 if(@($errors).Count -gt 0){throw ('Graphics module syntax error: '+$errors[0].Message)}
@@ -70,8 +82,13 @@ try {
     $backup=Join-Path $backups 'cs2_video-original.txt'
     $encoding=New-Object System.Text.UTF8Encoding($false)
     [IO.File]::WriteAllText($target,$fixture,$encoding)
+    $script:TestSteamVideoPath=$target
+    $script:TestSteamAccountID='123'
+    function Get-ActiveSteamCS2Video {
+        return [pscustomobject]@{Path=$script:TestSteamVideoPath;AccountID=$script:TestSteamAccountID}
+    }
     $proposed=Update-CS2VideoGraphicsText -Text $fixture -Settings ([ordered]@{MSAASamples=2})
-    Save-CS2VideoFileWithBackup -VideoPath $target -UpdatedText $proposed.Text -Encoding $encoding -BackupPath $backup
+    Save-CS2VideoFileWithBackup -VideoPath $target -ExpectedAccountID '123' -UpdatedText $proposed.Text -Encoding $encoding -BackupPath $backup
     if ([IO.File]::ReadAllText($target,$encoding) -cne $proposed.Text) {
         throw 'The real Windows replacement did not save the new video text.'
     }
@@ -86,9 +103,16 @@ try {
     # Refuse a backup in a missing directory before touching the video file.
     $badBackup=Join-Path $sandbox 'missing-parent\backup.txt'
     $preFailure=[IO.File]::ReadAllText($target,$encoding)
+    $accountFailure=$false
+    try {
+        Save-CS2VideoFileWithBackup -VideoPath $target -ExpectedAccountID '456' -UpdatedText $fixture -Encoding $encoding -BackupPath (Join-Path $backups 'wrong-account.txt')
+    } catch { $accountFailure=$_.Exception.Message -match 'active Steam account changed' }
+    if (-not $accountFailure -or [IO.File]::ReadAllText($target,$encoding) -cne $preFailure) {
+        throw 'A Steam account change must refuse the graphics write and preserve the existing video file.'
+    }
     $failed=$false
     try {
-        Save-CS2VideoFileWithBackup -VideoPath $target -UpdatedText $fixture -Encoding $encoding -BackupPath $badBackup
+        Save-CS2VideoFileWithBackup -VideoPath $target -ExpectedAccountID '123' -UpdatedText $fixture -Encoding $encoding -BackupPath $badBackup
     } catch { $failed=$true }
     if (-not $failed -or [IO.File]::ReadAllText($target,$encoding) -cne $preFailure) {
         throw 'Graphics backup failure must not change the existing video file.'
@@ -162,4 +186,4 @@ if(-not ('FabDisplayNative' -as [type]) -or
 if([FabDisplayNative]::IsAdvertisedMode(1,1,0)){
     throw 'Invalid resolution must not pass display mode validation.'
 }
-Write-Host 'PASS: actual Windows File.Replace with backups, safe failure, five graphics presets, selective edits, graphics ranges, hardware preservation, and standalone GUI trigger.'
+Write-Host 'PASS: Windows File.Replace backups, Steam account revalidation, five graphics presets, selective edits, graphics ranges, hardware preservation, and standalone GUI trigger.'

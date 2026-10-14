@@ -105,6 +105,22 @@ if($functions['Start-LogihubAsyncDownload'] -notmatch [regex]::Escape($releaseUr
 if($request -match 'Remove-Item\s+-LiteralPath\s+\$script:LogihubExe'){
     throw 'Do not delete the existing helper before a replacement is verified.'
 }
+if($request -notmatch 'LogihubRequestGeneration\+\+' -or
+   $functions['Set-LogitechLiveDPI'] -notmatch 'Test-SameSuperlight' -or
+   $functions['Set-LogitechLiveDPI'] -notmatch 'Schedule-LogitechDpiVerification' -or
+   $functions['Schedule-LogitechDpiVerification'] -notmatch 'context\.Generation -ne \$script:LogihubRequestGeneration'){
+    throw 'Latest DPI request, device revalidation, and delayed read-back protections are required.'
+}
+Invoke-Expression $functions['Test-SameSuperlight']
+$expectedDevice=[pscustomobject]@{Index=2;Model='pro_x_2_wireless_mouse'}
+if(-not (Test-SameSuperlight $expectedDevice ([pscustomobject]@{Index=2;Model='pro_x_2_wireless_mouse'})) -or
+   (Test-SameSuperlight $expectedDevice ([pscustomobject]@{Index=2;Model='pro_x_wireless_mouse'})) -or
+   (Test-SameSuperlight $expectedDevice ([pscustomobject]@{Index=3;Model='pro_x_2_wireless_mouse'}))){
+    throw 'DPI target revalidation must reject a changed index or model.'
+}
+Invoke-Expression $functions['Get-LogitechDPIReadback']
+function Invoke-Logihub { param([string[]]$Arguments) return "2 PRO X SUPERLIGHT 2 800`n" }
+if((Get-LogitechDPIReadback -DeviceIndex 2) -ne 800){throw 'DPI read-back parser failed.'}
 if($source -notmatch 'c54d'){
     throw 'C54D helper integration is missing.'
 }

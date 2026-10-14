@@ -143,6 +143,7 @@ function Update-CS2VideoGraphicsText {
 # Never use null as File.Replace's third argument on Windows PowerShell 5.1.
 function Save-CS2VideoFileWithBackup {
     param([Parameter(Mandatory=$true)][string]$VideoPath,
+          [Parameter(Mandatory=$true)][string]$ExpectedAccountID,
           [Parameter(Mandatory=$true)][string]$UpdatedText,
           [Parameter(Mandatory=$true)][System.Text.Encoding]$Encoding,
           [Parameter(Mandatory=$true)][string]$BackupPath)
@@ -157,12 +158,24 @@ function Save-CS2VideoFileWithBackup {
     $swapBackup=Join-Path $parent ('cs2_video.cafe-'+$id+'.bak')
     $replaced=$false
     $safeToRemoveSwap=$false
+    # Steam can change accounts while the launcher remains open. Validate the
+    # destination again at the last write boundary, not only during discovery.
+    $active=Get-ActiveSteamCS2Video
+    if($active.AccountID -cne $ExpectedAccountID -or
+       -not [string]::Equals([IO.Path]::GetFullPath($active.Path),[IO.Path]::GetFullPath($VideoPath),[StringComparison]::OrdinalIgnoreCase)){
+        throw 'The active Steam account changed during graphics preparation. No video settings were written.'
+    }
     # The permanent backup is written before any replacement attempt.
     Copy-Item -LiteralPath $VideoPath -Destination $BackupPath -ErrorAction Stop
     try {
         [IO.File]::WriteAllText($temp,$UpdatedText,$Encoding)
         if (Get-Process -Name cs2 -ErrorAction SilentlyContinue) {
             throw 'CS2 started while preparing graphics. Original video file kept.'
+        }
+        $active=Get-ActiveSteamCS2Video
+        if($active.AccountID -cne $ExpectedAccountID -or
+           -not [string]::Equals([IO.Path]::GetFullPath($active.Path),[IO.Path]::GetFullPath($VideoPath),[StringComparison]::OrdinalIgnoreCase)){
+            throw 'The active Steam account changed immediately before graphics replacement. Original video file kept.'
         }
         # File.Replace requires a LEGAL, NON-NULL third path on Windows.
         # Keep it next to the target for same-volume atomic replacement.
@@ -245,7 +258,7 @@ function Apply-CS2ModeGraphics {
         $backupFolder=Join-Path $env:LOCALAPPDATA ("CafeLauncher\graphics-backups\"+$active.AccountID)
         if(-not (Test-Path -LiteralPath $backupFolder)){[void](New-Item -ItemType Directory -Path $backupFolder -Force)}
         $backup=Join-Path $backupFolder ("cs2_video-"+$ModeName+'-'+(Get-Date -Format 'yyyyMMdd-HHmmss-fff')+'.txt')
-        Save-CS2VideoFileWithBackup -VideoPath $active.Path -UpdatedText $edit.Text -Encoding $encoding -BackupPath $backup
+        Save-CS2VideoFileWithBackup -VideoPath $active.Path -ExpectedAccountID $active.AccountID -UpdatedText $edit.Text -Encoding $encoding -BackupPath $backup
         Write-Log ("Applied "+$edit.Applied.Count+' graphics keys for '+$ModeName+' (Steam '+$active.AccountID+'). Backup: '+$backup)
         [void][System.Windows.Forms.MessageBox]::Show(
             ($ModeName+' graphics applied. Launch CS2 to use them.'+[Environment]::NewLine+

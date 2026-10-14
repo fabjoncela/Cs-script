@@ -2843,6 +2843,9 @@ $script:LogihubDownloadProcess=$null
 $script:LogihubDownloadTimer=$null
 $script:LogihubRequestedDPI=$null
 $script:LogihubDownloadStatus=$null
+$script:LogihubRequestGeneration=0
+$script:LiveDpiVerificationTimer=$null
+$script:LiveDpiVerificationContext=$null
 $script:LogihubExpectedSHA='dc30e45d4ba1df7d043c7c9a0aacda4257e09f5f23bb980466b985b77aa7dda4'
 $script:LogihubDirectory=Join-Path $env:LOCALAPPDATA 'CafeLauncher\logihub'
 $script:LogihubExe=Join-Path $script:LogihubDirectory 'logihub.exe'
@@ -2936,6 +2939,7 @@ function Request-LogitechLiveDPI {
     param([int]$DPI=800)
     Assert-LogitechDPI $DPI
     # Latest-click-wins: a later profile changes the target DPI, not the download.
+    $script:LogihubRequestGeneration++
     $script:LogihubRequestedDPI=$DPI
     $script:LogihubRequestedRun=if($script:StepScope){$script:StepScope.Run}else{'Manual DPI'}
     # A cached upstream/older executable must never run; download the pinned fork
@@ -3011,6 +3015,50 @@ function Get-SelectedSuperlight {
     return $selected
 }
 
+function Test-SameSuperlight {
+    param($Expected,$Actual)
+    return ($Expected -and $Actual -and [int]$Expected.Index -eq [int]$Actual.Index -and
+        [string]$Expected.Model -ceq [string]$Actual.Model)
+}
+function Get-LogitechDPIReadback {
+    param([int]$DeviceIndex)
+    $read=Invoke-Logihub -Arguments @('dpi','get','--device',([string]$DeviceIndex))
+    foreach($line in @($read -split '\r?\n' | Where-Object {$_ -match '\S'})){
+        if($line -match ('^\s*'+$DeviceIndex+'\s+.+?\s+(\d+)\s*$')){return [int]$Matches[1]}
+    }
+    throw ('Logitech DPI read-back cannot be parsed for device '+$DeviceIndex+': '+$read)
+}
+function Schedule-LogitechDpiVerification {
+    param($Target,[int]$DPI,[int]$Generation,[string]$Run)
+    if($script:LiveDpiVerificationTimer){$script:LiveDpiVerificationTimer.Stop();$script:LiveDpiVerificationTimer.Dispose()}
+    $script:LiveDpiVerificationContext=[pscustomobject]@{Target=$Target;DPI=$DPI;Generation=$Generation;Run=$Run}
+    $script:LiveDpiVerificationTimer=New-Object System.Windows.Forms.Timer
+    $script:LiveDpiVerificationTimer.Interval=1500
+    $script:LiveDpiVerificationTimer.Add_Tick({
+        $timer=$script:LiveDpiVerificationTimer
+        $timer.Stop()
+        $context=$script:LiveDpiVerificationContext
+        try {
+            if(-not $context -or $context.Generation -ne $script:LogihubRequestGeneration){return}
+            Start-StepScope -Run $context.Run -Step 'Delayed Logitech DPI verification'
+            $current=Get-SelectedSuperlight
+            if(-not (Test-SameSuperlight -Expected $context.Target -Actual $current)){
+                Write-Log 'The connected Superlight changed after DPI apply; delayed verification did not target a different mouse.' 'WARN'
+            }else{
+                $actual=Get-LogitechDPIReadback -DeviceIndex ([int]$context.Target.Index)
+                if($actual -ne $context.DPI){Write-Log ('DPI changed after apply: requested '+$context.DPI+', delayed read-back '+$actual+'. G HUB or onboard profile may have restored it.') 'WARN'}
+                else{Write-Log ('Delayed Logitech DPI verification passed: '+$actual+' DPI.')}
+            }
+            Complete-StepScope -Detail 'Delayed read-back checks whether another Logitech profile changed DPI after application.'
+            Write-RunSummary -Run $context.Run
+        }catch{
+            if($script:StepScope){Write-Log ('Delayed Logitech DPI verification failed: '+$_.Exception.Message) 'WARN';Complete-StepScope -Detail 'Delayed DPI could not be verified.';Write-RunSummary -Run $context.Run}
+            else{Write-Log ('Delayed Logitech DPI verification skipped: '+$_.Exception.Message) 'WARN'}
+        }finally{$timer.Dispose();$script:LiveDpiVerificationTimer=$null;$script:LiveDpiVerificationContext=$null}
+    })
+    $script:LiveDpiVerificationTimer.Start()
+}
+
 function Set-LogitechLiveDPI {
     param([int]$DPI=800)
     Assert-LogitechDPI $DPI
@@ -3018,19 +3066,23 @@ function Set-LogitechLiveDPI {
         Write-Log 'G HUB detected; leaving it running. It may override the DPI later.' 'WARN'
     }
     $target=Get-SelectedSuperlight
-    [void](Invoke-Logihub -Arguments @('dpi','set',([string]$DPI),'--device',([string]$target.Index)))
-    $read=Invoke-Logihub -Arguments @('dpi','get','--device',([string]$target.Index))
-    $deviceIndex=[int]$target.Index
-    $readValue=$null
-    foreach($line in @($read -split '\r?\n' | Where-Object {$_ -match '\S'})){
-        if($line -match ('^\s*'+$deviceIndex+'\s+.+?\s+(\d+)\s*$')){
-            $readValue=[int]$Matches[1]
-            break
-        }
+    # Device indexes are enumeration-scoped; revalidate directly before write.
+    $current=Get-SelectedSuperlight
+    if(-not (Test-SameSuperlight -Expected $target -Actual $current)){
+        throw 'The connected Superlight changed during DPI detection. No DPI write was attempted; retry.'
     }
-    if($null -eq $readValue){throw ('Logitech DPI read-back cannot be parsed for device '+$deviceIndex+': '+$read)}
+    $target=$current
+    [void](Invoke-Logihub -Arguments @('dpi','set',([string]$DPI),'--device',([string]$target.Index)))
+    $after=Get-SelectedSuperlight
+    if(-not (Test-SameSuperlight -Expected $target -Actual $after)){
+        throw 'The connected Superlight changed during DPI apply; read-back was not attributed to a different device.'
+    }
+    $deviceIndex=[int]$target.Index
+    $readValue=Get-LogitechDPIReadback -DeviceIndex $deviceIndex
     if($readValue -ne $DPI){throw ('Logitech DPI verification failed: requested '+$DPI+' but mouse reports '+$readValue)}
     Write-Log ('Logitech live DPI verified: requested '+$DPI+'; read-back '+$readValue+' (device '+$deviceIndex+').')
+    $run=if($script:StepScope){$script:StepScope.Run}elseif($script:LogihubRequestedRun){$script:LogihubRequestedRun}else{'Manual DPI'}
+    Schedule-LogitechDpiVerification -Target $target -DPI $DPI -Generation $script:LogihubRequestGeneration -Run $run
 }
 function Set-LogitechOnboardDPI {
     param([int]$DPI=800)
@@ -3190,8 +3242,8 @@ function Invoke-GraphicsOnly {
     param([Parameter(Mandatory=$true)][string]$ModeName)
     Start-StepScope -Run ('Graphics '+$ModeName) -Step 'Apply Graphics'
     try {
-    $expected='f6dbb6d21ceeecc32166c73a14e0d8d2e9066971'
-    $source='https://raw.githubusercontent.com/fabjoncela/Cs-script/main/graphics/ApplyGraphics.ps1'
+    $expected='b2041ca886c888ebfc939324cd6c2b0940b03f9b'
+    $source='https://raw.githubusercontent.com/fabjoncela/Cs-script/codex/fabmode-bugfix/graphics/ApplyGraphics.ps1'
     $cache=Join-Path $env:LOCALAPPDATA 'CafeLauncher\graphics-module.ps1'
     $parent=Split-Path -Parent $cache
     if(-not (Test-Path -LiteralPath $parent)){[void](New-Item -Path $parent -ItemType Directory -Force)}
@@ -3597,6 +3649,7 @@ $root.Controls.Add($footer,0,3)
 
 $form.Add_FormClosed({
     if($script:LogihubDownloadTimer){$script:LogihubDownloadTimer.Stop();$script:LogihubDownloadTimer.Dispose();$script:LogihubDownloadTimer=$null}
+    if($script:LiveDpiVerificationTimer){$script:LiveDpiVerificationTimer.Stop();$script:LiveDpiVerificationTimer.Dispose();$script:LiveDpiVerificationTimer=$null}
     $script:LogihubRequestedDPI=$null
     if ($script:ColorWatchTimer) {
         try {$script:ColorWatchTimer.Stop();$script:ColorWatchTimer.Dispose()}catch{}
