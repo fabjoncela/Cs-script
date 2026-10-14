@@ -4,7 +4,7 @@ start "" powershell.exe -NoProfile -ExecutionPolicy Bypass -STA -WindowStyle Hid
 exit /b
 
 # POWERSHELL_GUI
-# CAFE_RELEASE=2026.10.14.33
+# CAFE_RELEASE=2026.10.14.34
 
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
@@ -5208,6 +5208,35 @@ function Get-LogitechDPIReadback {
     }
     throw ('Logitech DPI read-back cannot be parsed for device '+$DeviceIndex+': '+$read)
 }
+function Get-LogitechOnboardMode {
+    param($Target)
+    $current=Get-SelectedSuperlight
+    if(-not (Test-SameSuperlight -Expected $Target -Actual $current)){
+        throw 'The connected Superlight changed before its mode was read.'
+    }
+    $json=Invoke-Logihub -Arguments @('onboard','mode','get','--json','--device',([string]$Target.Index))
+    try{$result=ConvertFrom-Json -InputObject $json -ErrorAction Stop}
+    catch{throw ('Could not parse Logitech mode response: '+$_.Exception.Message)}
+    if($null -eq $result.device -or [int]$result.device -ne [int]$Target.Index){throw 'Logitech mode response was missing the expected device index.'}
+    $mode=([string]$result.mode).Trim().ToLowerInvariant()
+    if($mode -notin @('onboard','host')){throw ('Logitech reported an unsupported mode: '+$mode)}
+    return $mode
+}
+function Invoke-LogitechDPISetAndReadback {
+    param($Target,[int]$DPI)
+    $current=Get-SelectedSuperlight
+    if(-not (Test-SameSuperlight -Expected $Target -Actual $current)){
+        throw 'The connected Superlight changed before DPI apply; no write was attempted.'
+    }
+    [void](Invoke-Logihub -Arguments @('dpi','set',([string]$DPI),'--device',([string]$current.Index)))
+    $after=Get-SelectedSuperlight
+    if(-not (Test-SameSuperlight -Expected $current -Actual $after)){
+        throw 'The connected Superlight changed during DPI apply; read-back was not attributed to a different device.'
+    }
+    $actual=Get-LogitechDPIReadback -DeviceIndex ([int]$current.Index)
+    if($actual -ne $DPI){throw ('DPI read-back was '+$actual+', expected '+$DPI)}
+    return $actual
+}
 function Schedule-LogitechDpiVerification {
     param($Target,[int]$DPI,[int]$Generation,[string]$Run)
     if($script:LiveDpiVerificationTimer){$script:LiveDpiVerificationTimer.Stop();$script:LiveDpiVerificationTimer.Dispose()}
@@ -5248,23 +5277,56 @@ function Set-LogitechLiveDPI {
         Write-Log 'G HUB detected; leaving it running. It may override the DPI later.' 'WARN'
     }
     $target=Get-SelectedSuperlight
-    # Device indexes are enumeration-scoped; revalidate directly before write.
-    $current=Get-SelectedSuperlight
-    if(-not (Test-SameSuperlight -Expected $target -Actual $current)){
-        throw 'The connected Superlight changed during DPI detection. No DPI write was attempted; retry.'
-    }
-    $target=$current
-    [void](Invoke-Logihub -Arguments @('dpi','set',([string]$DPI),'--device',([string]$target.Index)))
-    $after=Get-SelectedSuperlight
-    if(-not (Test-SameSuperlight -Expected $target -Actual $after)){
-        throw 'The connected Superlight changed during DPI apply; read-back was not attributed to a different device.'
-    }
     $deviceIndex=[int]$target.Index
-    $readValue=Get-LogitechDPIReadback -DeviceIndex $deviceIndex
-    if($readValue -ne $DPI){throw ('Logitech DPI verification failed: requested '+$DPI+' but mouse reports '+$readValue)}
-    Write-Log ('Logitech live DPI verified: requested '+$DPI+'; read-back '+$readValue+' (device '+$deviceIndex+').')
+    $usedHostFallback=$false
+    $standardFailure=$null
+    try{$readValue=Invoke-LogitechDPISetAndReadback -Target $target -DPI $DPI}
+    catch{$standardFailure=$_.Exception.Message}
+    if($standardFailure){
+        if([string]$target.Model -cne 'pro_x_wireless_mouse'){
+            throw ('Logitech DPI verification failed: requested '+$DPI+'; '+$standardFailure)
+        }
+        Write-Log ('Superlight 1 standard DPI path did not verify ('+$standardFailure+'); trying host-mode fallback.') 'WARN'
+        $switchedToHost=$false
+        try{
+            $current=Get-SelectedSuperlight
+            if(-not (Test-SameSuperlight -Expected $target -Actual $current)){
+                throw 'The connected Superlight changed before host-mode fallback; no mode change was attempted.'
+            }
+            $mode=Get-LogitechOnboardMode -Target $current
+            Write-Log ('Superlight 1 host-mode fallback: current mode is '+$mode+'.')
+            if($mode -eq 'onboard'){
+                $switchedToHost=$true
+                Write-Log 'Switching Superlight 1 to host mode for the live DPI retry.'
+                [void](Invoke-Logihub -Arguments @('onboard','mode','set','off','--device',([string]$deviceIndex)))
+            }
+            $verifiedMode=Get-LogitechOnboardMode -Target $current
+            if($verifiedMode -ne 'host'){throw ('Host-mode switch was not verified; mode='+$verifiedMode)}
+            $readValue=Invoke-LogitechDPISetAndReadback -Target $current -DPI $DPI
+            $usedHostFallback=$true
+            Write-Log ('Superlight 1 host-mode DPI fallback verified: requested '+$DPI+'; read-back '+$readValue+' (device '+$deviceIndex+'); mouse remains in host mode.')
+        }catch{
+            $fallbackFailure=$_.Exception.Message
+            if($switchedToHost){
+                try{
+                    $now=Get-SelectedSuperlight
+                    if(Test-SameSuperlight -Expected $target -Actual $now){
+                        [void](Invoke-Logihub -Arguments @('onboard','mode','set','on','--device',([string]$deviceIndex)))
+                        $restoredMode=Get-LogitechOnboardMode -Target $target
+                        if($restoredMode -ne 'onboard'){throw ('Onboard-mode restoration was not verified; mode='+$restoredMode)}
+                        Write-Log 'Superlight 1 host-mode fallback failed; onboard mode restoration verified.' 'WARN'
+                    }else{$fallbackFailure+='; mouse identity changed so onboard-mode restoration was skipped'}
+                }catch{$fallbackFailure+='; failed to restore onboard mode: '+$_.Exception.Message}
+            }
+            throw ('Standard DPI path failed ('+$standardFailure+'); Superlight 1 host-mode fallback failed ('+$fallbackFailure+').')
+        }
+    }else{
+        Write-Log ('Logitech live DPI verified: requested '+$DPI+'; read-back '+$readValue+' (device '+$deviceIndex+').')
+    }
     $run=if($script:StepScope){$script:StepScope.Run}elseif($script:LogihubRequestedRun){$script:LogihubRequestedRun}else{'Manual DPI'}
-    Set-RunOutcome -Run $run -Setting 'Logitech live DPI' -Requested ([string]$DPI) -Target ($target.Name+' device '+$deviceIndex) -Status APPLIED -Actual ([string]$readValue) -Detail 'Device identity was revalidated before applying and reading back DPI.'
+    $detail='Device identity was revalidated before applying and reading back DPI.'
+    if($usedHostFallback){$detail='Standard path failed read-back; Superlight 1 host-mode fallback applied and verified DPI. Host mode remains active.'}
+    Set-RunOutcome -Run $run -Setting 'Logitech live DPI' -Requested ([string]$DPI) -Target ($target.Name+' device '+$deviceIndex) -Status APPLIED -Actual ([string]$readValue) -Detail $detail
     Schedule-LogitechDpiVerification -Target $target -DPI $DPI -Generation $script:LogihubRequestGeneration -Run $run
 }
 function Set-LogitechOnboardDPI {
