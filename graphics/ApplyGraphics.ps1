@@ -122,7 +122,7 @@ function Get-CS2ModeGraphicsPreset {
             'Cache-Control'='no-cache'
             Pragma='no-cache'
         }
-        $file=Invoke-RestMethod -Uri $url -Method Get -TimeoutSec 12 -MaximumRedirection 0 -Headers $headers -ErrorAction Stop
+        $file=Invoke-CafeGitHubRestMethod -Uri $url -Method Get -TimeoutSec 12 -MaximumRedirection 0 -Headers $headers
         if($file.type -ne 'file' -or $file.path -cne "graphics/$ModeName.json" -or
             $file.encoding -ne 'base64' -or [string]$file.sha -notmatch '^[a-fA-F0-9]{40}$' -or
             [string]::IsNullOrWhiteSpace([string]$file.content) -or [int64]$file.size -gt 1048576){

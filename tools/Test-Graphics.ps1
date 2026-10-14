@@ -19,6 +19,7 @@ if($launcher -notmatch $pinPattern){
 }
 if($source -notmatch 'api\.github\.com/repos/fabjoncela/Cs-script/contents/graphics/\$ModeName\.json\?ref=main' -or
    $source -notmatch 'FromBase64String' -or $source -notmatch 'Cache-Control.*no-cache' -or
+   $source -notmatch 'Invoke-CafeGitHubRestMethod' -or $source -match 'Invoke-RestMethod' -or
    $launcher -notmatch 'raw\.githubusercontent\.com/fabjoncela/Cs-script/main/graphics/ApplyGraphics\.ps1'){
     throw 'Graphics presets must use validated GitHub Contents API data; the pinned module source must follow main.'
 }
@@ -138,68 +139,41 @@ try {
     Remove-Item -LiteralPath $sandbox -Recurse -Force -ErrorAction SilentlyContinue
 }
 
-# All profile graphics files stay independent; four currently share the same
-# video settings. Under Highest, an optional legacy RefreshHz hint is nonbinding.
-# BrileMode uses native 1080p fullscreen 16:9.
+# Synced profile files are user data and may be customized. Validate identity,
+# schema, policy, and supported values without pinning them to preset defaults.
 $profileNames=@('FabMode','ArliMode','BrileMode','ArmlMode','OliMode')
-$identicalToFab=@('FabMode','ArliMode','ArmlMode','OliMode')
-$fabPreset=Get-Content -LiteralPath (Join-Path $root 'graphics\FabMode.json') -Raw | ConvertFrom-Json
-$fabValues=ConvertTo-VideoGraphicsSettings -Preset $fabPreset
-if ([int]$fabValues['Width'] -ne 1280 -or [int]$fabValues['Height'] -ne 960 -or
-    [int]$fabValues['AspectRatioMode'] -ne 0 -or
-    [int]$fabValues['Fullscreen'] -ne 1){
-    throw 'FabMode must specify 1280x960, 4:3, fullscreen.'
-}
-if($fabPreset.RefreshPolicy -notin @('Highest','Exact') -or
-   ($fabPreset.RefreshPolicy -eq 'Exact' -and [int]$fabValues['RefreshHz'] -ne 360)){
-    throw 'FabMode must use Highest refresh or explicitly request 360Hz when using Exact refresh.'
-}
 foreach($name in $profileNames){
     $file=Join-Path $root ('graphics\'+$name+'.json')
     $json=Get-Content -LiteralPath $file -Raw | ConvertFrom-Json
     if([int]$json.SchemaVersion -ne 1 -or $json.ProfileName -cne $name){throw 'Preset schema/name mismatch.'}
+    [void](Assert-CS2GraphicsDisplayPolicy -Preset $json)
     $values=ConvertTo-VideoGraphicsSettings -Preset $json
-    if($values.Count -lt 5){throw ('Too few actual video settings in '+$name+' preset.')}
-    if($name -in $identicalToFab){
-        $fabCompareKeys=@($fabValues.Keys|Where-Object{$_ -ne 'RefreshHz'})
-        $profileCompareKeys=@($values.Keys|Where-Object{$_ -ne 'RefreshHz'})
-        if($profileCompareKeys.Count -ne $fabCompareKeys.Count){throw ($name+' graphics field count differs from FabMode.')}
-        foreach($key in $fabCompareKeys){
-            if(-not $values.Contains($key) -or [int]$values[$key] -ne [int]$fabValues[$key]){
-                throw ($name+' graphics setting '+$key+' differs from FabMode.')
-            }
-        }
-    }elseif($name -eq 'BrileMode'){
-        if([int]$values['Width'] -ne 1920 -or [int]$values['Height'] -ne 1080 -or
-           [int]$values['AspectRatioMode'] -ne 1 -or [int]$values['Fullscreen'] -ne 1 -or
-           $values.Contains('RefreshHz')){
-            throw 'BrileMode must request native 1920x1080 fullscreen 16:9 and use resolution-specific highest refresh.'
-        }
-        if([int]$values['MSAASamples'] -ne 2 -or [int]$values['TextureDetail'] -ne 0 -or
-           [int]$values['NvidiaReflex'] -ne 1){
-            throw 'BrileMode original advanced-video defaults changed unexpectedly.'
-        }
-    }else{
-        if($values.Contains('Width') -or $values.Contains('Height') -or $values.Contains('RefreshHz') -or
-           $values.Contains('AspectRatioMode') -or $values.Contains('Fullscreen')){
-            throw ($name+' must preserve the existing PC-specific display settings.')
-        }
-        if([int]$values['MSAASamples'] -ne 2 -or [int]$values['TextureDetail'] -ne 0 -or
-           [int]$values['NvidiaReflex'] -ne 1){
-            throw 'BrileMode original advanced-video defaults changed unexpectedly.'
-        }
-    }
+    if($values.Count -lt 1){throw ('No recognized graphics settings in '+$name+' profile.')}
 }
-$brilePreset=Get-Content -LiteralPath (Join-Path $root 'graphics\BrileMode.json') -Raw | ConvertFrom-Json
-if($brilePreset.DisplayPolicy -cne 'ApplyPreset'){
-    throw 'BrileMode must explicitly apply its native-resolution display settings.'
+# Prove a valid customization is accepted independently for every profile.
+foreach($name in $profileNames){
+    $custom=Get-Content -LiteralPath (Join-Path $root ('graphics\'+$name+'.json')) -Raw | ConvertFrom-Json
+    $custom.Settings.MSAASamples=4
+    $customValues=ConvertTo-VideoGraphicsSettings -Preset $custom
+    if([int]$customValues['MSAASamples'] -ne 4){throw ($name+' customized graphics value was rejected.')}
 }
+# Keep baseline preset expectations in test data, separate from the live,
+# user-customizable graphics/<Profile>.json files.
+$presetFixtures=Get-Content -LiteralPath (Join-Path $PSScriptRoot 'fixtures\graphics-presets.json') -Raw | ConvertFrom-Json
+$fabFixture=$presetFixtures.FabMode
+$fabFixtureValues=ConvertTo-VideoGraphicsSettings -Preset $fabFixture
+if([int]$fabFixtureValues['Width'] -ne 1280 -or [int]$fabFixtureValues['Height'] -ne 960 -or
+   [int]$fabFixtureValues['AspectRatioMode'] -ne 0 -or [int]$fabFixtureValues['Fullscreen'] -ne 1 -or
+   $fabFixture.RefreshPolicy -cne 'Highest'){
+    throw 'FabMode baseline fixture must describe 1280x960 4:3 fullscreen with highest refresh.'
+}
+$brilePreset=$presetFixtures.BrileMode
 $brileSettings=ConvertTo-VideoGraphicsSettings -Preset $brilePreset
 if((Assert-CS2GraphicsDisplayPolicy -Preset $brilePreset) -cne 'ApplyPreset' -or
    [int]$brileSettings['Width'] -ne 1920 -or [int]$brileSettings['Height'] -ne 1080 -or
    [int]$brileSettings['AspectRatioMode'] -ne 1 -or [int]$brileSettings['Fullscreen'] -ne 1 -or
    $brileSettings.Contains('RefreshHz') -or $brilePreset.RefreshPolicy -cne 'Highest'){
-    throw 'BrileMode must apply 1920x1080 fullscreen 16:9 and select the highest advertised refresh for that game resolution.'
+    throw 'BrileMode baseline fixture must describe native 1920x1080 fullscreen 16:9 with highest refresh.'
 }
 $legacyBrile=[pscustomobject]@{ProfileName='BrileMode';Settings=[pscustomobject]@{Width=$null;Height=$null;RefreshHz=$null;AspectRatioMode=$null;Fullscreen=$null}}
 if((Assert-CS2GraphicsDisplayPolicy -Preset $legacyBrile) -cne 'PreserveCurrent'){
@@ -321,7 +295,7 @@ try{
     }
     $script:GraphicsApiFixture=$cloudFixture
     $script:GraphicsApiRequest=$null
-    function Invoke-RestMethod {
+    function Invoke-CafeGitHubRestMethod {
         [CmdletBinding()]
         param([string]$Uri,[string]$Method,[int]$TimeoutSec,[int]$MaximumRedirection,$Headers)
         $script:GraphicsApiRequest=[pscustomobject]@{Uri=$Uri;Method=$Method;Headers=$Headers}

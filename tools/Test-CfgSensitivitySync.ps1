@@ -80,7 +80,7 @@ foreach($name in @('FabMode','ArliMode','BrileMode','ArmlMode','OliMode')){
     $script:FakeFiles[('profiles/'+$name+'.json')]='{}'
     $script:FakeFiles[('graphics/'+$name+'.json')]='{}'
 }
-function Invoke-RestMethod {
+function Invoke-CafeGitHubRestMethod {
     [CmdletBinding()]
     param([string]$Uri,[string]$Method,[hashtable]$Headers,[int]$TimeoutSec,
         [int]$MaximumRedirection,[string]$ContentType,[string]$Body)

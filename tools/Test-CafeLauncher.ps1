@@ -55,6 +55,15 @@ if (@($parseErrors).Count -gt 0) {
     }
     throw ('PowerShell syntax check failed: {0} error(s). First error at cafe.bat line {1}, column {2}: {3}; text: {4}' -f @($parseErrors).Count, ($marker + 1 + $parseErrors[0].Extent.StartLineNumber), $parseErrors[0].Extent.StartColumnNumber, $parseErrors[0].Message, $parseErrors[0].Extent.Text)
 }
+$rateLimitFunctionNames=@('Set-CafeGitHubRateLimitDisplay','Update-CafeGitHubRateLimitFromHeaders','Invoke-CafeGitHubRestMethod')
+foreach($functionName in $rateLimitFunctionNames){
+    $functionAst=@($psAst.FindAll({param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $functionName},$true))
+    if($functionAst.Count -ne 1){throw ('Missing or duplicate GitHub rate-limit function: '+$functionName)}
+    Invoke-Expression $functionAst[0].Extent.Text
+}
+if($psSource -match '(?i)Invoke-RestMethod\s+-Uri'){
+    throw 'GitHub REST requests must use the response-header tracking wrapper.'
+}
 
 # Regression: legacy main-menu shortcut tiles must remain commented out, but
 # profile workflows and their underlying functions stay available.
@@ -193,7 +202,7 @@ if($graphicsPresetFunction.Count -ne 1 -or
 # Exercise the extracted API reader against a mocked Contents API response.
 $script:ProfileApiFixture=$null
 $script:ProfileApiRequest=$null
-function Invoke-RestMethod {
+function Invoke-CafeGitHubRestMethod {
     [CmdletBinding()]
     param([string]$Uri,[string]$Method,$Headers,[int]$TimeoutSec,[int]$MaximumRedirection)
     $script:ProfileApiRequest=[pscustomobject]@{Uri=$Uri;Headers=$Headers;Method=$Method}
@@ -428,6 +437,8 @@ foreach($name in @('FabMode','ArliMode','BrileMode','ArmlMode','OliMode')){
     $script:GamingProfiles[$name]=@{LogitechDPI=800;PointerSpeed=10;Width=1920;Height=1080;RefreshHz=360;ConfigFile=($name.ToLower()+'.cfg')}
 }
 $script:LogPath=Join-Path $env:TEMP ('CafeLauncher-dashboard-CI-'+[Guid]::NewGuid().ToString('N')+'.log')
+$script:GitHubRateLimitSnapshot=$null
+$script:GitHubRateLimitLabel=$null
 try {
     Invoke-Expression $psSource.Substring($dashboardStart,$dashboardEnd-$dashboardStart)
     if($tabs.TabPages.Count -ne 2 -or $profilesGrid.Controls.Count -ne 6){
@@ -437,6 +448,16 @@ try {
        $script:ManualDpiInput.Text -ne '800' -or
        $toolsFlow.Controls.Count -lt 9){
         throw 'Dashboard summary, manual DPI or utility buttons were not created correctly.'
+    }
+    if(-not $script:GitHubRateLimitLabel -or $script:GitHubRateLimitLabel.Text -ne 'GitHub API: waiting for request'){
+        throw 'Dashboard must show the API allowance next to the launcher version.'
+    }
+    Update-CafeGitHubRateLimitFromHeaders -Headers @{
+        'X-RateLimit-Remaining'='42';'X-RateLimit-Limit'='60';'X-RateLimit-Reset'='1792000000';'X-RateLimit-Resource'='core'
+    }
+    if($script:GitHubRateLimitLabel.Text -notmatch '^GitHub API: 42/60 left\r?\nLast checked \d{2}:\d{2}:\d{2}$' -or
+       $script:GitHubRateLimitLabel.Height -lt 36){
+        throw ('The dashboard did not display the latest remaining count from response headers. Actual label="'+$script:GitHubRateLimitLabel.Text+'"; snapshot='+[string]$script:GitHubRateLimitSnapshot.Remaining)
     }
     if($root.RowStyles[2].Height -ne 44){
         throw 'LIVE LOGS must start collapsed.'

@@ -5,10 +5,12 @@ on:
     paths:
       - 'cafe.bat'
       - 'tools/Test-CafeLauncher.ps1'
+      - 'tools/Test-GitHubRateLimit.ps1'
       - 'tools/Test-ProfileSave.ps1'
       - 'tools/Test-CfgSensitivitySync.ps1'
       - 'tools/Test-SteamLaunchOptions.ps1'
       - 'tools/Test-Graphics.ps1'
+      - 'tools/fixtures/**'
       - 'tools/Test-NvidiaCompatibility.ps1'
       - 'tools/Test-NvidiaDvcFallback.ps1'
       - 'tools/Test-SuperlightDevice.ps1'
@@ -27,10 +29,12 @@ on:
     paths:
       - 'cafe.bat'
       - 'tools/Test-CafeLauncher.ps1'
+      - 'tools/Test-GitHubRateLimit.ps1'
       - 'tools/Test-ProfileSave.ps1'
       - 'tools/Test-CfgSensitivitySync.ps1'
       - 'tools/Test-SteamLaunchOptions.ps1'
       - 'tools/Test-Graphics.ps1'
+      - 'tools/fixtures/**'
       - 'tools/Test-NvidiaCompatibility.ps1'
       - 'tools/Test-NvidiaDvcFallback.ps1'
       - 'tools/Test-SuperlightDevice.ps1'
@@ -64,6 +68,10 @@ jobs:
         shell: powershell
         run: |
           & "$env:GITHUB_WORKSPACE\tools\Test-CafeLauncher.ps1"
+      - name: Test GitHub API remaining display without extra requests
+        shell: powershell
+        run: |
+          & "$env:GITHUB_WORKSPACE\tools\Test-GitHubRateLimit.ps1"
       - name: Test profile save closure and local JSON roundtrip
         shell: powershell
         run: |

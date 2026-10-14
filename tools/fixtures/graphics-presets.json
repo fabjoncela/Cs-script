@@ -1,0 +1,54 @@
+{
+  "FabMode": {
+    "SchemaVersion": 1,
+    "ProfileName": "FabMode",
+    "DisplayPolicy": "ApplyPreset",
+    "RefreshPolicy": "Highest",
+    "ScalingMode": 2,
+    "Settings": {
+      "Width": 1280,
+      "Height": 960,
+      "AspectRatioMode": 0,
+      "Fullscreen": 1,
+      "MSAASamples": 8,
+      "ShadowQuality": 0,
+      "DynamicShadows": 1,
+      "TextureDetail": 1,
+      "ShaderQuality": 0,
+      "ParticleDetail": 0,
+      "AmbientOcclusion": 0,
+      "HDRDetail": 3,
+      "NvidiaReflex": 2,
+      "TextureFiltering": 0,
+      "FSRDetail": 0,
+      "VSync": 0,
+      "CMAA": 0
+    }
+  },
+  "BrileMode": {
+    "SchemaVersion": 1,
+    "ProfileName": "BrileMode",
+    "DisplayPolicy": "ApplyPreset",
+    "RefreshPolicy": "Highest",
+    "ScalingMode": 2,
+    "Settings": {
+      "Width": 1920,
+      "Height": 1080,
+      "AspectRatioMode": 1,
+      "Fullscreen": 1,
+      "MSAASamples": 2,
+      "ShadowQuality": 0,
+      "DynamicShadows": 1,
+      "TextureDetail": 0,
+      "ShaderQuality": 0,
+      "ParticleDetail": 0,
+      "AmbientOcclusion": 0,
+      "HDRDetail": -1,
+      "NvidiaReflex": 1,
+      "TextureFiltering": 0,
+      "FSRDetail": 0,
+      "VSync": 0,
+      "CMAA": 0
+    }
+  }
+}

@@ -46,7 +46,7 @@ function New-TestCommit {
         message=$Message;author=[pscustomobject]@{date=$Date};committer=[pscustomobject]@{date=$Date}
     }}
 }
-function Invoke-RestMethod {
+function Invoke-CafeGitHubRestMethod {
     param([string]$Uri,[string]$Method,[hashtable]$Headers,[int]$TimeoutSec,[string]$ErrorAction)
     if($script:HistoryOffline){throw 'mock network unavailable'}
     if($Uri -match '/commits\?'){

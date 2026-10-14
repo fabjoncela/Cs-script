@@ -4,7 +4,7 @@ start "" powershell.exe -NoProfile -ExecutionPolicy Bypass -STA -WindowStyle Hid
 exit /b
 
 # POWERSHELL_GUI
-# CAFE_RELEASE=2026.10.14.28
+# CAFE_RELEASE=2026.10.14.29
 
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
@@ -70,6 +70,53 @@ function Write-Log {
             }
         } catch {}
     }
+}
+
+# Track the primary REST quota from responses the launcher already receives.
+# This deliberately makes no additional request to GitHub.
+$script:GitHubRateLimitSnapshot=$null
+$script:GitHubRateLimitLabel=$null
+function Set-CafeGitHubRateLimitDisplay {
+    param([string]$Remaining,[string]$Limit)
+    $remainingValue=0;$limitValue=0
+    if(-not [int]::TryParse($Remaining,[ref]$remainingValue) -or
+       -not [int]::TryParse($Limit,[ref]$limitValue) -or $limitValue -le 0 -or
+       $remainingValue -lt 0 -or $remainingValue -gt $limitValue){return}
+    $snapshot=[pscustomobject]@{Remaining=$remainingValue;Limit=$limitValue;CheckedAt=[DateTime]::Now}
+    $script:GitHubRateLimitSnapshot=$snapshot
+    if(-not $script:GitHubRateLimitLabel -or $script:GitHubRateLimitLabel.IsDisposed){return}
+    $labelText=("GitHub API: {0}/{1} left`nLast checked {2}" -f $remainingValue,$limitValue,$snapshot.CheckedAt.ToString('HH:mm:ss'))
+    try{
+        $script:GitHubRateLimitLabel.Text=$labelText
+        $script:GitHubRateLimitLabel.ForeColor=if($remainingValue -le 5){[System.Drawing.Color]::FromArgb(255,150,120)}else{$MUTED}
+    }catch{}
+}
+function Update-CafeGitHubRateLimitFromHeaders {
+    param($Headers)
+    if(-not $Headers){return}
+    try{
+        Set-CafeGitHubRateLimitDisplay -Remaining ([string]$Headers['X-RateLimit-Remaining']) `
+            -Limit ([string]$Headers['X-RateLimit-Limit'])
+    }catch{}
+}
+function Invoke-CafeGitHubRestMethod {
+    param([Parameter(Mandatory=$true)][string]$Uri,[string]$Method='Get',
+          [hashtable]$Headers=@{},[int]$TimeoutSec=30,[int]$MaximumRedirection=5,
+          [string]$ContentType,[object]$Body)
+    $request=@{
+        Uri=$Uri;Method=$Method;Headers=$Headers;TimeoutSec=$TimeoutSec
+        MaximumRedirection=$MaximumRedirection;UseBasicParsing=$true;ErrorAction='Stop'
+    }
+    if($ContentType){$request.ContentType=$ContentType}
+    if($PSBoundParameters.ContainsKey('Body')){$request.Body=$Body}
+    try{$response=Invoke-WebRequest @request}
+    catch{
+        if($_.Exception.Response){Update-CafeGitHubRateLimitFromHeaders -Headers $_.Exception.Response.Headers}
+        throw
+    }
+    Update-CafeGitHubRateLimitFromHeaders -Headers $response.Headers
+    if([string]::IsNullOrWhiteSpace([string]$response.Content)){return $null}
+    try{return ($response.Content | ConvertFrom-Json -ErrorAction Stop)}catch{return [string]$response.Content}
 }
 
 # Result records are separate from diagnostic INFO/WARN/ERROR logs.
@@ -2669,7 +2716,7 @@ function Check-CafeLauncherUpdates {
     try {
         [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
         $uri="https://api.github.com/repos/fabjoncela/Cs-script/contents/cafe.bat?ref=main"
-        $remote=Invoke-RestMethod -Uri $uri -Headers @{'User-Agent'='CafeLauncher-Updater'; 'Accept'='application/vnd.github+json'} -TimeoutSec 8 -ErrorAction Stop
+        $remote=Invoke-CafeGitHubRestMethod -Uri $uri -Headers @{'User-Agent'='CafeLauncher-Updater'; 'Accept'='application/vnd.github+json'} -TimeoutSec 8
         if ($remote.path -ne 'cafe.bat' -or $remote.sha -notmatch '^[a-fA-F0-9]{40}$' -or
             [int64]$remote.size -lt 10000 -or [int64]$remote.size -gt 1000000) { throw 'Unexpected update metadata from GitHub.' }
         # Ignore older/unversioned GitHub builds. A new release must increment
@@ -3110,7 +3157,7 @@ function Get-ProfileGraphicsHistory {
         $encodedBranch=[Uri]::EscapeDataString([string]$script:GithubBranch)
         $uri='https://api.github.com/repos/'+$script:GithubRepo+'/commits?path='+$encodedPath+'&per_page=4&sha='+$encodedBranch
         $headers=@{'User-Agent'='CafeLauncher-Graphics-History';'Accept'='application/vnd.github+json'}
-        $response=Invoke-RestMethod -Uri $uri -Method Get -Headers $headers -TimeoutSec 12 -ErrorAction Stop
+        $response=Invoke-CafeGitHubRestMethod -Uri $uri -Method Get -Headers $headers -TimeoutSec 12
     }
     $cache=Join-Path $env:LOCALAPPDATA ('CafeLauncher\graphics-history\'+$ProfileName+'.json')
     $versions=New-Object 'System.Collections.Generic.List[object]'
@@ -3143,7 +3190,13 @@ public sealed class CafeGraphicsHistoryBackgroundWorker : BackgroundWorker {
     public string WorkerName { get { return "GraphicsHistory"; } }
     public string ResultText { get; private set; }
     public string ErrorText { get; private set; }
+    public string RateLimitRemaining { get; private set; }
+    public string RateLimitLimit { get; private set; }
     public int WorkerThreadId { get; private set; }
+    private void CaptureRateLimit(HttpWebResponse response) {
+        RateLimitRemaining = response.Headers["X-RateLimit-Remaining"];
+        RateLimitLimit = response.Headers["X-RateLimit-Limit"];
+    }
     public CafeGraphicsHistoryBackgroundWorker() {
         DoWork += delegate(object sender, DoWorkEventArgs e) {
             WorkerThreadId = System.Threading.Thread.CurrentThread.ManagedThreadId;
@@ -3157,9 +3210,15 @@ public sealed class CafeGraphicsHistoryBackgroundWorker : BackgroundWorker {
                 request.Headers[HttpRequestHeader.CacheControl] = "no-cache";
                 using (var response = (HttpWebResponse)request.GetResponse())
                 using (var reader = new StreamReader(response.GetResponseStream(), Encoding.UTF8)) {
+                    CaptureRateLimit(response);
                     ResultText = reader.ReadToEnd();
                 }
             } catch (Exception error) {
+                var webError = error as WebException;
+                var response = webError == null ? null : webError.Response as HttpWebResponse;
+                if (response != null) {
+                    using (response) { CaptureRateLimit(response); }
+                }
                 ErrorText = error.Message;
             }
         };
@@ -3179,7 +3238,7 @@ function Get-ProfileGraphicsVersion {
     $uri='https://api.github.com/repos/'+$script:GithubRepo+'/contents/'+$path+'?ref='+$encodedSha
     $headers=@{'User-Agent'='CafeLauncher-Graphics-History';'Accept'='application/vnd.github+json'}
     try{
-        $response=Invoke-RestMethod -Uri $uri -Method Get -Headers $headers -TimeoutSec 12 -ErrorAction Stop
+        $response=Invoke-CafeGitHubRestMethod -Uri $uri -Method Get -Headers $headers -TimeoutSec 12
     }catch{
         $status=$null
         $responseProp=$_.Exception.PSObject.Properties['Response']
@@ -3351,7 +3410,7 @@ function Get-GitHubJsonFromContentsApi {
     # The raw-content CDN served old profile data even with a unique query.
     # Read mutable profile/graphics JSON through the API; callers keep their
     # local copy if this request fails rather than falling back to raw CDN.
-    $file = Invoke-RestMethod -Uri $url -Method Get -Headers $headers -TimeoutSec 12 -MaximumRedirection 0 -ErrorAction Stop
+    $file = Invoke-CafeGitHubRestMethod -Uri $url -Method Get -Headers $headers -TimeoutSec 12 -MaximumRedirection 0
     if($file.type -ne 'file' -or $file.path -cne $Path -or
        $file.encoding -ne 'base64' -or [string]$file.sha -notmatch '^[a-fA-F0-9]{40}$' -or
        [string]::IsNullOrWhiteSpace([string]$file.content) -or [int64]$file.size -gt $MaxBytes){
@@ -3375,7 +3434,7 @@ function Get-LatestGitHubFileCommit {
     $encodedPath=[Uri]::EscapeDataString($Path)
     $uri="https://api.github.com/repos/$Repo/commits?path=$encodedPath&per_page=1&sha=$encodedBranch"
     $headers=@{Accept='application/vnd.github+json';'User-Agent'='CafeLauncher-ProfileRefresh';'X-GitHub-Api-Version'='2022-11-28';'Cache-Control'='no-cache';Pragma='no-cache'}
-    $commits=@(Invoke-RestMethod -Uri $uri -Method Get -Headers $headers -TimeoutSec 12 -MaximumRedirection 0 -ErrorAction Stop)
+    $commits=@(Invoke-CafeGitHubRestMethod -Uri $uri -Method Get -Headers $headers -TimeoutSec 12 -MaximumRedirection 0)
     if($commits.Count -lt 1 -or [string]$commits[0].sha -notmatch '^[a-fA-F0-9]{40}$'){
         throw "GitHub did not return a valid latest commit for $Path."
     }
@@ -3390,7 +3449,7 @@ function Compare-GitHubCommitOrder {
     }
     $uri="https://api.github.com/repos/$Repo/compare/$BaseSha...$HeadSha"
     $headers=@{Accept='application/vnd.github+json';'User-Agent'='CafeLauncher-ProfileRefresh';'X-GitHub-Api-Version'='2022-11-28';'Cache-Control'='no-cache';Pragma='no-cache'}
-    $comparison=Invoke-RestMethod -Uri $uri -Method Get -Headers $headers -TimeoutSec 12 -MaximumRedirection 0 -ErrorAction Stop
+    $comparison=Invoke-CafeGitHubRestMethod -Uri $uri -Method Get -Headers $headers -TimeoutSec 12 -MaximumRedirection 0
     $status=[string]$comparison.status
     if($status -notin @('ahead','behind','identical','diverged')){throw 'GitHub returned an invalid commit comparison status.'}
     return $status
@@ -3644,6 +3703,8 @@ public sealed class CafeGitHubDeviceFlowWorker : BackgroundWorker {
     public string AuthenticatedLogin { get; private set; }
     public string AccessToken { get; private set; }
     public string ErrorText { get; private set; }
+    public string RateLimitRemaining { get; private set; }
+    public string RateLimitLimit { get; private set; }
 
     public CafeGitHubDeviceFlowWorker(string clientId, string repository) {
         this.clientId = clientId;
@@ -3661,12 +3722,17 @@ public sealed class CafeGitHubDeviceFlowWorker : BackgroundWorker {
 
     public void ClearAccessToken() { AccessToken = null; }
 
+    private void CaptureRateLimit(HttpWebResponse response) {
+        RateLimitRemaining = response.Headers["X-RateLimit-Remaining"];
+        RateLimitLimit = response.Headers["X-RateLimit-Limit"];
+    }
+
     private static CafeGitHubResponse ReadJson(HttpWebResponse response) {
         using (var stream = response.GetResponseStream())
             return (CafeGitHubResponse)new DataContractJsonSerializer(typeof(CafeGitHubResponse)).ReadObject(stream);
     }
 
-    private static CafeGitHubResponse Request(string url, string method, string[,] form, string token) {
+    private static CafeGitHubResponse Request(string url, string method, string[,] form, string token, CafeGitHubDeviceFlowWorker owner) {
         var request = (HttpWebRequest)WebRequest.Create(url);
         request.Method = method;
         request.UserAgent = "CafeLauncher-GitHub-Device-Login";
@@ -3685,13 +3751,24 @@ public sealed class CafeGitHubDeviceFlowWorker : BackgroundWorker {
             request.ContentLength = bytes.Length;
             using (var stream = request.GetRequestStream()) stream.Write(bytes, 0, bytes.Length);
         }
-        using (var response = (HttpWebResponse)request.GetResponse()) return ReadJson(response);
+        try {
+            using (var response = (HttpWebResponse)request.GetResponse()) {
+                if (isApi && owner != null) owner.CaptureRateLimit(response);
+                return ReadJson(response);
+            }
+        } catch (WebException error) {
+            var response = error.Response as HttpWebResponse;
+            if (isApi && owner != null && response != null) {
+                using (response) { owner.CaptureRateLimit(response); }
+            }
+            throw;
+        }
     }
 
     private void RunDeviceFlow(object sender, DoWorkEventArgs e) {
         try {
             var form = new string[,] { { "client_id", clientId }, { "scope", "offline_access" } };
-            var code = Request("https://github.com/login/device/code", "POST", form, null);
+            var code = Request("https://github.com/login/device/code", "POST", form, null, this);
             string deviceCode = code.DeviceCode;
             UserCode = code.UserCode;
             VerificationUri = code.VerificationUri;
@@ -3716,7 +3793,7 @@ public sealed class CafeGitHubDeviceFlowWorker : BackgroundWorker {
                     { "device_code", deviceCode },
                     { "grant_type", "urn:ietf:params:oauth:grant-type:device_code" }
                 };
-                var result = Request("https://github.com/login/oauth/access_token", "POST", tokenForm, null);
+                var result = Request("https://github.com/login/oauth/access_token", "POST", tokenForm, null, this);
                 string error = result.Error;
                 if (error == "authorization_pending") continue;
                 if (error == "slow_down") { interval += 5; continue; }
@@ -3726,11 +3803,11 @@ public sealed class CafeGitHubDeviceFlowWorker : BackgroundWorker {
                 if (result.ExpiresIn < 1)
                     throw new InvalidOperationException("GitHub did not issue an expiring token. Enable token expiration for the GitHub App and try again.");
 
-                var user = Request("https://api.github.com/user", "GET", null, token);
+                var user = Request("https://api.github.com/user", "GET", null, token, this);
                 AuthenticatedLogin = user.Login;
                 if (String.IsNullOrEmpty(AuthenticatedLogin)) throw new InvalidOperationException("Could not verify the GitHub account returned by sign-in.");
                 // Confirm this account can at least access the exact repository before returning the token.
-                var repo = Request("https://api.github.com/repos/" + repository, "GET", null, token);
+                var repo = Request("https://api.github.com/repos/" + repository, "GET", null, token, this);
                 if (!String.Equals(repo.FullName, repository, StringComparison.OrdinalIgnoreCase))
                     throw new InvalidOperationException("The signed-in account cannot access the CafeLauncher repository.");
                 if (repo.Permissions == null || !repo.Permissions.Push)
@@ -3817,6 +3894,10 @@ function Get-GitHubDeviceAuthorization {
     }.GetNewClosure())
     $worker.Add_RunWorkerCompleted({
         if($authForm.IsDisposed){$worker.ClearAccessToken();return}
+        if($worker.RateLimitRemaining){
+            Set-CafeGitHubRateLimitDisplay -Remaining ([string]$worker.RateLimitRemaining) `
+                -Limit ([string]$worker.RateLimitLimit)
+        }
         if($worker.Cancelled){$status.Text='GitHub sign-in canceled.';return}
         if($worker.ErrorText){
             Write-Log ('GitHub device sign-in failed: '+$worker.ErrorText) 'WARN'
@@ -3960,7 +4041,7 @@ function Sync-ProfileToGitHub {
     $cfgStatus='left unchanged because sensitivity is blank'
     [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
     try {
-        $current = Invoke-RestMethod -Uri ($uri + '?ref=' + $script:GithubBranch) -Method Get -Headers $headers -TimeoutSec 20 -MaximumRedirection 0 -ErrorAction Stop
+        $current = Invoke-CafeGitHubRestMethod -Uri ($uri + '?ref=' + $script:GithubBranch) -Method Get -Headers $headers -TimeoutSec 20 -MaximumRedirection 0
         $existingSha = [string]$current.sha
     } catch {
         $status = $null
@@ -3970,7 +4051,7 @@ function Sync-ProfileToGitHub {
     }
 
     try {
-        $currentGraphics=Invoke-RestMethod -Uri ($graphicsUri+'?ref='+$script:GithubBranch) -Method Get -Headers $headers -TimeoutSec 20 -MaximumRedirection 0 -ErrorAction Stop
+        $currentGraphics=Invoke-CafeGitHubRestMethod -Uri ($graphicsUri+'?ref='+$script:GithubBranch) -Method Get -Headers $headers -TimeoutSec 20 -MaximumRedirection 0
         if($currentGraphics.type -ne 'file' -or $currentGraphics.path -ne $graphicsPath -or
            [string]$currentGraphics.sha -notmatch '^[a-fA-F0-9]{40}$' -or
            $currentGraphics.encoding -ne 'base64' -or [string]::IsNullOrWhiteSpace([string]$currentGraphics.content) -or
@@ -4031,7 +4112,7 @@ function Sync-ProfileToGitHub {
     $sensValue=[string]$values['CS2Sensitivity']
     if(-not [string]::IsNullOrWhiteSpace($sensValue)){
         $cfgUri="https://api.github.com/repos/$($script:GithubRepo)/contents/$cfgName"
-        $cfgRemote=Invoke-RestMethod -Uri ($cfgUri+'?ref='+$script:GithubBranch) -Method Get -Headers $headers -TimeoutSec 20 -MaximumRedirection 0 -ErrorAction Stop
+        $cfgRemote=Invoke-CafeGitHubRestMethod -Uri ($cfgUri+'?ref='+$script:GithubBranch) -Method Get -Headers $headers -TimeoutSec 20 -MaximumRedirection 0
         if($cfgRemote.type -ne 'file' -or $cfgRemote.path -ne $cfgName -or
             $cfgRemote.encoding -ne 'base64' -or
             [string]$cfgRemote.sha -notmatch '^[a-fA-F0-9]{40}$' -or
@@ -4052,17 +4133,17 @@ function Sync-ProfileToGitHub {
     }
     try {
         if($cfgBody){
-            $cfgResponse=Invoke-RestMethod -Uri $cfgUri -Method Put -Headers $headers -ContentType 'application/json' -Body ($cfgBody | ConvertTo-Json -Depth 5 -Compress) -TimeoutSec 25 -MaximumRedirection 0 -ErrorAction Stop
+            $cfgResponse=Invoke-CafeGitHubRestMethod -Uri $cfgUri -Method Put -Headers $headers -ContentType 'application/json' -Body ($cfgBody | ConvertTo-Json -Depth 5 -Compress) -TimeoutSec 25 -MaximumRedirection 0
             if(-not $cfgResponse.commit.sha){throw ('CFG write was not confirmed for '+$cfgName)}
             $cfgUploaded=$true
             $cfgStatus="updated sensitivity to $sensValue"
             Write-Log ("GitHub CFG sensitivity saved to "+$cfgName+"; commit="+$cfgResponse.commit.sha)
         }
-        $result = Invoke-RestMethod -Uri $uri -Method Put -Headers $headers -ContentType 'application/json' -Body ($body | ConvertTo-Json -Depth 5 -Compress) -TimeoutSec 25 -MaximumRedirection 0 -ErrorAction Stop
+        $result = Invoke-CafeGitHubRestMethod -Uri $uri -Method Put -Headers $headers -ContentType 'application/json' -Body ($body | ConvertTo-Json -Depth 5 -Compress) -TimeoutSec 25 -MaximumRedirection 0
         if (-not $result.commit.sha) { throw 'GitHub did not return a successful commit.' }
         $profileUploaded=$true
         if($graphicsChanged){
-            $graphicsResult=Invoke-RestMethod -Uri $graphicsUri -Method Put -Headers $headers -ContentType 'application/json' -Body ($graphicsBody|ConvertTo-Json -Depth 6 -Compress) -TimeoutSec 25 -MaximumRedirection 0 -ErrorAction Stop
+            $graphicsResult=Invoke-CafeGitHubRestMethod -Uri $graphicsUri -Method Put -Headers $headers -ContentType 'application/json' -Body ($graphicsBody|ConvertTo-Json -Depth 6 -Compress) -TimeoutSec 25 -MaximumRedirection 0
             if(-not $graphicsResult.commit.sha){throw ('GitHub did not confirm '+$graphicsPath+' update.')}
             $graphicsUploaded=$true
             Clear-ProfileGraphicsHistoryCache -ProfileName $ProfileName
@@ -4074,7 +4155,7 @@ function Sync-ProfileToGitHub {
         $readbackFailed=$true
         $fresh=[guid]::NewGuid().ToString('N')
         $profileReadUrl=$uri+'?ref='+[Uri]::EscapeDataString([string]$script:GithubBranch)+'&fresh='+$fresh
-        $remoteProfile=Invoke-RestMethod -Uri $profileReadUrl -Method Get -Headers $headers -TimeoutSec 20 -MaximumRedirection 0 -ErrorAction Stop
+        $remoteProfile=Invoke-CafeGitHubRestMethod -Uri $profileReadUrl -Method Get -Headers $headers -TimeoutSec 20 -MaximumRedirection 0
         if($remoteProfile.type -ne 'file' -or $remoteProfile.path -cne $path -or
            $remoteProfile.encoding -ne 'base64' -or [string]$remoteProfile.sha -notmatch '^[a-fA-F0-9]{40}$' -or
            [string]::IsNullOrWhiteSpace([string]$remoteProfile.content) -or [int64]$remoteProfile.size -gt 65536){
@@ -4094,7 +4175,7 @@ function Sync-ProfileToGitHub {
         }
 
         $graphicsReadUrl=$graphicsUri+'?ref='+[Uri]::EscapeDataString([string]$script:GithubBranch)+'&fresh='+$fresh
-        $remoteGraphics=Invoke-RestMethod -Uri $graphicsReadUrl -Method Get -Headers $headers -TimeoutSec 20 -MaximumRedirection 0 -ErrorAction Stop
+        $remoteGraphics=Invoke-CafeGitHubRestMethod -Uri $graphicsReadUrl -Method Get -Headers $headers -TimeoutSec 20 -MaximumRedirection 0
         if($remoteGraphics.type -ne 'file' -or $remoteGraphics.path -cne $graphicsPath -or
            $remoteGraphics.encoding -ne 'base64' -or [string]$remoteGraphics.sha -notmatch '^[a-fA-F0-9]{40}$' -or
            [string]::IsNullOrWhiteSpace([string]$remoteGraphics.content) -or [int64]$remoteGraphics.size -gt 1048576){
@@ -4645,6 +4726,10 @@ function Show-ProfileEditor {
                 $historyState.Worker=$null
                 if($dialog.IsDisposed -or $dialog.Disposing){return}
                 try{
+                    if($worker.RateLimitRemaining){
+                        Set-CafeGitHubRateLimitDisplay -Remaining ([string]$worker.RateLimitRemaining) `
+                            -Limit ([string]$worker.RateLimitLimit)
+                    }
                     if($worker.ErrorText){throw ([System.Exception]::new([string]$worker.ErrorText))}
                     $versions=@(Get-ProfileGraphicsHistory -ProfileName $ProfileName -ForceRefresh -ResponseJson ([string]$worker.ResultText))
                     [void](& $showGraphicsHistory $versions)
@@ -5331,7 +5416,7 @@ function Invoke-GraphicsOnly {
     Start-StepScope -Run $graphicsRun -Step 'Apply Graphics'
     try {
     if(-not (Resolve-PendingProfileChanges -ProfileName $ModeName)){return}
-    $expected='0f30b0ae6af34e60e9a6b68eafcf8baf78bd7a3c'
+    $expected='ec2ee9fc7afce195d8b081aa95a71e0048a32158'
     $source=Add-CafeCacheBust -Uri 'https://raw.githubusercontent.com/fabjoncela/Cs-script/main/graphics/ApplyGraphics.ps1'
     $cache=Join-Path $env:LOCALAPPDATA 'CafeLauncher\graphics-module.ps1'
     $parent=Split-Path -Parent $cache
@@ -5455,12 +5540,30 @@ $subtitle.Dock='None'
 $subtitle.Location=New-Object System.Drawing.Point(28,49)
 $subtitle.Size=New-Object System.Drawing.Size(600,25)
 $header.Controls.Add($subtitle)
+$headerStatus=New-Object System.Windows.Forms.Panel
+$headerStatus.Dock='Right'
+$headerStatus.Width=270
+$headerStatus.Height=82
+$headerStatus.BackColor=$PANEL
+$header.Controls.Add($headerStatus)
 $versionTag=New-CafeLabel -Text ('v'+(Get-CafeLauncherRelease)) -Strong
-$versionTag.Dock='Right'
-$versionTag.Width=185
+$versionTag.Dock='None'
+$versionTag.Location=New-Object System.Drawing.Point(8,12)
+$versionTag.Size=New-Object System.Drawing.Size(250,27)
 $versionTag.ForeColor=[System.Drawing.Color]::FromArgb(111,177,255)
 $versionTag.TextAlign='MiddleRight'
-$header.Controls.Add($versionTag)
+$headerStatus.Controls.Add($versionTag)
+$script:GitHubRateLimitLabel=New-CafeLabel -Text 'GitHub API: waiting for request' -FontSize 8
+$script:GitHubRateLimitLabel.Dock='None'
+$script:GitHubRateLimitLabel.Location=New-Object System.Drawing.Point(8,43)
+$script:GitHubRateLimitLabel.Size=New-Object System.Drawing.Size(250,36)
+$script:GitHubRateLimitLabel.ForeColor=$MUTED
+$script:GitHubRateLimitLabel.TextAlign='MiddleRight'
+$headerStatus.Controls.Add($script:GitHubRateLimitLabel)
+if($script:GitHubRateLimitSnapshot){
+    Set-CafeGitHubRateLimitDisplay -Remaining ([string]$script:GitHubRateLimitSnapshot.Remaining) `
+        -Limit ([string]$script:GitHubRateLimitSnapshot.Limit)
+}
 
 $tabs=New-Object System.Windows.Forms.TabControl
 $tabs.Dock='Fill'
