@@ -395,6 +395,15 @@ if($profileApply.Count -ne 1 -or $profileApply[0].Extent.Text -notmatch 'Resolve
    $graphicsApply.Count -ne 1 -or $graphicsApply[0].Extent.Text -notmatch 'Resolve-PendingProfileChanges'){
     throw 'Profile and graphics apply actions must resolve unsynced edits before using cloud settings.'
 }
+$profileApplyBody=$profileApply[0].Extent.Text
+$graphicsRefreshAt=$profileApplyBody.IndexOf('Get-ProfileGraphicsPreset -ProfileName $ProfileName -RequireGitHub',[StringComparison]::Ordinal)
+$routineStartAt=$profileApplyBody.IndexOf('full routine started',[StringComparison]::Ordinal)
+if($graphicsRefreshAt -lt 0 -or $routineStartAt -le $graphicsRefreshAt -or
+   $profileApplyBody -notmatch '\$script:GamingProfiles\[\$ProfileName\]\.ScalingMode=\[int\]\$graphicsPreset\.ScalingMode' -or
+   $profileApplyBody -notmatch 'No profile actions were applied' -or
+   $profileApplyBody -notmatch 'GitHub Graphics Refresh Failed'){
+    throw 'Normal profile Apply must verify the GitHub graphics preset, use its ScalingMode, and cancel before all actions if verification fails.'
+}
 if($dashboardSource -match "New-CafeLabel -Text 'v\d{4}\.\d{2}\.\d{2}\.\d+'" -or
    $dashboardSource -notmatch "New-CafeLabel -Text \('v'\+\(Get-CafeLauncherRelease\)\)" -or
    $psSource -notmatch 'Check-CafeLauncherUpdates -Manual'){
