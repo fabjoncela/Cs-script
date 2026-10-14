@@ -21,6 +21,10 @@ if($source -notmatch 'raw\.githubusercontent\.com/fabjoncela/Cs-script/main/grap
    $launcher -notmatch 'raw\.githubusercontent\.com/fabjoncela/Cs-script/main/graphics/ApplyGraphics\.ps1'){
     throw 'Production graphics downloads must follow main after this branch is merged.'
 }
+if($source -notmatch 'Apply Graphics \| ' -or $source -notmatch 'Set-RunOutcome' -or
+   $source -notmatch '\$appliedDetails'){
+    throw 'CS2 graphics results must be written to the live/file logs with requested and confirmed values.'
+}
 $tok=$null;$errors=$null
 [void][System.Management.Automation.Language.Parser]::ParseInput($source,[ref]$tok,[ref]$errors)
 if(@($errors).Count -gt 0){throw ('Graphics module syntax error: '+$errors[0].Message)}

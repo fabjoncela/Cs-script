@@ -404,10 +404,28 @@ function Apply-CS2ModeGraphics {
         if($edit.Changed){Write-Log ("Applied "+$edit.Applied.Count+' graphics keys for '+$ModeName+' (Steam '+$active.AccountID+'). Backup: '+$backup)}
         else{Write-Log ("Verified/applied NVIDIA scaling mode for "+$ModeName+' (Steam '+$active.AccountID+').')}
         $allSkipped=@($edit.Skipped)+@($hardwareSkipped.ToArray())
+        $appliedDetails=@($edit.Applied | ForEach-Object { $field=[string]$_; $field+'='+[string]$settings[$field] })
         $summary=Format-CS2GraphicsResultSummary -ProfileName $ModeName -AccountID $active.AccountID `
-            -Applied @($edit.Applied) -Skipped $allSkipped -ChangedFields @($edit.ChangedFields) `
+            -Applied $appliedDetails -Skipped $allSkipped -ChangedFields @($edit.ChangedFields) `
             -DisplaySummary $displaySummary -ScalingSummary $scalingReport -BackupPath $backup `
             -FileChanged ([bool]$edit.Changed) -ScalingVerified ([bool]$scalingVerified)
+        $graphicsRun='Graphics '+$ModeName
+        if(Get-Command Set-RunOutcome -ErrorAction SilentlyContinue){
+            $graphicsState=if($allSkipped.Count -gt 0 -or $displaySummary -match '^fallback:'){'FALLBACK'}else{'APPLIED'}
+            Set-RunOutcome -Run $graphicsRun -Setting 'CS2 video settings' `
+                -Requested ($settings.Keys -join ', ') -Target ('Steam account '+$active.AccountID) `
+                -Status $graphicsState -Actual ($appliedDetails -join ', ') `
+                -Detail (($displaySummary)+$(if($allSkipped.Count){' Skipped: '+($allSkipped -join '; ')}else{''}))
+            Set-RunOutcome -Run $graphicsRun -Setting 'NVIDIA scaling' -Requested ([string]$scalingMode) `
+                -Target ('Display for Steam account '+$active.AccountID) -Status $(if($scalingVerified){'APPLIED'}else{'FAILED'}) `
+                -Actual $scalingReport -Detail $scalingReport
+        }
+        foreach($summaryLine in ($summary -split '\r?\n')){
+            if(-not [string]::IsNullOrWhiteSpace($summaryLine)){
+                $summaryLevel=if($summaryLine -eq 'Completed with warnings.'){'WARN'}else{'INFO'}
+                Write-Log ('Apply Graphics | '+$summaryLine) $summaryLevel
+            }
+        }
         [void][System.Windows.Forms.MessageBox]::Show(
             ($summary+[Environment]::NewLine+[Environment]::NewLine+'Launch CS2 to use the video settings.'),
             'CS2 Graphics Result','OK',$(if($allSkipped.Count -gt 0 -or -not $scalingVerified){'Warning'}else{'Information'}))

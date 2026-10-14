@@ -4,7 +4,7 @@ start "" powershell.exe -NoProfile -ExecutionPolicy Bypass -STA -WindowStyle Hid
 exit /b
 
 # POWERSHELL_GUI
-# CAFE_RELEASE=2026.10.14.8
+# CAFE_RELEASE=2026.10.14.9
 
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
@@ -63,10 +63,29 @@ function Write-Log {
 
 # Result records are separate from diagnostic INFO/WARN/ERROR logs.
 $script:StepResults=New-Object 'System.Collections.Generic.List[object]'
+$script:RunOutcomes=New-Object 'System.Collections.Generic.List[object]'
 $script:StepScope=$null
 $script:StepScopeError=$false
 $script:StepScopeWarning=$false
 $script:ActiveRunName=''
+function Set-RunOutcome {
+    param([string]$Run,[string]$Setting,[string]$Requested,[string]$Target,
+          [ValidateSet('APPLIED','FALLBACK','SKIPPED','FAILED','PENDING')][string]$Status,
+          [string]$Actual='',[string]$Detail='')
+    if([string]::IsNullOrWhiteSpace($Run)){ $Run='Manual action' }
+    foreach($old in @($script:RunOutcomes | Where-Object {$_.Run -eq $Run -and $_.Setting -eq $Setting})){
+        [void]$script:RunOutcomes.Remove($old)
+    }
+    $script:RunOutcomes.Add([pscustomobject]@{
+        Run=$Run;Setting=$Setting;Requested=$Requested;Target=$Target;Status=$Status;Actual=$Actual;Detail=$Detail
+    })
+}
+function Clear-RunOutcomes {
+    param([string]$Run)
+    foreach($old in @($script:RunOutcomes | Where-Object {$_.Run -eq $Run})){
+        [void]$script:RunOutcomes.Remove($old)
+    }
+}
 function Set-StepResult {
     param([string]$Run,[string]$Step,[ValidateSet('SUCCESS','PARTIAL','SKIPPED','FAILED','PENDING')][string]$Status,[string]$Detail='')
     foreach($old in @($script:StepResults | Where-Object {$_.Run -eq $Run -and $_.Step -eq $Step})){
@@ -123,6 +142,20 @@ function Write-RunSummary {
         $advice=Get-StepRecoveryAdvice -Step ([string]$item.Step) -Status ([string]$item.Status)
         Write-Log ($Run+' | '+$item.Step+' | '+$item.Status+': '+$detail+' Next: '+$advice) $level
     }
+    $outcomes=@($script:RunOutcomes | Where-Object {$_.Run -eq $Run})
+    foreach($outcome in $outcomes){
+        $parts=@($Run+' | '+$outcome.Setting+' | '+$outcome.Status)
+        if($outcome.Requested){$parts+=('requested: '+$outcome.Requested)}
+        if($outcome.Target){$parts+=('target: '+$outcome.Target)}
+        if($outcome.Actual){$parts+=('actual: '+$outcome.Actual)}
+        if($outcome.Detail){$parts+=('detail: '+$outcome.Detail)}
+        Write-Log ($parts -join ' | ') 'INFO'
+    }
+    $outcomeCounts=@{}
+    foreach($state in @('APPLIED','FALLBACK','SKIPPED','FAILED','PENDING')){
+        $outcomeCounts[$state]=@($outcomes | Where-Object {$_.Status -eq $state}).Count
+    }
+    Write-Log ($Run+' settings: '+$outcomeCounts.APPLIED+' APPLIED, '+$outcomeCounts.FALLBACK+' FALLBACK, '+$outcomeCounts.SKIPPED+' SKIPPED, '+$outcomeCounts.FAILED+' FAILED, '+$outcomeCounts.PENDING+' PENDING') 'SUMMARY'
 }
 
 Write-Log "Launcher starting."
@@ -284,7 +317,6 @@ function Apply-ProfileMouse {
         if ($apiOk -and $speedReadOk -and ($actualSpeed -ne $PointerSpeed)) {
             Write-Log "Windows accepted the set call but reports live speed $actualSpeed instead of $PointerSpeed." "ERROR"
         }
-
         # Ask Windows to reload the mouse settings. This notification is best-effort:
         # failure here should not be confused with failure to write the registry.
         try {
@@ -322,6 +354,15 @@ public static class FabMouseNotify {
             $current.MouseThreshold2 -ne [string]$threshold2) {
             throw "Registry verification failed. Current values: sensitivity=$($current.MouseSensitivity), speed=$($current.MouseSpeed), threshold1=$($current.MouseThreshold1), threshold2=$($current.MouseThreshold2)."
         }
+        $runName=if($script:ActiveRunName){$script:ActiveRunName}else{$ProfileName}
+        Set-RunOutcome -Run $runName -Setting 'Windows pointer speed' -Requested ([string]$PointerSpeed) `
+            -Target 'Current Windows user/session' -Status $(if($apiVerified){'APPLIED'}else{'FALLBACK'}) `
+            -Actual $(if($speedReadOk){[string]$actualSpeed}else{'unknown'}) `
+            -Detail $(if($apiVerified){'Live API read-back matched.'}else{'Registry values were verified; live pointer speed was not confirmed.'})
+        Set-RunOutcome -Run $runName -Setting 'Windows mouse acceleration' -Requested $accelDescription `
+            -Target 'Current Windows user/session' -Status $(if($accelOk){'APPLIED'}else{'FALLBACK'}) `
+            -Actual $(if($accelOk){$accelDescription}else{'registry values saved; active value unconfirmed'}) `
+            -Detail $(if($accelOk){'Windows accepted the active-session setting.'}else{'Registry values were verified, but the active-session API failed.'})
 
         Write-Log "$ProfileName registry verification passed." "INFO"
         if ($apiVerified) {
@@ -1692,6 +1733,7 @@ function Apply-NvidiaGamingSettings {
         [ValidateRange(-1,359)][int]$Hue = -1,
         [ValidateSet(2,3,5)][int]$ScalingMode = 2
     )
+    $runName=if($script:StepScope){$script:StepScope.Run}elseif($script:ActiveRunName){$script:ActiveRunName}else{'Manual NVIDIA'}
     $hueDescription=if($Hue -lt 0){'driver default'}else{"${Hue} degrees"}
     Write-Log "NVIDIA gaming-settings apply started (profile resolution: ${Width}x${Height}; highest advertised refresh; configured refresh ${RefreshHz}Hz; vibrance ${Vibrance}%; hue $hueDescription; brightness unchanged, default is 50%)."
     $compat=$null
@@ -1701,64 +1743,86 @@ function Apply-NvidiaGamingSettings {
     Write-Log "Profile display apply: selecting the highest advertised refresh at ${Width}x${Height}; if unavailable, keep current resolution and select its highest refresh."
     if($null -eq $compat){
         Write-Log "Display resolution/refresh skipped because the compatibility preflight did not complete." "WARN"
+        Set-RunOutcome -Run $runName -Setting 'Windows display mode' -Requested "${Width}x${Height} @ highest advertised Hz" -Target 'DISPLAY1' -Status SKIPPED -Detail 'Display capability preflight did not complete.'
     }elseif(-not $compat.DisplayHelper){
         Write-Log "Display resolution/refresh skipped because Windows mode enumeration is unavailable." "WARN"
+        Set-RunOutcome -Run $runName -Setting 'Windows display mode' -Requested "${Width}x${Height} @ highest advertised Hz" -Target 'DISPLAY1' -Status SKIPPED -Detail 'Windows display-mode enumeration is unavailable.'
     }elseif ("FabDisplayNative" -as [type]) {
         try {
             $displayReport = ""
             $displayOk = [FabDisplayNative]::TrySetDisplayMode($Width, $Height, $RefreshHz, [ref]$displayReport)
             if ($displayOk) {
+                $displayStatus=if($displayReport -match 'preferred resolution unavailable'){'FALLBACK'}else{'APPLIED'}
+                $displayActual=if($displayReport -match '(\d+x\d+ @\d+Hz)'){$Matches[1]}else{$displayReport}
+                Set-RunOutcome -Run $runName -Setting 'Windows display mode' -Requested "${Width}x${Height} @ highest advertised Hz (profile hint ${RefreshHz} Hz)" -Target 'DISPLAY1' -Status $displayStatus -Actual $displayActual -Detail $displayReport
                 if($displayReport -match 'preferred resolution unavailable'){
                     Write-Log $displayReport "WARN"
                 }else{
                     Write-Log $displayReport
                 }
             } else {
+                Set-RunOutcome -Run $runName -Setting 'Windows display mode' -Requested "${Width}x${Height} @ highest advertised Hz" -Target 'DISPLAY1' -Status FAILED -Actual $displayReport -Detail 'Display mode change was not verified.'
                 Write-Log $displayReport "WARN"
             }
         } catch {
+            Set-RunOutcome -Run $runName -Setting 'Windows display mode' -Requested "${Width}x${Height} @ highest advertised Hz" -Target 'DISPLAY1' -Status FAILED -Detail $_.Exception.Message
             Write-Log "Display resolution/refresh was not applied: $($_.Exception.Message)" "WARN"
         }
+    }else{
+        Set-RunOutcome -Run $runName -Setting 'Windows display mode' -Requested "${Width}x${Height} @ highest advertised Hz" -Target 'DISPLAY1' -Status SKIPPED -Detail 'Display-mode helper is unavailable.'
     }
 
     if($null -eq $compat -or -not $compat.NVAPI -or -not ("FabNvApi" -as [type])){
         Write-Log "NVIDIA settings skipped because the NVAPI capability preflight did not succeed." "WARN"
+        foreach($setting in @('Digital Vibrance','Hue','NVIDIA performance/G-SYNC driver profile','GPU scaling mode')){
+            Set-RunOutcome -Run $runName -Setting $setting -Requested 'Profile value' -Target 'NVIDIA display/driver' -Status SKIPPED -Detail 'NVAPI capability preflight did not succeed.'
+        }
     }else{
         if(-not $compat.Vibrance){
             Write-Log "Digital Vibrance skipped: neither the extended nor legacy driver interface passed its read-only capability check." "WARN"
+            Set-RunOutcome -Run $runName -Setting 'Digital Vibrance' -Requested ("${Vibrance}%") -Target 'NVIDIA display associated with DISPLAY1' -Status SKIPPED -Detail 'No supported DVC query interface.'
         }else{
             try {
                 $vibranceReport = ""
                 $vibranceOk = [FabNvApi]::TrySetDigitalVibrance($Vibrance, [ref]$vibranceReport)
+                $vibranceState=if(-not $vibranceOk){'FAILED'}elseif($vibranceReport -match '^Extended Digital Vibrance interface failed'){'FALLBACK'}else{'APPLIED'}
+                $vibranceActual=if($vibranceReport -match '(?:at |level )(\d+)(?:%| \()'){$Matches[1]+'%'}else{$vibranceReport}
+                Set-RunOutcome -Run $runName -Setting 'Digital Vibrance' -Requested ("${Vibrance}%") -Target 'NVIDIA display associated with DISPLAY1' -Status $vibranceState -Actual $vibranceActual -Detail $vibranceReport
                 if ($vibranceOk) {
                     Write-Log $vibranceReport
                 } else {
                     Write-Log ("Digital Vibrance was detected, but apply was not verified: "+$vibranceReport) "WARN"
                 }
             } catch {
+                Set-RunOutcome -Run $runName -Setting 'Digital Vibrance' -Requested ("${Vibrance}%") -Target 'NVIDIA display associated with DISPLAY1' -Status FAILED -Detail $_.Exception.Message
                 Write-Log "Digital Vibrance apply was not verified: $($_.Exception.Message)" "WARN"
             }
         }
 
         if(-not $compat.Hue){
             Write-Log "Hue skipped: the current driver/display did not pass its read-only Hue capability check." "WARN"
+            Set-RunOutcome -Run $runName -Setting 'Hue' -Requested $(if($Hue -lt 0){'driver default'}else{"${Hue} degrees"}) -Target 'NVIDIA display associated with DISPLAY1' -Status SKIPPED -Detail 'Hue query/set capability is unavailable.'
         }else{
             try {
                 $hueReport = ""
                 $hueOk = [FabNvApi]::TrySetHueAngle($Hue, [ref]$hueReport)
+                Set-RunOutcome -Run $runName -Setting 'Hue' -Requested $(if($Hue -lt 0){'driver default'}else{"${Hue} degrees"}) -Target 'NVIDIA display associated with DISPLAY1' -Status $(if($hueOk){'APPLIED'}else{'FAILED'}) -Actual $hueReport -Detail $hueReport
                 if ($hueOk) { Write-Log $hueReport }
                 else { Write-Log ("Hue was detected, but apply was not verified: "+$hueReport) "WARN" }
             } catch {
+                Set-RunOutcome -Run $runName -Setting 'Hue' -Requested $(if($Hue -lt 0){'driver default'}else{"${Hue} degrees"}) -Target 'NVIDIA display associated with DISPLAY1' -Status FAILED -Detail $_.Exception.Message
                 Write-Log "Hue apply was not verified: $($_.Exception.Message)" "WARN"
             }
         }
 
         if(-not $compat.DriverProfile){
             Write-Log "Performance and G-SYNC driver-profile settings skipped: DRS profile read/save capability is unavailable." "WARN"
+            Set-RunOutcome -Run $runName -Setting 'NVIDIA performance/G-SYNC driver profile' -Requested 'Performance values; G-SYNC driver flags off' -Target 'Global NVIDIA driver profile' -Status SKIPPED -Detail 'DRS read/save capability is unavailable.'
         }else{
             try {
                 $performanceReport = ""
                 $performanceOk = [FabNvApi]::TryApplyPerformanceProfile([ref]$performanceReport)
+                Set-RunOutcome -Run $runName -Setting 'NVIDIA performance/G-SYNC driver profile' -Requested 'Performance values; G-SYNC driver flags off' -Target 'Global NVIDIA driver profile' -Status $(if($performanceOk){'APPLIED'}else{'FALLBACK'}) -Actual $performanceReport -Detail 'Individual verified and skipped driver flags are included in the detailed result.'
                 foreach ($performanceLine in ($performanceReport -split "\r?\n")) {
                     if (-not [string]::IsNullOrWhiteSpace($performanceLine)) {
                         if ($performanceLine.StartsWith("ERROR:")) {
@@ -1774,19 +1838,25 @@ function Apply-NvidiaGamingSettings {
                     Write-Log "Some NVIDIA Performance/G-SYNC-off driver profile settings were unavailable or not verified. See DRS lines." "WARN"
                 }
             } catch {
+                Set-RunOutcome -Run $runName -Setting 'NVIDIA performance/G-SYNC driver profile' -Requested 'Performance values; G-SYNC driver flags off' -Target 'Global NVIDIA driver profile' -Status FAILED -Detail $_.Exception.Message
                 Write-Log "Performance/G-SYNC driver-profile settings were not applied: $($_.Exception.Message)" "WARN"
             }
         }
 
         if(-not $compat.GpuScaling){
             Write-Log "GPU scaling skipped: the current driver/display did not pass the read-only scaling API check." "WARN"
+            Set-RunOutcome -Run $runName -Setting 'GPU scaling mode' -Requested ([string]$ScalingMode) -Target 'NVIDIA display selected for DISPLAY1' -Status SKIPPED -Detail 'Read-only GPU scaling capability check failed.'
         }else{
             try {
                 $scalingReport = ""
                 $scalingOk = [FabNvApi]::TrySetGpuScalingMode($ScalingMode, [ref]$scalingReport)
+                $scalingStatus=if($scalingOk){'APPLIED'}else{'FAILED'}
+                if($scalingOk -and $scalingReport -match 'matched Windows GDI-primary display because DISPLAY1 name could not be mapped'){$scalingStatus='FALLBACK'}
+                Set-RunOutcome -Run $runName -Setting 'GPU scaling mode' -Requested ([string]$ScalingMode) -Target 'NVIDIA display selected for DISPLAY1' -Status $scalingStatus -Actual $scalingReport -Detail $scalingReport
                 if ($scalingOk) { Write-Log $scalingReport }
                 else { Write-Log ("GPU scaling was not applied or verified: "+$scalingReport) "WARN" }
             } catch {
+                Set-RunOutcome -Run $runName -Setting 'GPU scaling mode' -Requested ([string]$ScalingMode) -Target 'NVIDIA display selected for DISPLAY1' -Status FAILED -Detail $_.Exception.Message
                 Write-Log "GPU scaling was not applied or verified: $($_.Exception.Message)" "WARN"
             }
         }
@@ -1794,8 +1864,11 @@ function Apply-NvidiaGamingSettings {
 
     Write-Log "NVIDIA Performance-equivalent values were requested through the global driver profile; select the actual preview slider manually if the radio control must also show Performance."
     Write-Log "Still manual: Configure Surround, PhysX -> select the NVIDIA GPU."
+    Set-RunOutcome -Run $runName -Setting 'PhysX processor' -Requested 'NVIDIA GPU or Auto-select' -Target 'NVIDIA Control Panel > Configure Surround, PhysX' -Status SKIPPED -Detail 'No supported launcher setter; manual selection remains required.'
     Write-Log "Still manual: Adjust desktop size and position -> enable override scaling mode set by games and programs."
+    Set-RunOutcome -Run $runName -Setting 'Scaling override checkbox' -Requested 'Enabled' -Target 'NVIDIA Control Panel > Adjust desktop size and position' -Status SKIPPED -Detail 'No reliable supported launcher setter; manual change remains required.'
     Write-Log "G-SYNC-off driver profile values were requested globally; confirm Set up G-SYNC checkbox is OFF on display 1 (this GUI checkbox itself was not toggled)."
+    Set-RunOutcome -Run $runName -Setting 'G-SYNC Control Panel checkbox' -Requested 'Off' -Target 'NVIDIA Control Panel > Set up G-SYNC' -Status SKIPPED -Detail 'Driver profile flags were requested, but the GUI checkbox was not changed.'
     Write-Log "Opening NVIDIA Control Panel. Check the scaling override checkbox and PhysX GPU choice manually." "INFO"
     Open-NvidiaControlPanel
 }
@@ -3895,7 +3968,7 @@ try {
                     $run=$script:LogihubRequestedRun
                     if(-not $run){$run='Manual DPI'}
                     Start-StepScope -Run $run -Step 'Logitech live DPI'
-                    try{Set-LogitechLiveDPI -DPI $dpi}catch{Write-Log ('Delayed Logitech DPI failed: '+$_.Exception.Message) 'ERROR'}
+                    try{Set-LogitechLiveDPI -DPI $dpi}catch{Write-Log ('Delayed Logitech DPI failed: '+$_.Exception.Message) 'ERROR';Set-RunOutcome -Run $run -Setting 'Logitech live DPI' -Requested ([string]$dpi) -Target 'Selected Superlight' -Status FAILED -Detail $_.Exception.Message}
                     finally{Complete-StepScope -Detail 'Async DPI command finished; review read-back verification.';Write-RunSummary -Run $run}
                 }
             } catch {
@@ -3904,6 +3977,7 @@ try {
                     $run=$script:LogihubRequestedRun
                     if(-not $run){$run='Manual DPI'}
                     Set-StepResult -Run $run -Step 'Logitech live DPI' -Status FAILED -Detail $_.Exception.Message
+                    Set-RunOutcome -Run $run -Setting 'Logitech live DPI' -Requested ([string]$script:LogihubRequestedDPI) -Target 'Selected Superlight (helper download)' -Status FAILED -Detail $_.Exception.Message
                     Write-RunSummary -Run $run
                 }
                 $script:LogihubRequestedDPI=$null
@@ -3948,8 +4022,10 @@ function Request-LogitechLiveDPI {
     }
     if($script:LogihubDownloadProcess){
         Write-Log ('Logitech download pending; latest requested live DPI = '+$DPI)
+        Set-RunOutcome -Run $script:LogihubRequestedRun -Setting 'Logitech live DPI' -Requested ([string]$DPI) -Target 'Selected Superlight (pending device detection)' -Status PENDING -Detail 'Pinned helper download is still running.'
         return
     }
+    Set-RunOutcome -Run $script:LogihubRequestedRun -Setting 'Logitech live DPI' -Requested ([string]$DPI) -Target 'Selected Superlight (pending device detection)' -Status PENDING -Detail 'Pinned helper download started; DPI apply waits for download verification.'
     Start-LogihubAsyncDownload
 }
 
@@ -4025,15 +4101,17 @@ function Schedule-LogitechDpiVerification {
             $current=Get-SelectedSuperlight
             if(-not (Test-SameSuperlight -Expected $context.Target -Actual $current)){
                 Write-Log 'The connected Superlight changed after DPI apply; delayed verification did not target a different mouse.' 'WARN'
+                Set-RunOutcome -Run $context.Run -Setting 'Delayed Logitech DPI verification' -Requested ([string]$context.DPI) -Target ($context.Target.Name+' device '+$context.Target.Index) -Status SKIPPED -Detail 'The connected mouse identity changed; no other device was queried for verification.'
             }else{
                 $actual=Get-LogitechDPIReadback -DeviceIndex ([int]$context.Target.Index)
-                if($actual -ne $context.DPI){Write-Log ('DPI changed after apply: requested '+$context.DPI+', delayed read-back '+$actual+'. G HUB or onboard profile may have restored it.') 'WARN'}
-                else{Write-Log ('Delayed Logitech DPI verification passed: '+$actual+' DPI.')}
+                if($actual -ne $context.DPI){Write-Log ('DPI changed after apply: requested '+$context.DPI+', delayed read-back '+$actual+'. G HUB or onboard profile may have restored it.') 'WARN';$verifyStatus='FALLBACK'}
+                else{Write-Log ('Delayed Logitech DPI verification passed: '+$actual+' DPI.');$verifyStatus='APPLIED'}
+                Set-RunOutcome -Run $context.Run -Setting 'Delayed Logitech DPI verification' -Requested ([string]$context.DPI) -Target ($context.Target.Name+' device '+$context.Target.Index) -Status $verifyStatus -Actual ([string]$actual) -Detail 'Delayed read-back checks whether another Logitech profile changed DPI.'
             }
             Complete-StepScope -Detail 'Delayed read-back checks whether another Logitech profile changed DPI after application.'
             Write-RunSummary -Run $context.Run
         }catch{
-            if($script:StepScope){Write-Log ('Delayed Logitech DPI verification failed: '+$_.Exception.Message) 'WARN';Complete-StepScope -Detail 'Delayed DPI could not be verified.';Write-RunSummary -Run $context.Run}
+            if($script:StepScope){Write-Log ('Delayed Logitech DPI verification failed: '+$_.Exception.Message) 'WARN';Set-RunOutcome -Run $context.Run -Setting 'Delayed Logitech DPI verification' -Requested ([string]$context.DPI) -Target 'Selected Superlight' -Status FAILED -Detail $_.Exception.Message;Complete-StepScope -Detail 'Delayed DPI could not be verified.';Write-RunSummary -Run $context.Run}
             else{Write-Log ('Delayed Logitech DPI verification skipped: '+$_.Exception.Message) 'WARN'}
         }finally{$timer.Dispose();$script:LiveDpiVerificationTimer=$null;$script:LiveDpiVerificationContext=$null}
     })
@@ -4063,6 +4141,7 @@ function Set-LogitechLiveDPI {
     if($readValue -ne $DPI){throw ('Logitech DPI verification failed: requested '+$DPI+' but mouse reports '+$readValue)}
     Write-Log ('Logitech live DPI verified: requested '+$DPI+'; read-back '+$readValue+' (device '+$deviceIndex+').')
     $run=if($script:StepScope){$script:StepScope.Run}elseif($script:LogihubRequestedRun){$script:LogihubRequestedRun}else{'Manual DPI'}
+    Set-RunOutcome -Run $run -Setting 'Logitech live DPI' -Requested ([string]$DPI) -Target ($target.Name+' device '+$deviceIndex) -Status APPLIED -Actual ([string]$readValue) -Detail 'Device identity was revalidated before applying and reading back DPI.'
     Schedule-LogitechDpiVerification -Target $target -DPI $DPI -Generation $script:LogihubRequestGeneration -Run $run
 }
 function Set-LogitechOnboardDPI {
@@ -4117,6 +4196,7 @@ function Invoke-GamingProfile {
     }
     $script:ActiveRunName=$ProfileName
     $script:StepResults.Clear()
+    Clear-RunOutcomes -Run $ProfileName
     Refresh-ProfileFromGitHub -ProfileName $ProfileName
     $profile = $script:GamingProfiles[$ProfileName]
     Write-Log "$ProfileName full routine started: mouse, NVIDIA, CS2 config, applications."
@@ -4137,7 +4217,9 @@ function Invoke-GamingProfile {
         }
         # Profile Apply installs its CFG without editing any Steam launch options.
         $steps += @{ Name = "Install CS2 $profileCfgName"; Action = {
-            [void](Install-AtCfg -Silent -CfgName $profileCfgName -DownloadUrl $profileCfgUrl -CloudPreferred:([bool]$profileCfgUrl) -CS2Sensitivity ([string]$profile.CS2Sensitivity))
+            $cfgInstalled=Install-AtCfg -Silent -CfgName $profileCfgName -DownloadUrl $profileCfgUrl -CloudPreferred:([bool]$profileCfgUrl) -CS2Sensitivity ([string]$profile.CS2Sensitivity)
+            Set-RunOutcome -Run $ProfileName -Setting 'CS2 profile CFG' -Requested $profileCfgName -Target 'Active Steam CS2 cfg folder' -Status $(if($cfgInstalled){'APPLIED'}else{'FAILED'}) -Actual $(if($cfgInstalled){'SHA-256 verified'}else{'not installed'}) -Detail $(if($cfgInstalled){'Selected source copied and verified.'}else{'Install-AtCfg did not confirm installation.'})
+            if(-not $cfgInstalled){throw ('CS2 CFG install was not verified: '+$profileCfgName)}
         } }
     }
     if ($profile.LaunchApps) {
@@ -4154,6 +4236,9 @@ function Invoke-GamingProfile {
             Write-Log ("$ProfileName step returned: " + $step.Name + ". Check logs for individual success or errors.")
         } catch {
             Write-Log ("$ProfileName step failed: " + $step.Name + ": " + $_.Exception.Message) 'ERROR'
+            if($step.Name -eq 'Logitech live DPI'){
+                Set-RunOutcome -Run $ProfileName -Setting 'Logitech live DPI' -Requested ([string]$profile.LogitechDPI) -Target 'Selected Superlight' -Status FAILED -Detail $_.Exception.Message
+            }
         } finally {
             if($step.Name -eq 'Logitech live DPI' -and $script:LogihubDownloadProcess){
                 $script:StepScope=$null
@@ -4221,9 +4306,11 @@ function Start-CS2WithProfileCfg {
 # Strict hash pin prevents executing unreviewed modified remote module code.
 function Invoke-GraphicsOnly {
     param([Parameter(Mandatory=$true)][string]$ModeName)
-    Start-StepScope -Run ('Graphics '+$ModeName) -Step 'Apply Graphics'
+    $graphicsRun='Graphics '+$ModeName
+    Clear-RunOutcomes -Run $graphicsRun
+    Start-StepScope -Run $graphicsRun -Step 'Apply Graphics'
     try {
-    $expected='914b6aabaf3d97d3f99eba82660b685ffb61a608'
+    $expected='2b82d6bd5f096769b1ae2999e1595ece4a73261f'
     $source='https://raw.githubusercontent.com/fabjoncela/Cs-script/main/graphics/ApplyGraphics.ps1'
     $cache=Join-Path $env:LOCALAPPDATA 'CafeLauncher\graphics-module.ps1'
     $parent=Split-Path -Parent $cache
@@ -4266,7 +4353,7 @@ function Invoke-GraphicsOnly {
         Write-Log ('Graphics module could not complete: '+$_.Exception.Message) 'ERROR'
     } finally {
         Complete-StepScope -Detail 'Graphics action finished; inspect applied/skipped video keys and backup logs.'
-        Write-RunSummary -Run ('Graphics '+$ModeName)
+        Write-RunSummary -Run $graphicsRun
     }
 }
 
