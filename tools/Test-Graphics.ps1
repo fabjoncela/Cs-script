@@ -17,7 +17,7 @@ $pinPattern=[regex]::Escape('$expected=')+[char]39+[regex]::Escape($moduleBlobHa
 if($launcher -notmatch $pinPattern){
     throw 'Launcher graphics-module pin does not match the reviewed local module blob.'
 }
-if($source -notmatch 'raw\.githubusercontent\.com/fabjoncela/Cs-script/main/graphics/\$ModeName\.json' -or
+if($source -notmatch 'raw\.githubusercontent\.com/fabjoncela/Cs-script/main/graphics/\$ModeName\.json\?fresh=' -or
    $launcher -notmatch 'raw\.githubusercontent\.com/fabjoncela/Cs-script/main/graphics/ApplyGraphics\.ps1'){
     throw 'Production graphics downloads must follow main after this branch is merged.'
 }
@@ -130,16 +130,21 @@ try {
     Remove-Item -LiteralPath $sandbox -Recurse -Force -ErrorAction SilentlyContinue
 }
 
-# All profile graphics files stay independent; four currently share the
-# same validated video settings. BrileMode uses native 1080p fullscreen 16:9.
+# All profile graphics files stay independent; four currently share the same
+# video settings. Under Highest, an optional legacy RefreshHz hint is nonbinding.
+# BrileMode uses native 1080p fullscreen 16:9.
 $profileNames=@('FabMode','ArliMode','BrileMode','ArmlMode','OliMode')
 $identicalToFab=@('FabMode','ArliMode','ArmlMode','OliMode')
 $fabPreset=Get-Content -LiteralPath (Join-Path $root 'graphics\FabMode.json') -Raw | ConvertFrom-Json
 $fabValues=ConvertTo-VideoGraphicsSettings -Preset $fabPreset
 if ([int]$fabValues['Width'] -ne 1280 -or [int]$fabValues['Height'] -ne 960 -or
-    [int]$fabValues['RefreshHz'] -ne 360 -or [int]$fabValues['AspectRatioMode'] -ne 0 -or
+    [int]$fabValues['AspectRatioMode'] -ne 0 -or
     [int]$fabValues['Fullscreen'] -ne 1){
-    throw 'FabMode must specify 1280x960, 4:3, fullscreen, 360Hz.'
+    throw 'FabMode must specify 1280x960, 4:3, fullscreen.'
+}
+if($fabPreset.RefreshPolicy -notin @('Highest','Exact') -or
+   ($fabPreset.RefreshPolicy -eq 'Exact' -and [int]$fabValues['RefreshHz'] -ne 360)){
+    throw 'FabMode must use Highest refresh or explicitly request 360Hz when using Exact refresh.'
 }
 foreach($name in $profileNames){
     $file=Join-Path $root ('graphics\'+$name+'.json')
@@ -148,8 +153,10 @@ foreach($name in $profileNames){
     $values=ConvertTo-VideoGraphicsSettings -Preset $json
     if($values.Count -lt 5){throw ('Too few actual video settings in '+$name+' preset.')}
     if($name -in $identicalToFab){
-        if($values.Count -ne $fabValues.Count){throw ($name+' graphics field count differs from FabMode.')}
-        foreach($key in $fabValues.Keys){
+        $fabCompareKeys=@($fabValues.Keys|Where-Object{$_ -ne 'RefreshHz'})
+        $profileCompareKeys=@($values.Keys|Where-Object{$_ -ne 'RefreshHz'})
+        if($profileCompareKeys.Count -ne $fabCompareKeys.Count){throw ($name+' graphics field count differs from FabMode.')}
+        foreach($key in $fabCompareKeys){
             if(-not $values.Contains($key) -or [int]$values[$key] -ne [int]$fabValues[$key]){
                 throw ($name+' graphics setting '+$key+' differs from FabMode.')
             }

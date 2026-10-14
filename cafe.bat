@@ -4,7 +4,7 @@ start "" powershell.exe -NoProfile -ExecutionPolicy Bypass -STA -WindowStyle Hid
 exit /b
 
 # POWERSHELL_GUI
-# CAFE_RELEASE=2026.10.14.18
+# CAFE_RELEASE=2026.10.14.19
 
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
@@ -2349,7 +2349,8 @@ function Install-AtCfg {
             # Windows PowerShell 5.1 uses TLS 1.2 when supported by the system.
             [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
             try {
-                Invoke-WebRequest -Uri $source.Value -OutFile $downloaded -UseBasicParsing -TimeoutSec 15 -MaximumRedirection 5 -ErrorAction Stop
+                $downloadUri=Add-CafeCacheBust -Uri $source.Value
+                Invoke-WebRequest -Uri $downloadUri -OutFile $downloaded -Headers @{'Cache-Control'='no-cache'} -UseBasicParsing -TimeoutSec 15 -MaximumRedirection 5 -ErrorAction Stop
                 $sourcePath = $downloaded
                 $cloudDownloaded = [bool]$CloudPreferred
             } catch {
@@ -2705,7 +2706,8 @@ function Check-CafeLauncherUpdates {
         if ($reply -ne [System.Windows.Forms.DialogResult]::Yes) { Write-Log 'User skipped CafeLauncher update.'; return }
         $temp=Join-Path $env:TEMP ("CafeLauncher-update-{0}.bat" -f [Guid]::NewGuid().ToString('N'))
         try {
-            Invoke-WebRequest -Uri 'https://raw.githubusercontent.com/fabjoncela/Cs-script/main/cafe.bat' -OutFile $temp -UseBasicParsing -TimeoutSec 20 -ErrorAction Stop | Out-Null
+            $updateUri=Add-CafeCacheBust -Uri 'https://raw.githubusercontent.com/fabjoncela/Cs-script/main/cafe.bat'
+            Invoke-WebRequest -Uri $updateUri -OutFile $temp -Headers @{'Cache-Control'='no-cache'} -UseBasicParsing -TimeoutSec 20 -ErrorAction Stop | Out-Null
             $bytes=[IO.File]::ReadAllBytes($temp)
             if ($bytes.Length -ne [int64]$remote.size -or
                 (Get-GitBlobSha -Bytes $bytes) -ne $remote.sha) { throw 'Downloaded BAT failed GitHub blob hash and size verification.' }
@@ -2982,7 +2984,7 @@ function Get-ProfileGraphicsPreset {
     $cache=Join-Path $env:LOCALAPPDATA ("CafeLauncher\graphics-cache\"+$ProfileName+'.json')
     $local=Join-Path (Split-Path -Parent $env:CAFE_SCRIPT) ("graphics\"+$ProfileName+'.json')
     try{
-        $url="https://raw.githubusercontent.com/$($script:GithubRepo)/$($script:GithubBranch)/graphics/$ProfileName.json"
+        $url=Add-CafeCacheBust -Uri "https://raw.githubusercontent.com/$($script:GithubRepo)/$($script:GithubBranch)/graphics/$ProfileName.json"
         $remote=Invoke-RestMethod -Uri $url -Method Get -TimeoutSec 10 -Headers @{'Cache-Control'='no-cache'} -ErrorAction Stop
         $preset=ConvertTo-CafeGraphicsPreset -ProfileName $ProfileName -Preset $remote
         if(-not $Canonical){
@@ -3270,6 +3272,12 @@ function Save-ProfileSettings {
 
 Load-ProfileSettings
 
+function Add-CafeCacheBust {
+    param([Parameter(Mandatory=$true)][string]$Uri)
+    $separator=if($Uri.Contains('?')){'&'}else{'?'}
+    return ($Uri+$separator+'fresh='+[guid]::NewGuid().ToString('N'))
+}
+
 function Refresh-ProfileFromGitHub {
     param([Parameter(Mandatory=$true)][string]$ProfileName)
     if (-not $script:GamingProfiles.Contains($ProfileName)) { throw "Unknown profile: $ProfileName" }
@@ -3277,7 +3285,7 @@ function Refresh-ProfileFromGitHub {
         Write-Log "$ProfileName has local edits not synced to GitHub; keeping local settings." 'INFO'
         return
     }
-    $url = "https://raw.githubusercontent.com/$($script:GithubRepo)/$($script:GithubBranch)/profiles/$ProfileName.json"
+    $url = Add-CafeCacheBust -Uri "https://raw.githubusercontent.com/$($script:GithubRepo)/$($script:GithubBranch)/profiles/$ProfileName.json"
     try {
         [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
         # GitHub content is JSON data only; no code is executed from remote profiles.
@@ -5003,8 +5011,8 @@ function Invoke-GraphicsOnly {
     Clear-RunOutcomes -Run $graphicsRun
     Start-StepScope -Run $graphicsRun -Step 'Apply Graphics'
     try {
-    $expected='2b82d6bd5f096769b1ae2999e1595ece4a73261f'
-    $source='https://raw.githubusercontent.com/fabjoncela/Cs-script/main/graphics/ApplyGraphics.ps1'
+    $expected='ab8d84c7e972e3d62a9f3eb524e8897a558e4c16'
+    $source=Add-CafeCacheBust -Uri 'https://raw.githubusercontent.com/fabjoncela/Cs-script/main/graphics/ApplyGraphics.ps1'
     $cache=Join-Path $env:LOCALAPPDATA 'CafeLauncher\graphics-module.ps1'
     $parent=Split-Path -Parent $cache
     if(-not (Test-Path -LiteralPath $parent)){[void](New-Item -Path $parent -ItemType Directory -Force)}

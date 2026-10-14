@@ -120,6 +120,29 @@ if($pointerValues.Count -ne 11 -or $pointerLabels.Count -ne 11 -or
    [Array]::IndexOf([int[]]$pointerValues,10) -ne 5){
     throw 'Pointer speed dropdown must have the 11 classic Windows levels and map its default 6/11 position to value 10.'
 }
+$cacheBustFunctions=@($psAst.FindAll({
+    param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+        $node.Name -eq 'Add-CafeCacheBust'
+},$true))
+if($cacheBustFunctions.Count -ne 1){throw 'Expected one cache-busting helper for GitHub raw profile reads.'}
+Invoke-Expression $cacheBustFunctions[0].Extent.Text
+$freshUrlOne=Add-CafeCacheBust -Uri 'https://raw.githubusercontent.com/owner/repo/main/profiles/FabMode.json'
+$freshUrlTwo=Add-CafeCacheBust -Uri 'https://raw.githubusercontent.com/owner/repo/main/profiles/FabMode.json'
+if($freshUrlOne -notmatch '\?fresh=[a-f0-9]{32}$' -or $freshUrlTwo -notmatch '\?fresh=[a-f0-9]{32}$' -or $freshUrlOne -ceq $freshUrlTwo){
+    throw 'Cache-busting URLs must include a unique per-request token.'
+}
+foreach($freshReadFunctionName in @(
+    'Refresh-ProfileFromGitHub','Get-ProfileGraphicsPreset','Install-AtCfg',
+    'Check-CafeLauncherUpdates','Invoke-GraphicsOnly'
+)){
+    $freshReadFunction=@($psAst.FindAll({
+        param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+            $node.Name -eq $freshReadFunctionName
+    },$true))
+    if($freshReadFunction.Count -ne 1 -or $freshReadFunction[0].Extent.Text -notmatch 'Add-CafeCacheBust'){
+        throw ("$freshReadFunctionName must bypass stale raw GitHub CDN responses.")
+    }
+}
 $copyHandlerStart=$psSource.IndexOf('$copyGraphics.Add_Click({')
 $copyHandlerEnd=$psSource.IndexOf('$restoreHistory.Add_Click({',$copyHandlerStart)
 if($copyHandlerStart -lt 0 -or $copyHandlerEnd -le $copyHandlerStart){
