@@ -10,6 +10,8 @@ foreach($required in @(
     'main` is the production source',
     'testing/development until merged',
     '**CS2 / Apps** tab contains CFG sensitivity/URL, app launch options, and per-profile CS2 graphics controls',
+    'three previous versions of `graphics/<ProfileName>.json` from GitHub commit history',
+    'cached per profile for 24 hours',
     'GraphicsSettings',
     'profiles/<ProfileName>.json` and `graphics/<ProfileName>.json',
     'Update-Context.ps1 -Check'

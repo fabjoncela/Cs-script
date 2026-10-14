@@ -4,7 +4,7 @@ start "" powershell.exe -NoProfile -ExecutionPolicy Bypass -STA -WindowStyle Hid
 exit /b
 
 # POWERSHELL_GUI
-# CAFE_RELEASE=2026.10.14.3
+# CAFE_RELEASE=2026.10.14.4
 
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
@@ -2312,6 +2312,82 @@ function Get-ProfileGraphicsPreset {
     throw ('No graphics preset for '+$ProfileName+'. Connect once to download it, then local editing works offline.')
 }
 
+function ConvertTo-CafeGraphicsHistoryEntry {
+    param($Commit)
+    if($null -eq $Commit -or [string]$Commit.sha -notmatch '^[0-9a-fA-F]{40}$'){return $null}
+    $dateText=[string]$Commit.commit.author.date
+    if(-not $dateText){$dateText=[string]$Commit.commit.committer.date}
+    $date=[DateTimeOffset]::MinValue
+    if(-not [DateTimeOffset]::TryParse($dateText,[ref]$date)){return $null}
+    $message=([string]$Commit.commit.message -split "`r?`n",2)[0].Trim()
+    if(-not $message){$message='GitHub graphics update'}
+    if($message.Length -gt 120){$message=$message.Substring(0,117)+'...'}
+    return [pscustomobject]@{Sha=([string]$Commit.sha).ToLowerInvariant();DateUtc=$date.ToUniversalTime().ToString('o');Message=$message}
+}
+function Get-ProfileGraphicsHistory {
+    param([Parameter(Mandatory=$true)][string]$ProfileName,[switch]$ForceRefresh)
+    if(-not $script:GamingProfiles.Contains($ProfileName)){throw ('Unknown graphics profile: '+$ProfileName)}
+    $cache=Join-Path $env:LOCALAPPDATA ('CafeLauncher\graphics-history\'+$ProfileName+'.json')
+    if(-not $ForceRefresh -and (Test-Path -LiteralPath $cache -PathType Leaf)){
+        try{
+            $cached=Get-Content -LiteralPath $cache -Raw -ErrorAction Stop|ConvertFrom-Json -ErrorAction Stop
+            $cachedAt=[DateTimeOffset]::MinValue
+            if([int]$cached.SchemaVersion -eq 1 -and $cached.Repo -ceq $script:GithubRepo -and
+               $cached.Branch -ceq $script:GithubBranch -and $cached.ProfileName -ceq $ProfileName -and
+               [DateTimeOffset]::TryParse([string]$cached.CachedAtUtc,[ref]$cachedAt)){
+                $age=([DateTimeOffset]::UtcNow-$cachedAt.ToUniversalTime()).TotalHours
+                if($age -ge 0 -and $age -lt 24){
+                    $valid=New-Object 'System.Collections.Generic.List[object]'
+                    foreach($entry in @($cached.Versions|Select-Object -First 3)){
+                        $clean=ConvertTo-CafeGraphicsHistoryEntry -Commit ([pscustomobject]@{
+                            sha=$entry.Sha;commit=[pscustomobject]@{message=$entry.Message;author=[pscustomobject]@{date=$entry.DateUtc}}
+                        })
+                        if($clean){$valid.Add($clean)}
+                    }
+                    return @($valid.ToArray())
+                }
+            }
+        }catch{Write-Log ('Ignoring invalid graphics history cache for '+$ProfileName+': '+$_.Exception.Message) 'WARN'}
+    }
+    $encodedPath=[Uri]::EscapeDataString('graphics/'+$ProfileName+'.json')
+    $encodedBranch=[Uri]::EscapeDataString([string]$script:GithubBranch)
+    $uri='https://api.github.com/repos/'+$script:GithubRepo+'/commits?path='+$encodedPath+'&per_page=4&sha='+$encodedBranch
+    $headers=@{'User-Agent'='CafeLauncher-Graphics-History';'Accept'='application/vnd.github+json'}
+    $response=Invoke-RestMethod -Uri $uri -Method Get -Headers $headers -TimeoutSec 12 -ErrorAction Stop
+    $versions=New-Object 'System.Collections.Generic.List[object]'
+    # The newest path commit is the current version. Keep the next three older versions.
+    foreach($commit in @($response|Select-Object -Skip 1 -First 3)){
+        $entry=ConvertTo-CafeGraphicsHistoryEntry -Commit $commit
+        if($entry){$versions.Add($entry)}
+    }
+    $data=[pscustomobject]@{
+        SchemaVersion=1;Repo=$script:GithubRepo;Branch=$script:GithubBranch;ProfileName=$ProfileName
+        CachedAtUtc=[DateTimeOffset]::UtcNow.ToString('o');Versions=@($versions.ToArray())
+    }
+    try{
+        $directory=Split-Path -Parent $cache
+        if(-not(Test-Path -LiteralPath $directory)){[void](New-Item -ItemType Directory -Path $directory -Force)}
+        [IO.File]::WriteAllText($cache,($data|ConvertTo-Json -Depth 5),(New-Object Text.UTF8Encoding($false)))
+    }catch{Write-Log ('Graphics history cache warning for '+$ProfileName+': '+$_.Exception.Message) 'WARN'}
+    return @($versions.ToArray())
+}
+function Get-ProfileGraphicsVersion {
+    param([Parameter(Mandatory=$true)][string]$ProfileName,[Parameter(Mandatory=$true)]$Version)
+    if(-not $script:GamingProfiles.Contains($ProfileName)){throw ('Unknown graphics profile: '+$ProfileName)}
+    $sha=[string]$Version.Sha
+    if($sha -notmatch '^[0-9a-fA-F]{40}$'){throw 'Selected graphics history entry has an invalid commit id.'}
+    $path='graphics/'+$ProfileName+'.json'
+    $encodedSha=[Uri]::EscapeDataString($sha)
+    $uri='https://api.github.com/repos/'+$script:GithubRepo+'/contents/'+$path+'?ref='+$encodedSha
+    $headers=@{'User-Agent'='CafeLauncher-Graphics-History';'Accept'='application/vnd.github+json'}
+    $response=Invoke-RestMethod -Uri $uri -Method Get -Headers $headers -TimeoutSec 12 -ErrorAction Stop
+    if([string]$response.path -cne ('graphics/'+$ProfileName+'.json')){throw 'GitHub returned a different graphics profile file.'}
+    $encodedContent=([string]$response.content -replace '\s','')
+    if(-not $encodedContent){throw 'Selected GitHub graphics version has no file content.'}
+    try{$json=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($encodedContent))|ConvertFrom-Json -ErrorAction Stop}
+    catch{throw ('Could not decode selected graphics history version: '+$_.Exception.Message)}
+    return (ConvertTo-CafeGraphicsPreset -ProfileName $ProfileName -Preset $json)
+}
 function Import-ProfileValues {
     param([string]$ProfileName, $SavedProfile, [string]$SourceLabel = 'local')
     if (-not $script:GamingProfiles.Contains($ProfileName) -or -not $SavedProfile) { return }
@@ -2889,7 +2965,7 @@ function Show-ProfileEditor {
     $nv.Checked=[bool]$p.ApplyNvidia
     Add-EditorTabWide -Grid $displayGrid -Control $nv -Row 2
 
-    $cs2Grid=New-EditorTabGrid -Page $cs2Page -Rows 17
+    $cs2Grid=New-EditorTabGrid -Page $cs2Page -Rows 18
     $cfgFile=New-Object System.Windows.Forms.TextBox
     $cfgFile.Text=[string]$p.ConfigFile
     $cfgFile.ReadOnly=$true
@@ -2947,12 +3023,31 @@ function Show-ProfileEditor {
     $fsrChoice=New-EditorTabChoice -Grid $cs2Grid -Title 'FSR level' -Column 1 -Row 14 -Labels @('Off','Level 1','Level 2','Level 3','Level 4') -Values @('0','1','2','3','4') -SelectedValue ([string]$gs.FSRDetail)
     $vsyncChoice=New-EditorTabChoice -Grid $cs2Grid -Title 'Vertical sync' -Column 0 -Row 15 -Labels @('Off','On') -Values @('0','1') -SelectedValue ([string]$gs.VSync)
     $cmaaChoice=New-EditorTabChoice -Grid $cs2Grid -Title 'CMAA' -Column 1 -Row 15 -Labels @('Off','On') -Values @('0','1') -SelectedValue ([string]$gs.CMAA)
+    $historyChoice=New-Object System.Windows.Forms.ComboBox
+    $historyChoice.DropDownStyle='DropDownList'
+    [void]$historyChoice.Items.Add('Load history first')
+    $historyChoice.SelectedIndex=0
+    $historyChoice.Enabled=$false
+    [void](Add-EditorTabField -Grid $cs2Grid -Title 'Earlier GitHub graphics versions' -Control $historyChoice -Column 0 -Row 16)
+    $loadHistory=New-Object System.Windows.Forms.Button
+    $loadHistory.Text='Load history'
+    $loadHistory.BackColor=[System.Drawing.Color]::FromArgb(58,67,83)
+    $loadHistory.ForeColor=$WHITE
+    $loadHistory.FlatStyle='Flat'
+    [void](Add-EditorTabField -Grid $cs2Grid -Title 'Cached 24 hours; requires internet' -Control $loadHistory -Column 1 -Row 16)
     $resetGraphics=New-Object System.Windows.Forms.Button
-    $resetGraphics.Text='Reset CS2 graphics to profile defaults'
+    $resetGraphics.Text='Reset to defaults'
     $resetGraphics.BackColor=[System.Drawing.Color]::FromArgb(70,75,88)
     $resetGraphics.ForeColor=$WHITE
     $resetGraphics.FlatStyle='Flat'
-    Add-EditorTabWide -Grid $cs2Grid -Control $resetGraphics -Row 16
+    [void](Add-EditorTabField -Grid $cs2Grid -Title 'Load canonical profile preset' -Control $resetGraphics -Column 0 -Row 17)
+    $restoreHistory=New-Object System.Windows.Forms.Button
+    $restoreHistory.Text='Restore selected version'
+    $restoreHistory.BackColor=[System.Drawing.Color]::FromArgb(58,67,83)
+    $restoreHistory.ForeColor=$WHITE
+    $restoreHistory.FlatStyle='Flat'
+    $restoreHistory.Enabled=$false
+    [void](Add-EditorTabField -Grid $cs2Grid -Title 'Loads into editor; save to keep' -Control $restoreHistory -Column 1 -Row 17)
 
     $editorFooter=New-Object System.Windows.Forms.TableLayoutPanel
     $editorFooter.Dock='Fill'
@@ -3055,6 +3150,60 @@ function Show-ProfileEditor {
         }finally{$dialog.Cursor=[System.Windows.Forms.Cursors]::Default}
     }.GetNewClosure())
 
+    $historyLoaded=$false
+    $loadHistory.Add_Click({
+        try{
+            $dialog.Cursor=[System.Windows.Forms.Cursors]::WaitCursor
+            $forceRefresh=[bool]$historyLoaded
+            $versions=@(Get-ProfileGraphicsHistory -ProfileName $ProfileName -ForceRefresh:$forceRefresh)
+            $historyChoice.Items.Clear()
+            $historyChoice.Tag=[object[]]$versions
+            if($versions.Count -eq 0){
+                [void]$historyChoice.Items.Add('No earlier GitHub versions found')
+                $historyChoice.Enabled=$false
+                $restoreHistory.Enabled=$false
+                $historyChoice.SelectedIndex=0
+                $status.Text='No earlier synced graphics versions were found for this profile.'
+            }else{
+                foreach($version in $versions){
+                    $dateLabel=[string]$version.DateUtc
+                    try{$dateLabel=([DateTimeOffset]::Parse([string]$version.DateUtc)).ToLocalTime().ToString('yyyy-MM-dd HH:mm')}catch{}
+                    [void]$historyChoice.Items.Add(($dateLabel+' — '+[string]$version.Message))
+                }
+                $historyChoice.Enabled=$true
+                $historyChoice.SelectedIndex=0
+                $restoreHistory.Enabled=$true
+                $status.Text=('Loaded '+$versions.Count+' earlier version(s). Select one and restore it into the editor.')
+            }
+            $historyLoaded=$true
+            $loadHistory.Text='Refresh history'
+            $status.ForeColor=[System.Drawing.Color]::FromArgb(255,190,105)
+        }catch{
+            Write-Log ('Could not load GitHub graphics history for '+$ProfileName+': '+$_.Exception.Message) 'WARN'
+            [void][System.Windows.Forms.MessageBox]::Show(
+                ('Could not load graphics history for '+$ProfileName+[Environment]::NewLine+$_.Exception.Message),
+                'Graphics History','OK','Warning')|Out-Null
+        }finally{$dialog.Cursor=[System.Windows.Forms.Cursors]::Default}
+    }.GetNewClosure())
+    $restoreHistory.Add_Click({
+        try{
+            $versions=@($historyChoice.Tag)
+            $selectedIndex=[int]$historyChoice.SelectedIndex
+            if($selectedIndex -lt 0 -or $selectedIndex -ge $versions.Count){throw 'Select an earlier graphics version first.'}
+            $dialog.Cursor=[System.Windows.Forms.Cursors]::WaitCursor
+            $version=$versions[$selectedIndex]
+            $preset=Get-ProfileGraphicsVersion -ProfileName $ProfileName -Version $version
+            [void](& $applyGraphicsPresetToEditor $preset)
+            $status.Text=('Loaded '+$version.Message+' into the editor. Save locally or sync to keep it; Apply Graphics applies it to CS2.')
+            $status.ForeColor=[System.Drawing.Color]::FromArgb(255,190,105)
+            Write-Log ('Loaded earlier GitHub graphics version '+$version.Sha+' for '+$ProfileName+' into the editor; no save or game settings were changed.')
+        }catch{
+            Write-Log ('Could not restore GitHub graphics version for '+$ProfileName+': '+$_.Exception.Message) 'WARN'
+            [void][System.Windows.Forms.MessageBox]::Show(
+                ('Could not load the selected graphics version:`n'+$_.Exception.Message),
+                'Restore Graphics Version','OK','Warning')|Out-Null
+        }finally{$dialog.Cursor=[System.Windows.Forms.Cursors]::Default}
+    }.GetNewClosure())
     $saveLocal=New-Object System.Windows.Forms.Button
     $saveLocal.Text='Save Locally'
     $saveLocal.BackColor=$BLUE

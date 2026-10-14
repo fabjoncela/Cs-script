@@ -79,10 +79,14 @@ if($psSource -notmatch 'function Apply-NvidiaGamingSettings' -or
 }
 foreach($requiredEditorFeature in @(
     '$cs2Page.Text=''CS2 / Apps''',
-    '$cs2Grid=New-EditorTabGrid -Page $cs2Page -Rows 17',
+    '$cs2Grid=New-EditorTabGrid -Page $cs2Page -Rows 18',
     'New-EditorTabNumber -Grid $cs2Grid -Title ''CS2 resolution width''',
     'New-EditorTabChoice -Grid $cs2Grid -Title ''Stretch / scaling''',
     'Stretch / scaling',
+    'Earlier GitHub graphics versions',
+    'Restore selected version',
+    'Get-ProfileGraphicsHistory -ProfileName $ProfileName -ForceRefresh:$forceRefresh',
+    'Get-ProfileGraphicsVersion -ProfileName $ProfileName -Version $version',
     '$graphicsPresetState[$ProfileName]=$graphicsPreset',
     'GraphicsSettings',
     'graphics/$ProfileName.json'
@@ -91,7 +95,6 @@ foreach($requiredEditorFeature in @(
         throw ('CS2 Graphics editor/local/cloud persistence feature missing: '+$requiredEditorFeature)
     }
 }
-
 # Launch All button should still start G HUB, but every player-profile
 # LaunchApps path must skip it so the external DPI helper stays in control.
 $definitions=@{}
@@ -131,6 +134,19 @@ if($script:TestGHubCalls -ne 1){throw 'Standalone Launch All must still open G H
 # Preview UI: fixed-coordinate label overlays have been replaced by isolated
 # table cells on distinct tabs, so labels cannot cover neighboring inputs.
 $editorSource=$definitions['Show-ProfileEditor']
+foreach($historyFunction in @('ConvertTo-CafeGraphicsHistoryEntry','Get-ProfileGraphicsHistory','Get-ProfileGraphicsVersion')){
+    if(-not $definitions.ContainsKey($historyFunction)){
+        throw ('GitHub graphics history helper missing: '+$historyFunction)
+    }
+}
+$restoreStart=$editorSource.IndexOf('$restoreHistory.Add_Click({',[StringComparison]::Ordinal)
+$restoreEnd=$editorSource.IndexOf('}.GetNewClosure())',$restoreStart,[StringComparison]::Ordinal)
+if($restoreStart -lt 0 -or $restoreEnd -le $restoreStart){throw 'Cannot identify graphics history restore handler.'}
+$restoreBody=$editorSource.Substring($restoreStart,$restoreEnd-$restoreStart)
+if($restoreBody -notmatch 'Get-ProfileGraphicsVersion' -or $restoreBody -notmatch 'applyGraphicsPresetToEditor' -or
+   $restoreBody -match 'Save-ProfileSettings|Sync-ProfileToGitHub|Invoke-GraphicsOnly'){
+    throw 'History restore must validate and load into the editor without saving or applying graphics.'
+}
 foreach($tabLabel in @('Mouse','NVIDIA / Display','CS2 / Apps')){
     if(-not $editorSource.Contains("'"+$tabLabel+"'")){
         throw ('Profile editor tab missing: '+$tabLabel)
