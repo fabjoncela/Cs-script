@@ -73,6 +73,50 @@ Dashboard **Apply Graphics** is a separate action from the normal profile Apply 
 - The dashboard's top-right GitHub API allowance indicator reads the remaining/limit headers from requests the launcher already makes; it must not make a separate polling request. It shows the count and when that response was received. This is a display only and does not affect profile selection or settings.
 - **Windows PowerShell 5.1 event-handler compile regression:** avoid `[void]` casts around .NET methods inside WinForms click-handler `try/catch` blocks. They can throw `Argument type cannot be System.Void` when the user clicks, before the handler runs. Discard dialog results with `$null = [System.Windows.Forms.MessageBox]::Show(...)` instead. This affected the CS2 graphics capture error dialog; the CS2 graphics capture test guards against reintroducing the pattern.
 
+## Future storage migration plan — Cloudflare R2 (not implemented)
+
+This is a saved plan only. The current launcher still uses GitHub for profile, CFG, and graphics files. Do not start this migration unless the user explicitly asks.
+
+### Goal and design
+
+Move profile settings, CS2 graphics presets, CFG files, and optionally the graphics helper file off GitHub file hosting and GitHub profile-file API calls. Keep the launcher updater separate. Use a private Cloudflare R2 bucket to hold the files and one small Cloudflare Worker as the launcher's HTTPS REST API and access gate. Do not add a database or per-user accounts. The Worker alone accesses R2; CafeLauncher never receives R2 credentials.
+
+### Keep familiar file paths
+
+Store objects using recognizable paths, for example:
+
+- `profiles/FabMode.json` and the other `profiles/<Profile>.json` files.
+- `graphics/FabMode.json` and the other `graphics/<Profile>.json` files.
+- Root CFG files such as `fab.cfg`, `brile.cfg`, and the other profile CFGs.
+- Optionally `graphics/ApplyGraphics.ps1`; if moved, retain the existing pinned-hash verification before running the downloaded helper.
+
+Keep the bucket private. Seed it with the current canonical files after validating that the source files are current. The launcher should use the Worker for reads and writes; it should not access the bucket directly.
+
+### Worker API shape
+
+- `GET /v1/profiles/<Profile>` returns that profile's profile JSON and graphics JSON together, with a revision for each file. This replaces the launcher's separate profile and graphics reads where both are needed.
+- `POST /v1/profiles/<Profile>` accepts the edited profile JSON, graphics JSON, and optional permitted CFG sensitivity update. Require the shared save code, validate the profile name and every allowed file/key, and write only approved paths. Return the resulting revisions and values or hashes for read-back verification.
+- `GET /v1/files/<name>` serves allow-listed CFG files and, if chosen, the graphics helper. Reject arbitrary paths.
+- Graphics history moves from GitHub commit history to Worker-managed snapshots: before replacing a graphics preset, retain its prior content; expose an endpoint to list the latest three previous versions and fetch a selected version. Restore should load a version into the editor; saving and applying remain separate actions.
+
+Use optimistic concurrency: reads return revisions and saves identify the revision they were based on. If another PC has saved a newer revision, reject the stale write and ask the user to refresh or review instead of silently overwriting newer settings.
+
+### Launcher flow changes
+
+Keep the editor and Apply behavior mostly unchanged; replace the storage transport underneath them:
+
+1. Edit Profile refreshes the selected profile and graphics through the Worker.
+2. Apply Profile refreshes that selected profile before applying it; Apply Graphics refreshes that profile's graphics before writing CS2 settings.
+3. Save & Sync saves locally first, then sends the profile, graphics, and any allowed CFG change in one Worker request. Clear `SyncPending` only after the Worker accepts the save and the launcher verifies the returned revision/content. Preserve pending edits if the network or verification fails.
+4. CFG downloads use the Worker rather than raw hosted-file URLs. History uses Worker snapshots. If the helper is moved, verify its pinned hash before execution.
+5. Keep the current visible result and error reporting: distinguish saved, pending, conflict, unavailable, and verified outcomes. Do not silently fall back to stale local data after a failed remote refresh; require the existing explicit local-fallback choice where appropriate.
+
+### Shared save code and scope
+
+Ask for the shared save code only when Save & Sync is used. Send it over HTTPS to the Worker for verification; never embed it in `cafe.bat`, save it in profiles, or write it to logs. Do not persist it on café PCs, so Deep Freeze sign-outs/resets do not affect the workflow. Anyone who learns the shared code can edit shared files, so provide a way to rotate it and explain that tradeoff.
+
+This migration removes GitHub profile/graphics Contents API usage and GitHub-hosted profile/CFG/graphics reads. It does not move app update checks: those remain on their existing separate source unless a later plan explicitly changes them. R2 is the file store; the Worker is still a small backend, but no database or user-account system is part of this design.
+
 ## Runtime behavior and safety boundaries
 
 - Startup PC detection is informational. It must not change monitor settings.
