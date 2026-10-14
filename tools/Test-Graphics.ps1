@@ -181,19 +181,25 @@ $csharp=$batText.Substring($csharpStart,$csharpEnd-$csharpStart)
 Add-Type -TypeDefinition $csharp -ErrorAction Stop
 if(-not ('FabDisplayNative' -as [type]) -or
    -not [FabDisplayNative].GetMethod('IsAdvertisedMode') -or
-   -not [FabDisplayNative].GetMethod('TrySetHighestRefreshAtCurrentResolution')){
+   -not [FabDisplayNative].GetMethod('GetHighestRefreshAtResolution') -or
+   -not [FabDisplayNative].GetMethod('TrySetDisplayMode')){
     throw 'Read-only advertised-mode helper was not compiled.'
 }
 if([FabDisplayNative]::IsAdvertisedMode(1,1,0)){
     throw 'Invalid resolution must not pass display mode validation.'
 }
 foreach($testCase in @(
-    @{Active=60;Modes=[int[]]@(60,120,240);Expected=240},
-    @{Active=60;Modes=[int[]]@(60,120,360);Expected=360},
-    @{Active=60;Modes=[int[]]@(60,240,500,540);Expected=540},
-    @{Active=360;Modes=[int[]]@(60);Expected=360}
+    @{Widths=[int[]]@(1920,1920,1920);Heights=[int[]]@(1080,1080,1080);Rates=[int[]]@(60,120,240);Expected=240},
+    @{Widths=[int[]]@(1920,1920,1920);Heights=[int[]]@(1080,1080,1080);Rates=[int[]]@(60,120,360);Expected=360},
+    @{Widths=[int[]]@(1920,1920,1920,1280);Heights=[int[]]@(1080,1080,1080,960);Rates=[int[]]@(60,240,540,1000);Expected=540},
+    @{Widths=[int[]]@(1920);Heights=[int[]]@(1080);Rates=[int[]]@(360);Expected=360}
 )){
-    $selected=[FabDisplayNative]::GetHighestRefreshAtCurrentResolution([int]$testCase.Active,[int[]]$testCase.Modes)
+    $selected=[FabDisplayNative]::GetHighestRefreshAtResolution(1920,1080,[int[]]$testCase.Widths,[int[]]$testCase.Heights,[int[]]$testCase.Rates)
     if($selected -ne $testCase.Expected){throw ('Highest refresh selection expected '+$testCase.Expected+'Hz but returned '+$selected+'Hz.')}
 }
-Write-Host 'PASS: Windows File.Replace backups, Steam account guard, 240/360/540Hz max selection, five graphics presets, selective edits, and graphics ranges.'
+$displaySource=[IO.File]::ReadAllText($bat)
+if($displaySource -notmatch '(?s)function Apply-NvidiaGamingSettings.*?TrySetDisplayMode' -or
+   $displaySource -notmatch 'highest advertised refresh at preferred resolution'){
+    throw 'The profile display apply must choose the maximum refresh at the profile resolution.'
+}
+Write-Host 'PASS: Windows File.Replace backups, Steam account guard, 240/360/540Hz profile max selection, five graphics presets, and graphics ranges.'

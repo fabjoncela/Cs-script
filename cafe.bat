@@ -366,8 +366,8 @@ function Open-NvidiaControlPanel {
 
 
 # Windows display-mode API and NVIDIA NVAPI first-stage settings helper.
-# Profile applies preserve their requested-resolution fallback rules; startup
-# separately raises refresh to the highest advertised rate at current resolution.
+# Profile applies select the highest advertised refresh at the profile resolution;
+# if that resolution is unavailable they keep the current resolution and maximize it.
 # The display mode helper uses a byte-array placeholder for DEVMODE's 16-byte union,
 # avoiding compiler/layout problems from the prior explicit union implementation.
 try {
@@ -493,84 +493,15 @@ public static class FabDisplayNative {
             "; modes checked=" + count + ".";
     }
 
-    // Pure helper shared by startup selection and tests. The active mode is
-    // included because some drivers omit it from indexed EnumDisplaySettings.
-    public static int GetHighestRefreshAtCurrentResolution(int activeHz, int[] advertisedHz) {
-        int highest = activeHz >= 24 ? activeHz : 0;
-        if (advertisedHz != null) {
-            for (int i=0; i<advertisedHz.Length; i++)
-                if (advertisedHz[i] >= 24 && advertisedHz[i] > highest) highest = advertisedHz[i];
-        }
+    // Selects the maximum rate for one resolution from parallel mode arrays.
+    public static int GetHighestRefreshAtResolution(int width, int height, int[] widths, int[] heights, int[] rates) {
+        if (widths == null || heights == null || rates == null) return 0;
+        int count = Math.Min(widths.Length, Math.Min(heights.Length, rates.Length));
+        int highest = 0;
+        for (int i=0; i<count; i++)
+            if (widths[i] == width && heights[i] == height && rates[i] >= 24 && rates[i] > highest)
+                highest = rates[i];
         return highest;
-    }
-
-    // Startup behavior: keep the current resolution and select its highest
-    // progressive mode at 24 bpp or above. This never changes resolution.
-    public static bool TrySetHighestRefreshAtCurrentResolution(out string report) {
-        const string device = @"\\.\DISPLAY1";
-        DEVMODE current = NewMode();
-        if (!EnumDisplaySettings(device, -1, ref current)) {
-            report = "Cannot read current DISPLAY1 mode; startup refresh was not changed.";
-            return false;
-        }
-        List<DEVMODE> candidates = new List<DEVMODE>();
-        List<int> rates = new List<int>();
-        int activeHz = 0;
-        if (current.dmPelsWidth >= 640 && current.dmPelsHeight >= 480 &&
-            current.dmBitsPerPel >= 24 && current.dmDisplayFrequency >= 24 &&
-            (current.dmDisplayFlags & 2) == 0) {
-            candidates.Add(current);
-            rates.Add(current.dmDisplayFrequency);
-            activeHz = current.dmDisplayFrequency;
-        }
-        int checkedModes = 0;
-        for (int i=0; i<4096; i++) {
-            DEVMODE dm = NewMode();
-            if (!EnumDisplaySettings(device, i, ref dm)) break;
-            checkedModes++;
-            if (dm.dmPelsWidth != current.dmPelsWidth || dm.dmPelsHeight != current.dmPelsHeight ||
-                dm.dmBitsPerPel < 24 || dm.dmDisplayFrequency < 24 || (dm.dmDisplayFlags & 2) != 0) continue;
-            candidates.Add(dm);
-            rates.Add(dm.dmDisplayFrequency);
-        }
-        int highest = GetHighestRefreshAtCurrentResolution(activeHz, rates.ToArray());
-        if (candidates.Count == 0 || highest < 24) {
-            report = device + " found no valid progressive refresh modes at current resolution " +
-                current.dmPelsWidth + "x" + current.dmPelsHeight + "; kept " + current.dmDisplayFrequency + "Hz.";
-            return false;
-        }
-        DEVMODE candidate = candidates[0];
-        for (int i=1; i<candidates.Count; i++) {
-            if (candidates[i].dmDisplayFrequency > candidate.dmDisplayFrequency ||
-                (candidates[i].dmDisplayFrequency == candidate.dmDisplayFrequency &&
-                 candidates[i].dmBitsPerPel > candidate.dmBitsPerPel)) candidate = candidates[i];
-        }
-        string mode = current.dmPelsWidth + "x" + current.dmPelsHeight;
-        if (current.dmDisplayFrequency == highest) {
-            report = device + " already uses the highest advertised refresh at " + mode + ": " + highest +
-                "Hz (" + checkedModes + " indexed modes checked).";
-            return true;
-        }
-        candidate.dmFields |= 0x00040000 | 0x00080000 | 0x00100000 | 0x00400000;
-        int test = ChangeDisplaySettingsEx(device, ref candidate, IntPtr.Zero, 0x00000002, IntPtr.Zero);
-        if (test != 0) {
-            report = device + " Windows rejected highest advertised refresh " + highest + "Hz at " + mode +
-                " during test: " + ResultName(test) + ". Current mode kept.";
-            return false;
-        }
-        int apply = ChangeDisplaySettingsEx(device, ref candidate, IntPtr.Zero, 0x00000001, IntPtr.Zero);
-        if (apply != 0) {
-            report = device + " Windows rejected highest advertised refresh " + highest + "Hz at " + mode +
-                " during apply: " + ResultName(apply) + ".";
-            return false;
-        }
-        DEVMODE after = NewMode();
-        bool readBack = EnumDisplaySettings(device, -1, ref after);
-        bool verified = readBack && after.dmPelsWidth == current.dmPelsWidth &&
-            after.dmPelsHeight == current.dmPelsHeight && after.dmDisplayFrequency == highest;
-        report = device + " " + (verified ? "set and verified " : "read-back mismatch for ") + mode + " @" + highest +
-            "Hz (highest advertised at current resolution; current was " + current.dmDisplayFrequency + "Hz).";
-        return verified;
     }
 
     public static bool TrySetDisplayMode(int desiredWidth, int desiredHeight, int desiredHz, out string report) {
@@ -580,15 +511,13 @@ public static class FabDisplayNative {
             report = "Cannot read current DISPLAY1 mode; no changes made.";
             return false;
         }
-        DEVMODE candidate = NewMode();
-        int tier = -1;  // 2 = preferred resolution/Hz; 1 = preferred resolution; 0 = current resolution
+        List<DEVMODE> modes = new List<DEVMODE>();
+        List<int> widths = new List<int>();
+        List<int> heights = new List<int>();
+        List<int> rates = new List<int>();
         if (current.dmBitsPerPel >= 24 && current.dmDisplayFrequency >= 24 &&
             (current.dmDisplayFlags & 2) == 0) {
-            candidate = current;
-            if (current.dmPelsWidth == desiredWidth && current.dmPelsHeight == desiredHeight)
-                tier = current.dmDisplayFrequency == desiredHz ? 2 : 1;
-            else
-                tier = 0;
+            modes.Add(current); widths.Add(current.dmPelsWidth); heights.Add(current.dmPelsHeight); rates.Add(current.dmDisplayFrequency);
         }
         int count = 0;
         for (int i=0; i<4096; i++) {
@@ -597,30 +526,37 @@ public static class FabDisplayNative {
             count++;
             if (dm.dmBitsPerPel < 24 || dm.dmDisplayFrequency < 24 ||
                 (dm.dmDisplayFlags & 2) != 0) continue;
-            int thisTier = -1;
-            if (dm.dmPelsWidth == desiredWidth && dm.dmPelsHeight == desiredHeight)
-                thisTier = dm.dmDisplayFrequency == desiredHz ? 2 : 1;
-            else if (dm.dmPelsWidth == current.dmPelsWidth && dm.dmPelsHeight == current.dmPelsHeight)
-                thisTier = 0;
-            if (thisTier < 0) continue;
-            bool preferable = thisTier > tier ||
-                (thisTier == tier && dm.dmDisplayFrequency > candidate.dmDisplayFrequency) ||
-                (thisTier == tier && dm.dmDisplayFrequency == candidate.dmDisplayFrequency &&
-                    dm.dmBitsPerPel > candidate.dmBitsPerPel);
-            if (preferable) { candidate = dm; tier = thisTier; }
+            modes.Add(dm); widths.Add(dm.dmPelsWidth); heights.Add(dm.dmPelsHeight); rates.Add(dm.dmDisplayFrequency);
         }
-        if (tier < 0) {
+        int highest = GetHighestRefreshAtResolution(desiredWidth, desiredHeight, widths.ToArray(), heights.ToArray(), rates.ToArray());
+        int selectedWidth = desiredWidth, selectedHeight = desiredHeight;
+        bool preferredResolution = highest >= 24;
+        if (!preferredResolution) {
+            selectedWidth = current.dmPelsWidth; selectedHeight = current.dmPelsHeight;
+            highest = GetHighestRefreshAtResolution(selectedWidth, selectedHeight, widths.ToArray(), heights.ToArray(), rates.ToArray());
+        }
+        if (highest < 24) {
             report = device + " no suitable display mode advertised after checking " + count +
                 " modes. Keeping " + current.dmPelsWidth + "x" + current.dmPelsHeight +
                 " @" + current.dmDisplayFrequency + "Hz.";
             return false;
         }
+        DEVMODE candidate = NewMode();
+        bool candidateFound = false;
+        foreach (DEVMODE dm in modes) {
+            if (dm.dmPelsWidth != selectedWidth || dm.dmPelsHeight != selectedHeight || dm.dmDisplayFrequency != highest) continue;
+            if (!candidateFound || dm.dmBitsPerPel > candidate.dmBitsPerPel) { candidate = dm; candidateFound = true; }
+        }
+        if (!candidateFound) {
+            report = device + " could not resolve the selected " + selectedWidth + "x" + selectedHeight + " @" + highest + "Hz mode.";
+            return false;
+        }
         string choice = candidate.dmPelsWidth + "x" + candidate.dmPelsHeight +
             " @" + candidate.dmDisplayFrequency + "Hz";
-        string requested = desiredWidth + "x" + desiredHeight + " @" + desiredHz + "Hz";
-        string reason = tier == 2 ? "exact mode available" :
-            tier == 1 ? "requested Hz unavailable; highest advertised Hz at preferred resolution" :
-            "preferred resolution unavailable; using highest advertised Hz at current resolution";
+        string requested = desiredWidth + "x" + desiredHeight + " (profile refresh " + desiredHz + "Hz)";
+        string reason = preferredResolution
+            ? "highest advertised refresh at preferred resolution"
+            : "preferred resolution unavailable; highest advertised refresh at current resolution";
 
         // Avoid screen flicker and unnecessary registry writes if mode is already correct.
         if (current.dmPelsWidth == candidate.dmPelsWidth &&
@@ -1409,19 +1345,6 @@ function Write-NvidiaCompatibilityScan {
     return $scan
 }
 
-function Set-StartupHighestRefreshRate {
-    Start-StepScope -Run 'Startup' -Step 'Highest refresh at current resolution'
-    try {
-        if(-not ('FabDisplayNative' -as [type])){throw 'Windows display-mode helper is unavailable.'}
-        $report=''
-        $ok=[FabDisplayNative]::TrySetHighestRefreshAtCurrentResolution([ref]$report)
-        if($ok){Write-Log ('Startup display refresh: '+$report)}
-        else{Write-Log ('Startup display refresh was not changed: '+$report) 'WARN'}
-    }catch{Write-Log ('Startup display refresh failed safely: '+$_.Exception.Message) 'WARN'}
-    Complete-StepScope -Detail 'Startup selected the highest advertised progressive refresh at the current resolution, then verified read-back.'
-    Write-RunSummary -Run 'Startup'
-}
-
 function Apply-NvidiaGamingSettings {
     param(
         [ValidateRange(640,7680)][int]$Width = 1920,
@@ -1429,18 +1352,18 @@ function Apply-NvidiaGamingSettings {
         [ValidateRange(30,600)][int]$RefreshHz = 360,
         [ValidateRange(0,100)][int]$Vibrance = 75
     )
-    Write-Log "NVIDIA gaming-settings apply started (requested: ${Width}x${Height} @${RefreshHz}Hz, vibrance ${Vibrance}%)."
+    Write-Log "NVIDIA gaming-settings apply started (profile resolution: ${Width}x${Height}; highest advertised refresh; configured refresh ${RefreshHz}Hz; vibrance ${Vibrance}%)."
     $compat=$null
     try{$compat=Write-NvidiaCompatibilityScan -Width $Width -Height $Height -RefreshHz $RefreshHz}
     catch{Write-Log ("NVIDIA preflight unavailable: "+$_.Exception.Message) "WARN"}
 
-    Write-Log "Attempting Windows display 1: ${Width}x${Height} at $RefreshHz Hz."
+    Write-Log "Profile display apply: selecting the highest advertised refresh at ${Width}x${Height}; if unavailable, keep current resolution and select its highest refresh."
     if (("FabDisplayNative" -as [type]) -and ($null -eq $compat -or $compat.DisplayHelper)) {
         try {
             $displayReport = ""
             $displayOk = [FabDisplayNative]::TrySetDisplayMode($Width, $Height, $RefreshHz, [ref]$displayReport)
             if ($displayOk) {
-                if($displayReport -match 'requested Hz unavailable|preferred resolution unavailable'){
+                if($displayReport -match 'preferred resolution unavailable'){
                     Write-Log $displayReport "WARN"
                 }else{
                     Write-Log $displayReport
@@ -3756,7 +3679,6 @@ $startupTimer.Interval=350
 $startupTimer.Add_Tick({
     $startupTimer.Stop()
     $startupTimer.Dispose()
-    Set-StartupHighestRefreshRate
     try {
         Write-Log 'Automatic startup inventory:'
         $summary = Get-PCDiagnostics

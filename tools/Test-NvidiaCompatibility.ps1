@@ -12,7 +12,7 @@ $functions=@{}
 foreach($f in $ast.FindAll({param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst]},$true)){
     $functions[$f.Name]=$f.Extent.Text
 }
-foreach($name in @('Get-NvidiaCompatibilityScan','Write-NvidiaCompatibilityScan','Apply-NvidiaGamingSettings','Get-PCDiagnostics','Set-StartupHighestRefreshRate')){
+foreach($name in @('Get-NvidiaCompatibilityScan','Write-NvidiaCompatibilityScan','Apply-NvidiaGamingSettings','Get-PCDiagnostics','Invoke-GamingProfile')){
     if(-not $functions.ContainsKey($name)){throw ('Missing '+$name)}
 }
 $scanCode=$functions['Get-NvidiaCompatibilityScan']
@@ -29,10 +29,17 @@ foreach($required in @('TrySetDisplayMode','TrySetDigitalVibrance','TryApplyPerf
     if(-not $apply.Contains($required)){throw ('Must preserve independent apply step '+$required)}
 }
 if($functions['Get-PCDiagnostics'] -notmatch 'Get-NvidiaCompatibilityScan'){throw 'Detect PC must include NVIDIA scan.'}
-$startup=$functions['Set-StartupHighestRefreshRate']
-if($startup -notmatch 'TrySetHighestRefreshAtCurrentResolution' -or
-   $code -notmatch '(?s)\$startupTimer\.Add_Tick\(\{.{0,700}Set-StartupHighestRefreshRate'){
-    throw 'Startup must select and verify the highest refresh after the hardware inventory.'
+$profileApply=$functions['Invoke-GamingProfile']
+if($profileApply -notmatch 'Apply-NvidiaGamingSettings -Width' -or
+   $apply -notmatch 'TrySetDisplayMode' -or
+   $code -notmatch 'highest advertised refresh at preferred resolution'){
+    throw 'Every enabled profile apply must select the maximum refresh at its configured resolution.'
+}
+$startupStart=$code.IndexOf('$startupTimer.Add_Tick({',[StringComparison]::Ordinal)
+$startupEnd=$code.IndexOf('$form.Add_Shown({ $startupTimer.Start() })',[StringComparison]::Ordinal)
+if($startupStart -lt 0 -or $startupEnd -le $startupStart -or
+   $code.Substring($startupStart,$startupEnd-$startupStart) -match 'Set-StartupHighestRefreshRate|TrySetDisplayMode'){
+    throw 'Opening the launcher must not change display refresh before a profile is applied.'
 }
 if($scanCode -match 'Start-Process|Invoke-WebRequest|Stop-Process|Install-|Update-Driver'){throw 'Compatibility preflight must be read-only.'}
 Invoke-Expression $scanCode
@@ -42,4 +49,4 @@ foreach($key in @('NVAPI','DisplayHelper','ExactMode')){
     if($null -eq $scan.$key){throw ('Missing compatibility field: '+$key)}
 }
 if(@($scan.Report).Count -lt 2){throw 'NVIDIA preflight did not record capability diagnostics.'}
-Write-Host ('PASS: startup max-refresh action, NVIDIA compatibility inventory, read-only runtime scan, independent driver fallback and diagnostics; '+@($scan.Report).Count+' lines.')
+Write-Host ('PASS: profile-triggered max-refresh action, no startup display changes, NVIDIA compatibility inventory, read-only runtime scan and diagnostics; '+@($scan.Report).Count+' lines.')
