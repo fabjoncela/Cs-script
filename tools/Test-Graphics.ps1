@@ -17,9 +17,10 @@ $pinPattern=[regex]::Escape('$expected=')+[char]39+[regex]::Escape($moduleBlobHa
 if($launcher -notmatch $pinPattern){
     throw 'Launcher graphics-module pin does not match the reviewed local module blob.'
 }
-if($source -notmatch 'raw\.githubusercontent\.com/fabjoncela/Cs-script/main/graphics/\$ModeName\.json\?fresh=' -or
+if($source -notmatch 'api\.github\.com/repos/fabjoncela/Cs-script/contents/graphics/\$ModeName\.json\?ref=main' -or
+   $source -notmatch 'FromBase64String' -or $source -notmatch 'Cache-Control.*no-cache' -or
    $launcher -notmatch 'raw\.githubusercontent\.com/fabjoncela/Cs-script/main/graphics/ApplyGraphics\.ps1'){
-    throw 'Production graphics downloads must follow main after this branch is merged.'
+    throw 'Graphics presets must use validated GitHub Contents API data; the pinned module source must follow main.'
 }
 if($source -notmatch 'Apply Graphics \| ' -or $source -notmatch 'Set-RunOutcome' -or
    $source -notmatch '\$appliedDetails'){
@@ -291,3 +292,38 @@ try{
     Remove-Item -LiteralPath $localSandbox -Recurse -Force -ErrorAction SilentlyContinue
 }
 Write-Host 'PASS: unsynced local CS2 graphics customizations are preferred for Apply Graphics.'
+
+# A current cloud graphics preset must come from the Contents API, with the
+# exact path and base64 payload validated before cache/application.
+$oldLocalAppData=$env:LOCALAPPDATA
+$oldCafeScript=$env:CAFE_SCRIPT
+$cloudSandbox=Join-Path $env:TEMP ('CafeLauncher-GraphicsApi-'+[guid]::NewGuid().ToString('N'))
+try{
+    $env:LOCALAPPDATA=$cloudSandbox
+    $env:CAFE_SCRIPT=(Join-Path $root 'cafe.bat')
+    $cloudPresetJson=Get-Content -LiteralPath (Join-Path $root 'graphics\FabMode.json') -Raw
+    $cloudFixture=[pscustomobject]@{
+        type='file';path='graphics/FabMode.json';encoding='base64';sha=('b'*40)
+        size=[Text.Encoding]::UTF8.GetByteCount($cloudPresetJson)
+        content=[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($cloudPresetJson))
+    }
+    $script:GraphicsApiFixture=$cloudFixture
+    $script:GraphicsApiRequest=$null
+    function Invoke-RestMethod {
+        [CmdletBinding()]
+        param([string]$Uri,[string]$Method,[int]$TimeoutSec,[int]$MaximumRedirection,$Headers)
+        $script:GraphicsApiRequest=[pscustomobject]@{Uri=$Uri;Method=$Method;Headers=$Headers}
+        return $script:GraphicsApiFixture
+    }
+    $cloudApplied=Get-CS2ModeGraphicsPreset -ModeName 'FabMode'
+    if($cloudApplied.ProfileName -cne 'FabMode' -or
+       $script:GraphicsApiRequest.Uri -notmatch '/contents/graphics/FabMode\.json\?ref=main$' -or
+       $script:GraphicsApiRequest.Headers['Cache-Control'] -ne 'no-cache'){
+        throw 'Cloud graphics preset did not use the validated GitHub Contents API response.'
+    }
+}finally{
+    $env:LOCALAPPDATA=$oldLocalAppData
+    $env:CAFE_SCRIPT=$oldCafeScript
+    Remove-Item -LiteralPath $cloudSandbox -Recurse -Force -ErrorAction SilentlyContinue
+}
+Write-Host 'PASS: CS2 graphics cloud presets use the validated Contents API and no-cache headers.'

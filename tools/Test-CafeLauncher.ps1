@@ -124,7 +124,7 @@ $cacheBustFunctions=@($psAst.FindAll({
     param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
         $node.Name -eq 'Add-CafeCacheBust'
 },$true))
-if($cacheBustFunctions.Count -ne 1){throw 'Expected one cache-busting helper for GitHub raw profile reads.'}
+if($cacheBustFunctions.Count -ne 1){throw 'Expected one cache-busting helper for mutable GitHub raw reads.'}
 Invoke-Expression $cacheBustFunctions[0].Extent.Text
 $freshUrlOne=Add-CafeCacheBust -Uri 'https://raw.githubusercontent.com/owner/repo/main/profiles/FabMode.json'
 $freshUrlTwo=Add-CafeCacheBust -Uri 'https://raw.githubusercontent.com/owner/repo/main/profiles/FabMode.json'
@@ -132,7 +132,7 @@ if($freshUrlOne -notmatch '\?fresh=[a-f0-9]{32}$' -or $freshUrlTwo -notmatch '\?
     throw 'Cache-busting URLs must include a unique per-request token.'
 }
 foreach($freshReadFunctionName in @(
-    'Refresh-ProfileFromGitHub','Get-ProfileGraphicsPreset','Install-AtCfg',
+    'Install-AtCfg',
     'Check-CafeLauncherUpdates','Invoke-GraphicsOnly'
 )){
     $freshReadFunction=@($psAst.FindAll({
@@ -143,6 +143,70 @@ foreach($freshReadFunctionName in @(
         throw ("$freshReadFunctionName must bypass stale raw GitHub CDN responses.")
     }
 }
+$profileApiFunction=@($psAst.FindAll({
+    param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+        $node.Name -eq 'Get-GitHubJsonFromContentsApi'
+},$true))
+if($profileApiFunction.Count -ne 1){throw 'Expected one GitHub Contents API JSON reader.'}
+$profileApiSource=$profileApiFunction[0].Extent.Text
+if($profileApiSource -notmatch 'api\.github\.com/repos/\$Repo/contents/\$\{encodedPath\}' -or
+   $profileApiSource -notmatch 'Cache-Control.*no-cache' -or
+   $profileApiSource -notmatch 'FromBase64String' -or
+   $profileApiSource -notmatch 'file\.path -cne \$Path' -or
+   $profileApiSource -match 'raw\.githubusercontent\.com'){
+    throw 'The shared JSON reader must validate GitHub Contents API data and never read mutable profile JSON from raw CDN.'
+}
+$profileRefreshFunction=@($psAst.FindAll({
+    param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+        $node.Name -eq 'Refresh-ProfileFromGitHub'
+},$true))
+if($profileRefreshFunction.Count -ne 1 -or
+   $profileRefreshFunction[0].Extent.Text -notmatch 'Get-GitHubJsonFromContentsApi' -or
+   $profileRefreshFunction[0].Extent.Text -notmatch 'using cached/local values'){
+    throw 'Profile refresh must use the validated API reader and retain local values when it fails.'
+}
+$graphicsPresetFunction=@($psAst.FindAll({
+    param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+        $node.Name -eq 'Get-ProfileGraphicsPreset'
+},$true))
+if($graphicsPresetFunction.Count -ne 1 -or
+   $graphicsPresetFunction[0].Extent.Text -notmatch 'Get-GitHubJsonFromContentsApi' -or
+   $graphicsPresetFunction[0].Extent.Text -match 'raw\.githubusercontent\.com'){
+    throw 'CS2 graphics presets must also use the validated Contents API instead of mutable raw CDN reads.'
+}
+
+# Exercise the extracted API reader against a mocked Contents API response.
+$script:ProfileApiFixture=$null
+$script:ProfileApiRequest=$null
+function Invoke-RestMethod {
+    [CmdletBinding()]
+    param([string]$Uri,[string]$Method,$Headers,[int]$TimeoutSec,[int]$MaximumRedirection)
+    $script:ProfileApiRequest=[pscustomobject]@{Uri=$Uri;Headers=$Headers;Method=$Method}
+    return $script:ProfileApiFixture
+}
+Invoke-Expression $profileApiFunction[0].Extent.Text
+$profileFixtureJson='{"SchemaVersion":1,"ProfileName":"FabMode","PointerSpeed":18}'
+$script:ProfileApiFixture=[pscustomobject]@{
+    type='file';path='profiles/FabMode.json';encoding='base64';sha=('a'*40)
+    size=[Text.Encoding]::UTF8.GetByteCount($profileFixtureJson)
+    content=[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($profileFixtureJson))
+}
+$profileFixture=Get-GitHubJsonFromContentsApi -Repo 'owner/repo' -Branch 'main' -Path 'profiles/FabMode.json'
+if([int]$profileFixture.PointerSpeed -ne 18 -or
+   $script:ProfileApiRequest.Uri -notmatch '/contents/profiles/FabMode\.json\?ref=main$' -or
+   $script:ProfileApiRequest.Headers['Cache-Control'] -ne 'no-cache'){
+    throw 'The profile reader did not decode the current validated API fixture or send no-cache headers.'
+}
+$script:ProfileApiFixture.path='graphics/FabMode.json'
+$graphicsFixture=Get-GitHubJsonFromContentsApi -Repo 'owner/repo' -Branch 'main' -Path 'graphics/FabMode.json' -MaxBytes 1048576
+if([int]$graphicsFixture.PointerSpeed -ne 18 -or
+   $script:ProfileApiRequest.Uri -notmatch '/contents/graphics/FabMode\.json\?ref=main$'){
+    throw 'The shared Contents API reader did not load the graphics preset path.'
+}
+$script:ProfileApiFixture.path='profiles/OliMode.json'
+$invalidProfileRejected=$false
+try{[void](Get-GitHubJsonFromContentsApi -Repo 'owner/repo' -Branch 'main' -Path 'profiles/FabMode.json')}catch{$invalidProfileRejected=$true}
+if(-not $invalidProfileRejected){throw 'The profile reader must reject a mismatched GitHub path.'}
 $copyHandlerStart=$psSource.IndexOf('$copyGraphics.Add_Click({')
 $copyHandlerEnd=$psSource.IndexOf('$restoreHistory.Add_Click({',$copyHandlerStart)
 if($copyHandlerStart -lt 0 -or $copyHandlerEnd -le $copyHandlerStart){

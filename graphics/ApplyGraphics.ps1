@@ -80,7 +80,7 @@ function Assert-CS2GraphicsDisplayPolicy {
 function Get-CS2ModeGraphicsPreset {
     param([string]$ModeName)
     if($ModeName -notin @('FabMode','ArliMode','BrileMode','ArmlMode','OliMode')){throw 'Invalid graphics mode name.'}
-    $url="https://raw.githubusercontent.com/fabjoncela/Cs-script/main/graphics/$ModeName.json?fresh=$([guid]::NewGuid().ToString('N'))"
+    $url="https://api.github.com/repos/fabjoncela/Cs-script/contents/graphics/$ModeName.json?ref=main"
     $cache=Join-Path $env:LOCALAPPDATA ("CafeLauncher\graphics-cache\"+$ModeName+'.json')
     $local=Join-Path (Split-Path -Parent $env:CAFE_SCRIPT) ("graphics\"+$ModeName+'.json')
     # An explicitly saved local customization wins until the user syncs it.
@@ -105,7 +105,21 @@ function Get-CS2ModeGraphicsPreset {
     }
     try{
         [Net.ServicePointManager]::SecurityProtocol=[Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
-        $preset=Invoke-RestMethod -Uri $url -Method Get -TimeoutSec 10 -Headers @{'Cache-Control'='no-cache'} -ErrorAction Stop
+        $headers=@{
+            Accept='application/vnd.github+json'
+            'User-Agent'='CafeLauncher-GraphicsRefresh'
+            'X-GitHub-Api-Version'='2022-11-28'
+            'Cache-Control'='no-cache'
+            Pragma='no-cache'
+        }
+        $file=Invoke-RestMethod -Uri $url -Method Get -TimeoutSec 12 -MaximumRedirection 0 -Headers $headers -ErrorAction Stop
+        if($file.type -ne 'file' -or $file.path -cne "graphics/$ModeName.json" -or
+            $file.encoding -ne 'base64' -or [string]$file.sha -notmatch '^[a-fA-F0-9]{40}$' -or
+            [string]::IsNullOrWhiteSpace([string]$file.content) -or [int64]$file.size -gt 1048576){
+            throw 'GitHub returned invalid graphics preset file metadata.'
+        }
+        $presetJson=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String(([string]$file.content -replace '\s','')))
+        $preset=ConvertFrom-Json -InputObject $presetJson -ErrorAction Stop
         if($preset.ProfileName -cne $ModeName -or [int]$preset.SchemaVersion -ne 1){throw 'Preset profile/schema mismatch.'}
         [void](Assert-CS2GraphicsDisplayPolicy -Preset $preset)
         [void](ConvertTo-VideoGraphicsSettings -Preset $preset)

@@ -4,7 +4,7 @@ start "" powershell.exe -NoProfile -ExecutionPolicy Bypass -STA -WindowStyle Hid
 exit /b
 
 # POWERSHELL_GUI
-# CAFE_RELEASE=2026.10.14.19
+# CAFE_RELEASE=2026.10.14.20
 
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
@@ -2984,8 +2984,7 @@ function Get-ProfileGraphicsPreset {
     $cache=Join-Path $env:LOCALAPPDATA ("CafeLauncher\graphics-cache\"+$ProfileName+'.json')
     $local=Join-Path (Split-Path -Parent $env:CAFE_SCRIPT) ("graphics\"+$ProfileName+'.json')
     try{
-        $url=Add-CafeCacheBust -Uri "https://raw.githubusercontent.com/$($script:GithubRepo)/$($script:GithubBranch)/graphics/$ProfileName.json"
-        $remote=Invoke-RestMethod -Uri $url -Method Get -TimeoutSec 10 -Headers @{'Cache-Control'='no-cache'} -ErrorAction Stop
+        $remote=Get-GitHubJsonFromContentsApi -Repo $script:GithubRepo -Branch $script:GithubBranch -Path "graphics/$ProfileName.json" -MaxBytes 1048576
         $preset=ConvertTo-CafeGraphicsPreset -ProfileName $ProfileName -Preset $remote
         if(-not $Canonical){
             $script:GraphicsPresets[$ProfileName]=$preset
@@ -3278,6 +3277,45 @@ function Add-CafeCacheBust {
     return ($Uri+$separator+'fresh='+[guid]::NewGuid().ToString('N'))
 }
 
+function Get-GitHubJsonFromContentsApi {
+    param(
+        [Parameter(Mandatory=$true)][string]$Repo,
+        [Parameter(Mandatory=$true)][string]$Branch,
+        [Parameter(Mandatory=$true)][string]$Path,
+        [int64]$MaxBytes=65536
+    )
+    if($Path -notmatch '^(profiles|graphics)/[A-Za-z0-9_-]+\.json$' -or $MaxBytes -lt 1 -or $MaxBytes -gt 1048576){
+        throw 'GitHub JSON path or size limit is invalid.'
+    }
+    $encodedBranch=[Uri]::EscapeDataString($Branch)
+    $encodedPath=(($Path -split '/')|ForEach-Object{[Uri]::EscapeDataString($_)}) -join '/'
+    $url="https://api.github.com/repos/$Repo/contents/${encodedPath}?ref=$encodedBranch"
+    [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+    $headers=@{
+        Accept='application/vnd.github+json'
+        'User-Agent'='CafeLauncher-ProfileRefresh'
+        'X-GitHub-Api-Version'='2022-11-28'
+        'Cache-Control'='no-cache'
+        Pragma='no-cache'
+    }
+    # The raw-content CDN served old profile data even with a unique query.
+    # Read mutable profile/graphics JSON through the API; callers keep their
+    # local copy if this request fails rather than falling back to raw CDN.
+    $file = Invoke-RestMethod -Uri $url -Method Get -Headers $headers -TimeoutSec 12 -MaximumRedirection 0 -ErrorAction Stop
+    if($file.type -ne 'file' -or $file.path -cne $Path -or
+       $file.encoding -ne 'base64' -or [string]$file.sha -notmatch '^[a-fA-F0-9]{40}$' -or
+       [string]::IsNullOrWhiteSpace([string]$file.content) -or [int64]$file.size -gt $MaxBytes){
+        throw "GitHub returned invalid file metadata for $Path."
+    }
+    $profileJson=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String(([string]$file.content -replace '\s','')))
+    $remote=ConvertFrom-Json -InputObject $profileJson -ErrorAction Stop
+    $expectedName=[IO.Path]::GetFileNameWithoutExtension($Path)
+    if ($remote.ProfileName -cne $expectedName -or [int]$remote.SchemaVersion -ne 1) {
+        throw "Unexpected JSON profile/schema for $Path."
+    }
+    return $remote
+}
+
 function Refresh-ProfileFromGitHub {
     param([Parameter(Mandatory=$true)][string]$ProfileName)
     if (-not $script:GamingProfiles.Contains($ProfileName)) { throw "Unknown profile: $ProfileName" }
@@ -3285,14 +3323,8 @@ function Refresh-ProfileFromGitHub {
         Write-Log "$ProfileName has local edits not synced to GitHub; keeping local settings." 'INFO'
         return
     }
-    $url = Add-CafeCacheBust -Uri "https://raw.githubusercontent.com/$($script:GithubRepo)/$($script:GithubBranch)/profiles/$ProfileName.json"
     try {
-        [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
-        # GitHub content is JSON data only; no code is executed from remote profiles.
-        $remote = Invoke-RestMethod -Uri $url -Method Get -Headers @{'Cache-Control'='no-cache'} -TimeoutSec 8 -ErrorAction Stop
-        if ($remote.ProfileName -ne $ProfileName -or [int]$remote.SchemaVersion -ne 1) {
-            throw "Unexpected profile JSON schema for $ProfileName."
-        }
+        $remote=Get-GitHubJsonFromContentsApi -Repo $script:GithubRepo -Branch $script:GithubBranch -Path "profiles/$ProfileName.json"
         Import-ProfileValues -ProfileName $ProfileName -SavedProfile $remote -SourceLabel 'GitHub'
         try { Save-ProfileSettings } catch { Write-Log "Unable to cache cloud settings: $($_.Exception.Message)" 'WARN' }
         Write-Log "$ProfileName settings downloaded from GitHub (no login needed)."
@@ -5011,7 +5043,7 @@ function Invoke-GraphicsOnly {
     Clear-RunOutcomes -Run $graphicsRun
     Start-StepScope -Run $graphicsRun -Step 'Apply Graphics'
     try {
-    $expected='ab8d84c7e972e3d62a9f3eb524e8897a558e4c16'
+    $expected='d78a41e2a25f5c4224f75ba897eeb85e544ab7ce'
     $source=Add-CafeCacheBust -Uri 'https://raw.githubusercontent.com/fabjoncela/Cs-script/main/graphics/ApplyGraphics.ps1'
     $cache=Join-Path $env:LOCALAPPDATA 'CafeLauncher\graphics-module.ps1'
     $parent=Split-Path -Parent $cache
