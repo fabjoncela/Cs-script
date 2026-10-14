@@ -4,7 +4,7 @@ start "" powershell.exe -NoProfile -ExecutionPolicy Bypass -STA -WindowStyle Hid
 exit /b
 
 # POWERSHELL_GUI
-# CAFE_RELEASE=2026.10.14.9
+# CAFE_RELEASE=2026.10.14.10
 
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
@@ -883,6 +883,34 @@ public static class FabNvApi {
         if (status != 0) throw new Exception("NvAPI_Initialize failed with status " + status + ".");
     }
 
+    public static bool TryCheckNvApiSupport(out string report) {
+        NvApiUnload unload = null;
+        bool initialized = false;
+        string failure = null;
+        int unloadStatus = 0;
+        try {
+            Initialize(out unload);
+            initialized = true;
+        } catch (Exception ex) {
+            failure = ex.Message;
+        } finally {
+            if (initialized && unload != null) {
+                try { unloadStatus = unload(); }
+                catch (Exception ex) { failure = "NvAPI_Unload failed: " + ex.Message; }
+            }
+        }
+        if (!initialized) {
+            report = "NVAPI initialization failed: " + failure;
+            return false;
+        }
+        if (failure != null || unloadStatus != 0) {
+            report = "NVAPI initialized, but cleanup failed" + (failure != null ? ": " + failure : " with status " + unloadStatus) + ".";
+            return false;
+        }
+        report = "NvAPI_Initialize and NvAPI_Unload succeeded.";
+        return true;
+    }
+
     public static bool TryCheckDigitalVibranceSupport(out string report) {
         NvApiUnload unload = null;
         bool initialized = false;
@@ -1667,8 +1695,17 @@ function Get-NvidiaCompatibilityScan {
     }else{$report.Add('Windows display helper unavailable; resolution change skipped.')}
     $apiDll=Join-Path $env:windir 'System32\nvapi64.dll'
     $apiFile=Test-Path -LiteralPath $apiDll -PathType Leaf
-    $result.NVAPI=([bool]('FabNvApi' -as [type])) -and $apiFile
-    $report.Add(('NVAPI availability: '+$(if($result.NVAPI){'driver DLL and wrapper detected'}else{'not detected; NVIDIA-only operations skipped'})))
+    $nvapiType=[bool]('FabNvApi' -as [type])
+    if($nvapiType){
+        try{
+            $nvapiInitializationReport=''
+            $result.NVAPI=[FabNvApi]::TryCheckNvApiSupport([ref]$nvapiInitializationReport)
+            if($result.NVAPI){$report.Add('NVAPI availability: initialization succeeded. '+$nvapiInitializationReport)}
+            else{$report.Add('NVAPI availability: initialization failed; NVIDIA-only operations will be skipped. '+$nvapiInitializationReport)}
+        }catch{$result.NVAPI=$false;$report.Add('NVAPI availability: initialization probe failed; NVIDIA-only operations will be skipped. '+$_.Exception.Message)}
+    }else{
+        $report.Add('NVAPI availability: embedded NVAPI wrapper unavailable; NVIDIA-only operations will be skipped.')
+    }
     if($apiFile){
         try{$report.Add('NVAPI DLL version: '+[Diagnostics.FileVersionInfo]::GetVersionInfo($apiDll).FileVersion)}
         catch{$report.Add('NVAPI DLL version unavailable')}

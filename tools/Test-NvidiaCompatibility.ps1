@@ -16,6 +16,23 @@ foreach($name in @('Get-NvidiaCompatibilityScan','Write-NvidiaCompatibilityScan'
     if(-not $functions.ContainsKey($name)){throw ('Missing '+$name)}
 }
 $scanCode=$functions['Get-NvidiaCompatibilityScan']
+$cafeSource=[IO.File]::ReadAllText((Join-Path (Split-Path -Parent $PSScriptRoot) 'cafe.bat'))
+$nvapiStart=$cafeSource.IndexOf('public static class FabNvApi {',[StringComparison]::Ordinal)
+$nvapiEnd=$cafeSource.IndexOf('"@',[Math]::Max(0,$nvapiStart),[StringComparison]::Ordinal)
+if($nvapiStart -lt 0 -or $nvapiEnd -le $nvapiStart){throw 'Could not locate the embedded NVAPI wrapper source.'}
+$nvapiSource=$cafeSource.Substring($nvapiStart,$nvapiEnd-$nvapiStart)
+if($nvapiSource -notmatch 'TryCheckNvApiSupport'){
+    throw 'NVAPI wrapper must expose a real initialization probe.'
+}
+if($nvapiSource -notmatch 'Initialize\(out unload\)' -or
+   $nvapiSource -notmatch 'finally\s*\{\s*if\s*\(initialized\s*&&\s*unload\s*!=\s*null\)' -or
+   $nvapiSource -notmatch 'NvAPI_Initialize and NvAPI_Unload succeeded'){
+    throw 'NVAPI initialization probe must balance a successful initialize with unload.'
+}
+if($scanCode -notmatch 'TryCheckNvApiSupport' -or
+   $scanCode -match '\$result\.NVAPI\s*=.*\$apiFile'){
+    throw 'Overall NVAPI availability must come from initialization, not DLL presence.'
+}
 foreach($required in @('Get-CimInstance Win32_VideoController','DriverVersion','IsAdvertisedMode','GetDisplayModesReport','nvapi64.dll','Get-StartApps','NVIDIA Control Panel')){
     if(-not $scanCode.Contains($required)){throw ('NVIDIA preflight missing '+$required)}
 }
