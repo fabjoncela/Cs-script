@@ -4,7 +4,7 @@ start "" powershell.exe -NoProfile -ExecutionPolicy Bypass -STA -WindowStyle Hid
 exit /b
 
 # POWERSHELL_GUI
-# CAFE_RELEASE=2026.10.14.13
+# CAFE_RELEASE=2026.10.14.14
 
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
@@ -2757,8 +2757,8 @@ function Launch-All {
 $script:GithubRepo = 'fabjoncela/Cs-script'
 $script:GithubBranch = 'main'
 # Public GitHub App client ID used only by the optional device sign-in flow.
-# Leave blank until a GitHub App with device flow is registered and configured.
-$script:GithubDeviceFlowClientId = ''
+# The corresponding app must enable device flow and repo Contents read/write.
+$script:GithubDeviceFlowClientId = 'Iv23libHoHzpzAPDKmNX'
 $script:FabCfgCloudUrl = 'https://raw.githubusercontent.com/fabjoncela/Cs-script/main/fab.cfg'
 $script:GamingProfiles = [ordered]@{
     FabMode = @{
