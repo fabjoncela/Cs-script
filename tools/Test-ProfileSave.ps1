@@ -27,7 +27,7 @@ foreach($name in @('Export-ProfileValues','Save-ProfileSettings')){
     Invoke-Expression $found[0].Extent.Text
 }
 function Write-Log {param([string]$Message,[string]$Level='INFO');Write-Host $Message}
-$p=@{PointerSpeed=10;LogitechDPI=800;DisableAcceleration=$true;ApplyNvidia=$true;Width=1920;Height=1080;RefreshHz=360;Vibrance=75;ScalingMode=2;CS2Sensitivity='';CfgDownloadUrl='';LaunchApps=$true}
+$p=@{PointerSpeed=10;LogitechDPI=800;DisableAcceleration=$true;ApplyNvidia=$true;Width=1920;Height=1080;RefreshHz=360;Vibrance=75;Hue=-1;ScalingMode=2;CS2Sensitivity='';CfgDownloadUrl='';LaunchApps=$true}
 $script:GamingProfiles=[ordered]@{FabMode=$p.Clone();OliMode=$p.Clone()}
 $script:PendingSync=@{FabMode=$false;OliMode=$false}
 $script:GraphicsPresets=[ordered]@{OliMode=[pscustomobject]@{SchemaVersion=1;ProfileName='OliMode';RefreshPolicy='Highest';ScalingMode=2;Settings=[ordered]@{Width=1280;Height=960;MSAASamples=8}}}

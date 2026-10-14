@@ -79,7 +79,8 @@ The **Onboard button is currently commented out/disabled** pending hardware test
 Click **Edit** on ArliMode's dashboard card (or any other profile) to change:
 
 - Windows pointer speed (1–20), mouse acceleration.
-- Requested resolution, refresh rate, NVIDIA Digital Vibrance.
+- Requested resolution, refresh rate, NVIDIA Digital Vibrance, and Hue (0–359°; `-1` restores the driver's default).
+- Brightness is left untouched; keep NVIDIA Control Panel at its default 50%.
 - Whether to apply NVIDIA settings and launch apps.
 - Optional CS2 sensitivity override (blank uses the value inside the CFG).
 - Direct GitHub `.cfg` download URL. Each profile's CFG filename is fixed.
@@ -107,7 +108,7 @@ On the next ArliMode run with internet access, CafeLauncher fetches the latest p
 **Tools & Apps organization (v2026.10.13.24):** The legacy **Apply NVIDIA Settings** and **Install CS2 fab.cfg** shortcut buttons remain commented out and hidden. Their code is retained. Profile buttons still run their configured NVIDIA actions (when enabled) and install the matching CS2 CFG; **NVIDIA Control Panel**, **Apply Graphics**, and **Play + Exec** are unchanged.
 
 - **Display fallback:** if exact width/height/Hz is not advertised, choose the highest advertised Hz at the preferred resolution; otherwise consider the current resolution. The launcher tests the candidate and logs whether it applied.
-- **NVIDIA:** request Digital Vibrance, driver performance/G-SYNC-related values, and GPU full-screen scaling. PhysX GPU selection, scaling override checkbox, and confirmation of NVIDIA GUI state may still need manual action.
+- **NVIDIA:** request Control Panel-scale Digital Vibrance, per-profile Hue, driver performance/G-SYNC-related values, and GPU full-screen scaling. Hue uses a private NVAPI call and can vary by driver; the launcher verifies read-back and reports failures. Brightness is not changed. PhysX GPU selection, scaling override checkbox, and confirmation of NVIDIA GUI state may still need manual action.
 - **Detected apps:** Steam and libraries, CS2 (app 730) CFG folder, FACEIT AC, G HUB, Chrome, NVIDIA Control Panel, GPUs, monitor modes, mouse settings.
 - **Play + Exec:** five independent green buttons beside the player profiles. Each button installs the current CFG then starts CS2 with `-applaunch 730 +exec <profile>.cfg`. No `localconfig.vdf` writes or Steam restart; persistent Steam launch options are never modified.
 - **LAUNCH ALL:** opens Steam, FACEIT AC, FACEIT matchmaking, Spotify, G HUB, and Mouse Pointer Options. It is *not* a guaranteed Steam/FACEIT readiness checker.

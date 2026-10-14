@@ -8,6 +8,7 @@
   "Height": 1080,
   "RefreshHz": 360,
   "Vibrance": 75,
+  "Hue": -1,
   "CS2Sensitivity": "",
   "CfgDownloadUrl": "https://raw.githubusercontent.com/fabjoncela/Cs-script/main/brile.cfg",
   "LaunchApps": true,

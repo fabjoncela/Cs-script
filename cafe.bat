@@ -4,7 +4,7 @@ start "" powershell.exe -NoProfile -ExecutionPolicy Bypass -STA -WindowStyle Hid
 exit /b
 
 # POWERSHELL_GUI
-# CAFE_RELEASE=2026.10.14.4
+# CAFE_RELEASE=2026.10.14.8
 
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
@@ -668,9 +668,17 @@ public static class FabNvApi {
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     private delegate int NvApiGetAssociatedDisplayHandle([MarshalAs(UnmanagedType.LPStr)] string displayName, out IntPtr handle);
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-    private delegate int NvApiGetDvcInfo(IntPtr handle, uint outputId, ref DvcInfo info);
+    private delegate int NvApiGetDvcInfoEx(IntPtr handle, uint outputId, ref DvcInfoEx info);
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-    private delegate int NvApiSetDvcLevel(IntPtr handle, uint outputId, int level);
+    private delegate int NvApiSetDvcLevelEx(IntPtr handle, uint outputId, ref DvcInfoEx info);
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    private delegate int NvApiGetDvcInfo(IntPtr handle, uint outputId, ref DvcInfoLegacy info);
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    private delegate int NvApiSetDvcLevel(IntPtr handle, uint outputId, uint level);
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    private delegate int NvApiGetHueInfo(IntPtr handle, uint outputId, ref HueInfo info);
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    private delegate int NvApiSetHueAngle(IntPtr handle, uint outputId, uint hueAngle);
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     private delegate int NvApiGetViewEx(IntPtr handle, ref NvDisplayPathInfo pathInfo, ref uint pathCount, ref uint viewMode);
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
@@ -747,12 +755,32 @@ public static class FabNvApi {
         public byte[] timing;
     }
 
+    // The extended DVC interface uses the percentage scale shown by NVIDIA
+    // Control Panel. Legacy DVC levels are quantized; query their range per driver.
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
-    private struct DvcInfo {
+    private struct DvcInfoEx {
         public uint version;
         public int currentLevel;
         public int minLevel;
         public int maxLevel;
+        public int defaultLevel;
+    }
+
+    // The legacy DVC structure reports an integer driver range (commonly 0-63).
+    // Always query the range; do not assume that every driver uses the same bounds.
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    private struct DvcInfoLegacy {
+        public uint version;
+        public uint currentLevel;
+        public uint minLevel;
+        public uint maxLevel;
+    }
+
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    private struct HueInfo {
+        public uint version;
+        public uint currentAngle;
+        public uint defaultAngle;
     }
 
     // NV_DISPLAY_PATH as defined by NVIDIA's NVAPI header. Bitfields are retained
@@ -814,6 +842,44 @@ public static class FabNvApi {
         if (status != 0) throw new Exception("NvAPI_Initialize failed with status " + status + ".");
     }
 
+    public static bool TryCheckDigitalVibranceSupport(out string report) {
+        NvApiUnload unload = null;
+        bool initialized = false;
+        string extendedFailure = "not available";
+        try {
+            Initialize(out unload);
+            initialized = true;
+            IntPtr handle = GetDisplayHandle();
+            try {
+                NvApiGetDvcInfoEx getExtended = Resolve<NvApiGetDvcInfoEx>(0x0E45002D);
+                DvcInfoEx extended = new DvcInfoEx();
+                extended.version = (uint)(Marshal.SizeOf(typeof(DvcInfoEx)) | 0x10000);
+                int rc = getExtended(handle, 0, ref extended);
+                if (rc != 0) throw new Exception("extended DVC query status " + rc);
+                if (extended.maxLevel <= extended.minLevel) throw new Exception("extended DVC returned an invalid range");
+                report = "Extended Digital Vibrance query available (range " + extended.minLevel + "-" + extended.maxLevel + ").";
+                return true;
+            } catch (Exception ex) {
+                extendedFailure = ex.Message;
+            }
+
+            NvApiGetDvcInfo getLegacy = Resolve<NvApiGetDvcInfo>(0x4085DE45);
+            DvcInfoLegacy legacy = new DvcInfoLegacy();
+            legacy.version = (uint)(Marshal.SizeOf(typeof(DvcInfoLegacy)) | 0x10000);
+            int legacyStatus = getLegacy(handle, 0, ref legacy);
+            if (legacyStatus != 0) throw new Exception("legacy DVC query status " + legacyStatus);
+            if (legacy.maxLevel <= legacy.minLevel) throw new Exception("legacy DVC returned an invalid range");
+            report = "Extended DVC unavailable (" + extendedFailure + "); legacy Digital Vibrance query available (range " +
+                legacy.minLevel + "-" + legacy.maxLevel + ").";
+            return true;
+        } catch (Exception ex) {
+            report = "Digital Vibrance unavailable: extended interface " + extendedFailure + "; legacy interface " + ex.Message + ".";
+            return false;
+        } finally {
+            if (initialized && unload != null) { try { unload(); } catch {} }
+        }
+    }
+
     public static bool TryReadDigitalVibrance(out int currentLevel, out int minLevel, out int maxLevel, out string report) {
         NvApiUnload unload = null;
         bool initialized = false;
@@ -825,18 +891,18 @@ public static class FabNvApi {
             initialized = true;
 
             IntPtr handle = GetDisplayHandle();
-            NvApiGetDvcInfo getInfo = Resolve<NvApiGetDvcInfo>(0x4085DE45);
-            DvcInfo info = new DvcInfo();
-            info.version = (uint)(Marshal.SizeOf(typeof(DvcInfo)) | 0x10000);
+            NvApiGetDvcInfoEx getInfo = Resolve<NvApiGetDvcInfoEx>(0x0E45002D);
+            DvcInfoEx info = new DvcInfoEx();
+            info.version = (uint)(Marshal.SizeOf(typeof(DvcInfoEx)) | 0x10000);
             int status = getInfo(handle, 0, ref info);
             if (status != 0)
-                throw new Exception("NvAPI_GetDVCInfo failed with status " + status + ".");
+                throw new Exception("NvAPI_GetDVCInfoEx failed with status " + status + ".");
 
             currentLevel = info.currentLevel;
             minLevel = info.minLevel;
             maxLevel = info.maxLevel;
-            report = "NVIDIA reports Digital Vibrance driver level " + currentLevel +
-                " (range " + minLevel + "-" + maxLevel + ").";
+            report = "NVIDIA Control Panel Digital Vibrance is " + currentLevel +
+                "% (driver range " + minLevel + "-" + maxLevel + "%).";
             return true;
         } catch (Exception ex) {
             report = ex.Message;
@@ -855,31 +921,52 @@ public static class FabNvApi {
             initialized = true;
 
             IntPtr handle = GetDisplayHandle();
-            NvApiGetDvcInfo getInfo = Resolve<NvApiGetDvcInfo>(0x4085DE45);
-            NvApiSetDvcLevel setLevel = Resolve<NvApiSetDvcLevel>(0x172409B4);
+            NvApiGetDvcInfoEx getInfo = Resolve<NvApiGetDvcInfoEx>(0x0E45002D);
+            NvApiSetDvcLevelEx setLevel = Resolve<NvApiSetDvcLevelEx>(0x4A82C2B1);
 
-            DvcInfo info = new DvcInfo();
-            info.version = (uint)(Marshal.SizeOf(typeof(DvcInfo)) | 0x10000);
+            DvcInfoEx info = new DvcInfoEx();
+            info.version = (uint)(Marshal.SizeOf(typeof(DvcInfoEx)) | 0x10000);
             int status = getInfo(handle, 0, ref info);
-            if (status != 0) throw new Exception("NvAPI_GetDVCInfo failed with status " + status + ".");
+            if (status != 0) throw new Exception("NvAPI_GetDVCInfoEx failed with status " + status + ".");
             if (info.maxLevel <= info.minLevel) throw new Exception("NVIDIA returned an invalid Digital Vibrance range.");
 
-            // Map UI 75% onto the exact range advertised by the driver.
+            // Map the requested Control Panel percentage onto the driver's
+            // extended scale (normally 0-100), not the legacy 0-63 scale.
             int requested = info.minLevel + (int)Math.Round((info.maxLevel - info.minLevel) * (percentage / 100.0));
-            int setStatus = setLevel(handle, 0, requested);
-            if (setStatus != 0) throw new Exception("NvAPI_SetDVCLevel failed with status " + setStatus + ".");
+            DvcInfoEx request = info;
+            request.currentLevel = requested;
+            int setStatus = setLevel(handle, 0, ref request);
+            if (setStatus != 0) throw new Exception("NvAPI_SetDVCLevelEx failed with status " + setStatus + ".");
 
-            DvcInfo verify = new DvcInfo();
-            verify.version = (uint)(Marshal.SizeOf(typeof(DvcInfo)) | 0x10000);
+            DvcInfoEx verify = new DvcInfoEx();
+            verify.version = (uint)(Marshal.SizeOf(typeof(DvcInfoEx)) | 0x10000);
             int verifyStatus = getInfo(handle, 0, ref verify);
-            if (verifyStatus != 0) throw new Exception("Digital Vibrance was set, but read-back failed with status " + verifyStatus + ".");
+            if (verifyStatus != 0) throw new Exception("Digital Vibrance was set, but extended read-back failed with status " + verifyStatus + ".");
             if (verify.currentLevel != requested)
                 throw new Exception("NVIDIA accepted the Digital Vibrance request but reports " + verify.currentLevel + " (requested " + requested + ").");
 
-            report = "Digital Vibrance set and verified at " + percentage + "%: driver level " + verify.currentLevel +
-                " (range " + verify.minLevel + "-" + verify.maxLevel + ") for the NVIDIA display associated with DISPLAY1.";
+            report = "Digital Vibrance set and verified at " + verify.currentLevel +
+                "% (requested " + percentage + "%; driver range " + verify.minLevel + "-" + verify.maxLevel +
+                "%) for the NVIDIA display associated with DISPLAY1.";
             return true;
         } catch (Exception ex) {
+            // Older drivers may expose the legacy DVC interface but not the
+            // extended percentage-scale interface. Use it only after querying
+            // its range and verify the actual value with a second query.
+            if (initialized) {
+                try {
+                    string legacyReport;
+                    if (TrySetDigitalVibranceLegacy(GetDisplayHandle(), percentage, out legacyReport)) {
+                        report = "Extended Digital Vibrance interface failed (" + ex.Message + "). " + legacyReport;
+                        return true;
+                    }
+                    report = "Digital Vibrance failed: extended interface: " + ex.Message + "; legacy interface: " + legacyReport;
+                    return false;
+                } catch (Exception legacyEx) {
+                    report = "Digital Vibrance failed: extended interface: " + ex.Message + "; legacy interface: " + legacyEx.Message;
+                    return false;
+                }
+            }
             report = "Digital Vibrance failed: " + ex.Message;
             return false;
         } finally {
@@ -887,8 +974,116 @@ public static class FabNvApi {
         }
     }
 
+    public static uint MapLegacyDvcPercentage(int percentage, uint minLevel, uint maxLevel) {
+        if (percentage < 0 || percentage > 100) throw new ArgumentOutOfRangeException("percentage");
+        if (maxLevel <= minLevel) throw new ArgumentException("Legacy Digital Vibrance range must have max greater than min.");
+        return minLevel + (uint)Math.Round(
+            (maxLevel - minLevel) * (percentage / 100.0), MidpointRounding.AwayFromZero);
+    }
+
+    private static bool TrySetDigitalVibranceLegacy(IntPtr handle, int percentage, out string report) {
+        try {
+            NvApiGetDvcInfo getInfo = Resolve<NvApiGetDvcInfo>(0x4085DE45);
+            NvApiSetDvcLevel setLevel = Resolve<NvApiSetDvcLevel>(0x172409B4);
+            DvcInfoLegacy info = new DvcInfoLegacy();
+            info.version = (uint)(Marshal.SizeOf(typeof(DvcInfoLegacy)) | 0x10000);
+            int status = getInfo(handle, 0, ref info);
+            if (status != 0) throw new Exception("NvAPI_GetDVCInfo failed with status " + status + ".");
+            if (info.maxLevel <= info.minLevel) throw new Exception("NVIDIA returned an invalid legacy Digital Vibrance range.");
+
+            uint requested = MapLegacyDvcPercentage(percentage, info.minLevel, info.maxLevel);
+            int setStatus = setLevel(handle, 0, requested);
+            if (setStatus != 0) throw new Exception("NvAPI_SetDVCLevel failed with status " + setStatus + ".");
+
+            DvcInfoLegacy verify = new DvcInfoLegacy();
+            verify.version = (uint)(Marshal.SizeOf(typeof(DvcInfoLegacy)) | 0x10000);
+            int verifyStatus = getInfo(handle, 0, ref verify);
+            if (verifyStatus != 0) throw new Exception("Legacy Digital Vibrance read-back failed with status " + verifyStatus + ".");
+            if (verify.currentLevel != requested)
+                throw new Exception("NVIDIA reports legacy level " + verify.currentLevel + " (requested " + requested + ").");
+
+            double effectivePercent = ((verify.currentLevel - verify.minLevel) * 100.0) /
+                (verify.maxLevel - verify.minLevel);
+            report = "Legacy Digital Vibrance set and verified: requested " + percentage +
+                "%, driver level " + verify.currentLevel + " (range " + verify.minLevel + "-" +
+                verify.maxLevel + "; effective " + effectivePercent.ToString("0.0", System.Globalization.CultureInfo.InvariantCulture) + "%).";
+            return true;
+        } catch (Exception ex) {
+            report = ex.Message;
+            return false;
+        }
+    }
+
     public static bool TrySetDigitalVibrance75(out string report) {
         return TrySetDigitalVibrance(75, out report);
+    }
+
+    // NVIDIA's Hue calls are private NVAPI interfaces; guard them and verify
+    // read-back because support can vary across driver versions.
+    public static bool TryCheckHueSupport(out uint currentAngle, out uint defaultAngle, out string report) {
+        NvApiUnload unload = null;
+        bool initialized = false;
+        currentAngle = 0;
+        defaultAngle = 0;
+        try {
+            Initialize(out unload);
+            initialized = true;
+            IntPtr handle = GetDisplayHandle();
+            NvApiGetHueInfo getInfo = Resolve<NvApiGetHueInfo>(0x95B64341);
+            // Resolve the setter during preflight without changing the display.
+            NvApiSetHueAngle setAngle = Resolve<NvApiSetHueAngle>(0xF5A0F22C);
+            HueInfo info = new HueInfo();
+            info.version = (uint)(Marshal.SizeOf(typeof(HueInfo)) | 0x10000);
+            int status = getInfo(handle, 0, ref info);
+            if (status != 0) throw new Exception("NvAPI_GetHUEInfo failed with status " + status + ".");
+            if (info.currentAngle > 359 || info.defaultAngle > 359)
+                throw new Exception("NVIDIA returned a Hue value outside the documented 0-359 degree range.");
+            currentAngle = info.currentAngle;
+            defaultAngle = info.defaultAngle;
+            report = "Hue query/set interfaces detected for the NVIDIA display associated with DISPLAY1 (current " +
+                currentAngle + " degrees; driver default " + defaultAngle + " degrees).";
+            return true;
+        } catch (Exception ex) {
+            report = "Hue unavailable: " + ex.Message;
+            return false;
+        } finally {
+            if (initialized && unload != null) { try { unload(); } catch {} }
+        }
+    }
+
+    public static bool TrySetHueAngle(int hueAngle, out string report) {
+        if (hueAngle < -1 || hueAngle > 359) { report = "Invalid hue angle"; return false; }
+        NvApiUnload unload = null;
+        bool initialized = false;
+        try {
+            Initialize(out unload);
+            initialized = true;
+            IntPtr handle = GetDisplayHandle();
+            NvApiGetHueInfo getInfo = Resolve<NvApiGetHueInfo>(0x95B64341);
+            NvApiSetHueAngle setAngle = Resolve<NvApiSetHueAngle>(0xF5A0F22C);
+            HueInfo info = new HueInfo();
+            info.version = (uint)(Marshal.SizeOf(typeof(HueInfo)) | 0x10000);
+            int status = getInfo(handle, 0, ref info);
+            if (status != 0) throw new Exception("NvAPI_GetHUEInfo failed with status " + status + ".");
+            uint requestedAngle = hueAngle < 0 ? info.defaultAngle : (uint)hueAngle;
+            int setStatus = setAngle(handle, 0, requestedAngle);
+            if (setStatus != 0) throw new Exception("NvAPI_SetHUEAngle failed with status " + setStatus + ".");
+            HueInfo verify = new HueInfo();
+            verify.version = (uint)(Marshal.SizeOf(typeof(HueInfo)) | 0x10000);
+            int verifyStatus = getInfo(handle, 0, ref verify);
+            if (verifyStatus != 0) throw new Exception("Hue was set, but read-back failed with status " + verifyStatus + ".");
+            if (verify.currentAngle != requestedAngle)
+                throw new Exception("NVIDIA reports hue " + verify.currentAngle + " degrees (requested " + requestedAngle + ").");
+            report = hueAngle < 0
+                ? "Hue reset to and verified at the NVIDIA driver default: " + verify.currentAngle + " degrees."
+                : "Hue set and verified at " + verify.currentAngle + " degrees (driver default " + verify.defaultAngle + ").";
+            return true;
+        } catch (Exception ex) {
+            report = "Hue failed: " + ex.Message;
+            return false;
+        } finally {
+            if (initialized && unload != null) { try { unload(); } catch {} }
+        }
     }
 
     private static IntPtr AllocZeroed(List<IntPtr> allocations, int bytes) {
@@ -928,6 +1123,39 @@ public static class FabNvApi {
             Marshal.WriteInt32(p, DrsSettingCurrentValueOffset, unchecked((int)value.Value));
         }
         return p;
+    }
+
+    public static bool TryCheckDriverProfileSupport(out string report) {
+        NvApiUnload unload = null;
+        NvApiDrsDestroySession destroy = null;
+        IntPtr session = IntPtr.Zero;
+        bool initialized = false;
+        try {
+            Initialize(out unload);
+            initialized = true;
+            NvApiDrsCreateSession create = Resolve<NvApiDrsCreateSession>(0x0694D52E);
+            destroy = Resolve<NvApiDrsDestroySession>(0xDAD9CFF8);
+            NvApiDrsLoadSettings load = Resolve<NvApiDrsLoadSettings>(0x375DBD6B);
+            Resolve<NvApiDrsSaveSettings>(0xFCBC7E14);
+            NvApiDrsGetCurrentGlobalProfile getGlobal = Resolve<NvApiDrsGetCurrentGlobalProfile>(0x617BFF9F);
+            Resolve<NvApiDrsGetSetting>(0x73BF8338);
+            Resolve<NvApiDrsSetSetting>(0x577DD202);
+            int status = create(out session);
+            if (status != 0 || session == IntPtr.Zero) throw new Exception("DRS_CreateSession status " + status);
+            status = load(session);
+            if (status != 0) throw new Exception("DRS_LoadSettings status " + status);
+            IntPtr profile;
+            status = getGlobal(session, out profile);
+            if (status != 0 || profile == IntPtr.Zero) throw new Exception("DRS_GetCurrentGlobalProfile status " + status);
+            report = "NVIDIA DRS profile query, save, and setting interfaces are available; global profile opened read-only.";
+            return true;
+        } catch (Exception ex) {
+            report = "NVIDIA driver-profile settings unavailable: " + ex.Message + ".";
+            return false;
+        } finally {
+            if (session != IntPtr.Zero && destroy != null) { try { destroy(session); } catch {} }
+            if (initialized && unload != null) { try { unload(); } catch {} }
+        }
     }
 
     public static bool TryApplyPerformanceProfile(out string report) {
@@ -1086,6 +1314,28 @@ public static class FabNvApi {
 
     public static bool TrySetGpuFullscreenScaling(out string report) {
         return TrySetGpuScalingMode(2, out report);
+    }
+
+    public static bool TryCheckGpuScalingSupport(out string report) {
+        NvApiUnload unload = null;
+        bool initialized = false;
+        try {
+            Initialize(out unload);
+            initialized = true;
+            NvApiDispGetDisplayConfig getConfig = Resolve<NvApiDispGetDisplayConfig>(0x11ABCCF8);
+            Resolve<NvApiDispSetDisplayConfig>(0x5D8CF8DE);
+            uint pathCount = 0;
+            int status = getConfig(ref pathCount, IntPtr.Zero);
+            if (status != 0) throw new Exception("display configuration query status " + ScalingStatus(status));
+            if (pathCount < 1 || pathCount > 64) throw new Exception("unexpected display path count " + pathCount);
+            report = "NVAPI display-scaling read/apply interfaces available; " + pathCount + " active display path(s) detected. Apply will validate and verify the requested mode.";
+            return true;
+        } catch (Exception ex) {
+            report = "GPU scaling unavailable: " + ex.Message + ".";
+            return false;
+        } finally {
+            if (initialized && unload != null) { try { unload(); } catch {} }
+        }
     }
 
     public static bool TrySetGpuScalingMode(int requestedScaling, out string report) {
@@ -1356,7 +1606,7 @@ function Start-ColorWatch {
 function Get-NvidiaCompatibilityScan {
     param([int]$Width=1920,[int]$Height=1080,[int]$RefreshHz=360)
     $report=New-Object 'System.Collections.Generic.List[string]'
-    $result=[ordered]@{NVAPI=$false;DisplayHelper=$false;ExactMode=$false;Report=$report}
+    $result=[ordered]@{NVAPI=$false;DisplayHelper=$false;ExactMode=$false;Vibrance=$false;Hue=$false;DriverProfile=$false;GpuScaling=$false;Report=$report}
     try {
         $adapters=@(Get-CimInstance Win32_VideoController -ErrorAction Stop | Where-Object {$_.Name -match 'NVIDIA'})
         if($adapters.Count -eq 0){$report.Add('No NVIDIA GPU reported by Windows.')}
@@ -1381,6 +1631,37 @@ function Get-NvidiaCompatibilityScan {
     if($apiFile){
         try{$report.Add('NVAPI DLL version: '+[Diagnostics.FileVersionInfo]::GetVersionInfo($apiDll).FileVersion)}
         catch{$report.Add('NVAPI DLL version unavailable')}
+    }
+    if($result.NVAPI){
+        try{
+            $vibranceCapabilityReport=''
+            $result.Vibrance=[FabNvApi]::TryCheckDigitalVibranceSupport([ref]$vibranceCapabilityReport)
+            if($result.Vibrance){$report.Add('NVIDIA Digital Vibrance capability: available. '+$vibranceCapabilityReport)}
+            else{$report.Add('NVIDIA Digital Vibrance capability: unavailable; profile value will be skipped. '+$vibranceCapabilityReport)}
+        }catch{$result.Vibrance=$false;$report.Add('NVIDIA Digital Vibrance capability check failed; profile value will be skipped: '+$_.Exception.Message)}
+        try{
+            [uint32]$hueCurrent=0;[uint32]$hueDefault=0;$hueCapabilityReport=''
+            $result.Hue=[FabNvApi]::TryCheckHueSupport([ref]$hueCurrent,[ref]$hueDefault,[ref]$hueCapabilityReport)
+            if($result.Hue){$report.Add('NVIDIA Hue capability: available. '+$hueCapabilityReport)}
+            else{$report.Add('NVIDIA Hue capability: unavailable; profile Hue settings will be skipped. '+$hueCapabilityReport)}
+        }catch{$result.Hue=$false;$report.Add('NVIDIA Hue capability check failed; profile Hue settings will be skipped: '+$_.Exception.Message)}
+        try{
+            $driverProfileReport=''
+            $result.DriverProfile=[FabNvApi]::TryCheckDriverProfileSupport([ref]$driverProfileReport)
+            if($result.DriverProfile){$report.Add('NVIDIA driver-profile capability: available. '+$driverProfileReport)}
+            else{$report.Add('NVIDIA driver-profile capability: unavailable; performance and G-SYNC profile values will be skipped. '+$driverProfileReport)}
+        }catch{$result.DriverProfile=$false;$report.Add('NVIDIA driver-profile capability check failed; settings will be skipped: '+$_.Exception.Message)}
+        try{
+            $scalingCapabilityReport=''
+            $result.GpuScaling=[FabNvApi]::TryCheckGpuScalingSupport([ref]$scalingCapabilityReport)
+            if($result.GpuScaling){$report.Add('NVIDIA GPU-scaling capability: available. '+$scalingCapabilityReport)}
+            else{$report.Add('NVIDIA GPU-scaling capability: unavailable; profile scaling value will be skipped. '+$scalingCapabilityReport)}
+        }catch{$result.GpuScaling=$false;$report.Add('NVIDIA GPU-scaling capability check failed; profile scaling value will be skipped: '+$_.Exception.Message)}
+    }else{
+        $report.Add('NVIDIA Digital Vibrance capability: not checked because NVAPI is unavailable; profile value will be skipped.')
+        $report.Add('NVIDIA Hue capability: not checked because NVAPI is unavailable; profile value will be skipped.')
+        $report.Add('NVIDIA driver-profile capability: not checked because NVAPI is unavailable; settings will be skipped.')
+        $report.Add('NVIDIA GPU-scaling capability: not checked because NVAPI is unavailable; profile scaling value will be skipped.')
     }
     try {
         $paths=@(
@@ -1408,15 +1689,21 @@ function Apply-NvidiaGamingSettings {
         [ValidateRange(480,4320)][int]$Height = 1080,
         [ValidateRange(30,600)][int]$RefreshHz = 360,
         [ValidateRange(0,100)][int]$Vibrance = 75,
+        [ValidateRange(-1,359)][int]$Hue = -1,
         [ValidateSet(2,3,5)][int]$ScalingMode = 2
     )
-    Write-Log "NVIDIA gaming-settings apply started (profile resolution: ${Width}x${Height}; highest advertised refresh; configured refresh ${RefreshHz}Hz; vibrance ${Vibrance}%)."
+    $hueDescription=if($Hue -lt 0){'driver default'}else{"${Hue} degrees"}
+    Write-Log "NVIDIA gaming-settings apply started (profile resolution: ${Width}x${Height}; highest advertised refresh; configured refresh ${RefreshHz}Hz; vibrance ${Vibrance}%; hue $hueDescription; brightness unchanged, default is 50%)."
     $compat=$null
     try{$compat=Write-NvidiaCompatibilityScan -Width $Width -Height $Height -RefreshHz $RefreshHz}
     catch{Write-Log ("NVIDIA preflight unavailable: "+$_.Exception.Message) "WARN"}
 
     Write-Log "Profile display apply: selecting the highest advertised refresh at ${Width}x${Height}; if unavailable, keep current resolution and select its highest refresh."
-    if (("FabDisplayNative" -as [type]) -and ($null -eq $compat -or $compat.DisplayHelper)) {
+    if($null -eq $compat){
+        Write-Log "Display resolution/refresh skipped because the compatibility preflight did not complete." "WARN"
+    }elseif(-not $compat.DisplayHelper){
+        Write-Log "Display resolution/refresh skipped because Windows mode enumeration is unavailable." "WARN"
+    }elseif ("FabDisplayNative" -as [type]) {
         try {
             $displayReport = ""
             $displayOk = [FabDisplayNative]::TrySetDisplayMode($Width, $Height, $RefreshHz, [ref]$displayReport)
@@ -1430,61 +1717,79 @@ function Apply-NvidiaGamingSettings {
                 Write-Log $displayReport "WARN"
             }
         } catch {
-            Write-Log "Display resolution/refresh attempt failed: $($_.Exception.Message)" "ERROR"
+            Write-Log "Display resolution/refresh was not applied: $($_.Exception.Message)" "WARN"
         }
-    } else {
-        Write-Log "Display resolution/refresh was not attempted because the Windows display helper is unavailable." "ERROR"
     }
 
-    if (("FabNvApi" -as [type]) -and ($null -eq $compat -or $compat.NVAPI)) {
-        try {
-            $vibranceReport = ""
-            $vibranceOk = [FabNvApi]::TrySetDigitalVibrance($Vibrance, [ref]$vibranceReport)
-            if ($vibranceOk) {
-                Write-Log $vibranceReport
-            } else {
-                Write-Log $vibranceReport "ERROR"
+    if($null -eq $compat -or -not $compat.NVAPI -or -not ("FabNvApi" -as [type])){
+        Write-Log "NVIDIA settings skipped because the NVAPI capability preflight did not succeed." "WARN"
+    }else{
+        if(-not $compat.Vibrance){
+            Write-Log "Digital Vibrance skipped: neither the extended nor legacy driver interface passed its read-only capability check." "WARN"
+        }else{
+            try {
+                $vibranceReport = ""
+                $vibranceOk = [FabNvApi]::TrySetDigitalVibrance($Vibrance, [ref]$vibranceReport)
+                if ($vibranceOk) {
+                    Write-Log $vibranceReport
+                } else {
+                    Write-Log ("Digital Vibrance was detected, but apply was not verified: "+$vibranceReport) "WARN"
+                }
+            } catch {
+                Write-Log "Digital Vibrance apply was not verified: $($_.Exception.Message)" "WARN"
             }
-        } catch {
-            Write-Log "Digital Vibrance call failed unexpectedly: $($_.Exception.Message)" "ERROR"
         }
 
-        # Start-ColorWatch  # Temporarily disabled: no 10-second Digital Vibrance polling or automatic restore.
+        if(-not $compat.Hue){
+            Write-Log "Hue skipped: the current driver/display did not pass its read-only Hue capability check." "WARN"
+        }else{
+            try {
+                $hueReport = ""
+                $hueOk = [FabNvApi]::TrySetHueAngle($Hue, [ref]$hueReport)
+                if ($hueOk) { Write-Log $hueReport }
+                else { Write-Log ("Hue was detected, but apply was not verified: "+$hueReport) "WARN" }
+            } catch {
+                Write-Log "Hue apply was not verified: $($_.Exception.Message)" "WARN"
+            }
+        }
 
-        try {
-            $performanceReport = ""
-            $performanceOk = [FabNvApi]::TryApplyPerformanceProfile([ref]$performanceReport)
-            foreach ($performanceLine in ($performanceReport -split "\r?\n")) {
-                if (-not [string]::IsNullOrWhiteSpace($performanceLine)) {
-                    if ($performanceLine.StartsWith("ERROR:")) {
-                        Write-Log $performanceLine.Substring(6).Trim() "ERROR"
-                    } elseif ($performanceLine.StartsWith("WARN:")) {
-                        Write-Log $performanceLine.Substring(5).Trim() "WARN"
-                    } else {
-                        Write-Log $performanceLine.Substring(5).Trim()
+        if(-not $compat.DriverProfile){
+            Write-Log "Performance and G-SYNC driver-profile settings skipped: DRS profile read/save capability is unavailable." "WARN"
+        }else{
+            try {
+                $performanceReport = ""
+                $performanceOk = [FabNvApi]::TryApplyPerformanceProfile([ref]$performanceReport)
+                foreach ($performanceLine in ($performanceReport -split "\r?\n")) {
+                    if (-not [string]::IsNullOrWhiteSpace($performanceLine)) {
+                        if ($performanceLine.StartsWith("ERROR:")) {
+                            Write-Log $performanceLine.Substring(6).Trim() "WARN"
+                        } elseif ($performanceLine.StartsWith("WARN:")) {
+                            Write-Log $performanceLine.Substring(5).Trim() "WARN"
+                        } else {
+                            Write-Log $performanceLine.Substring(5).Trim()
+                        }
                     }
                 }
+                if (-not $performanceOk) {
+                    Write-Log "Some NVIDIA Performance/G-SYNC-off driver profile settings were unavailable or not verified. See DRS lines." "WARN"
+                }
+            } catch {
+                Write-Log "Performance/G-SYNC driver-profile settings were not applied: $($_.Exception.Message)" "WARN"
             }
-            if (-not $performanceOk) {
-                Write-Log "Some NVIDIA Performance/G-SYNC-off driver profile settings were not verified. See DRS lines." "WARN"
-            }
-        } catch {
-            Write-Log "NVIDIA 3D Performance DRS call failed unexpectedly: $($_.Exception.Message)" "ERROR"
         }
 
-        try {
-            $scalingReport = ""
-            $scalingOk = [FabNvApi]::TrySetGpuScalingMode($ScalingMode, [ref]$scalingReport)
-            if ($scalingOk) {
-                Write-Log $scalingReport
-            } else {
-                Write-Log $scalingReport "ERROR"
+        if(-not $compat.GpuScaling){
+            Write-Log "GPU scaling skipped: the current driver/display did not pass the read-only scaling API check." "WARN"
+        }else{
+            try {
+                $scalingReport = ""
+                $scalingOk = [FabNvApi]::TrySetGpuScalingMode($ScalingMode, [ref]$scalingReport)
+                if ($scalingOk) { Write-Log $scalingReport }
+                else { Write-Log ("GPU scaling was not applied or verified: "+$scalingReport) "WARN" }
+            } catch {
+                Write-Log "GPU scaling was not applied or verified: $($_.Exception.Message)" "WARN"
             }
-        } catch {
-            Write-Log "GPU full-screen scaling call failed unexpectedly: $($_.Exception.Message)" "ERROR"
         }
-    } else {
-        Write-Log "NVIDIA NVAPI helper is unavailable; Digital Vibrance, driver profile, G-SYNC profile and scaling were not changed." "ERROR"
     }
 
     Write-Log "NVIDIA Performance-equivalent values were requested through the global driver profile; select the actual preview slider manually if the radio control must also show Performance."
@@ -2197,27 +2502,27 @@ $script:FabCfgCloudUrl = 'https://raw.githubusercontent.com/fabjoncela/Cs-script
 $script:GamingProfiles = [ordered]@{
     FabMode = @{
         PointerSpeed=10; LogitechDPI=800; DisableAcceleration=$true; ApplyNvidia=$true; ScalingMode=2
-        Width=1920; Height=1080; RefreshHz=360; Vibrance=75
+        Width=1920; Height=1080; RefreshHz=360; Vibrance=75; Hue=-1
         CS2Sensitivity=''; ConfigFile='fab.cfg'; CfgDownloadUrl=$script:FabCfgCloudUrl; LaunchApps=$true
     }
     ArliMode = @{
         PointerSpeed=10; LogitechDPI=800; DisableAcceleration=$true; ApplyNvidia=$true; ScalingMode=2
-        Width=1920; Height=1080; RefreshHz=360; Vibrance=75
+        Width=1920; Height=1080; RefreshHz=360; Vibrance=75; Hue=-1
         CS2Sensitivity=''; ConfigFile='arli.cfg'; CfgDownloadUrl='https://raw.githubusercontent.com/fabjoncela/Cs-script/main/arli.cfg'; LaunchApps=$true
     }
     BrileMode = @{
         PointerSpeed=10; LogitechDPI=800; DisableAcceleration=$true; ApplyNvidia=$true; ScalingMode=2
-        Width=1920; Height=1080; RefreshHz=360; Vibrance=75
+        Width=1920; Height=1080; RefreshHz=360; Vibrance=75; Hue=-1
         CS2Sensitivity=''; ConfigFile='brile.cfg'; CfgDownloadUrl='https://raw.githubusercontent.com/fabjoncela/Cs-script/main/brile.cfg'; LaunchApps=$true
     }
     ArmlMode = @{
         PointerSpeed=10; LogitechDPI=800; DisableAcceleration=$true; ApplyNvidia=$true; ScalingMode=2
-        Width=1920; Height=1080; RefreshHz=360; Vibrance=75
+        Width=1920; Height=1080; RefreshHz=360; Vibrance=75; Hue=-1
         CS2Sensitivity=''; ConfigFile='arml.cfg'; CfgDownloadUrl='https://raw.githubusercontent.com/fabjoncela/Cs-script/main/arml.cfg'; LaunchApps=$true
     }
     OliMode = @{
         PointerSpeed=10; LogitechDPI=800; DisableAcceleration=$true; ApplyNvidia=$true; ScalingMode=2
-        Width=1920; Height=1080; RefreshHz=360; Vibrance=75
+        Width=1920; Height=1080; RefreshHz=360; Vibrance=75; Hue=-1
         CS2Sensitivity=''; ConfigFile='oli.cfg'; CfgDownloadUrl='https://raw.githubusercontent.com/fabjoncela/Cs-script/main/oli.cfg'; LaunchApps=$true
     }
 }
@@ -2462,7 +2767,7 @@ function Get-ProfileGraphicsVersion {
 function Import-ProfileValues {
     param([string]$ProfileName, $SavedProfile, [string]$SourceLabel = 'local')
     if (-not $script:GamingProfiles.Contains($ProfileName) -or -not $SavedProfile) { return }
-    foreach ($setting in @('PointerSpeed','LogitechDPI','DisableAcceleration','ApplyNvidia','Width','Height','RefreshHz','Vibrance','ScalingMode','CS2Sensitivity','CfgDownloadUrl','LaunchApps')) {
+    foreach ($setting in @('PointerSpeed','LogitechDPI','DisableAcceleration','ApplyNvidia','Width','Height','RefreshHz','Vibrance','Hue','ScalingMode','CS2Sensitivity','CfgDownloadUrl','LaunchApps')) {
         $saved = $SavedProfile.PSObject.Properties[$setting]
         if (-not $saved) { continue }
         $value = $saved.Value
@@ -2475,6 +2780,7 @@ function Import-ProfileValues {
                 'RefreshHz'    { $value=[int]$value; if ($value -lt 30 -or $value -gt 600) { throw 'range' } }
                 'ScalingMode'  { $value=[int]$value; if ($value -notin @(2,3,5)) { throw 'unsupported NVIDIA scaling mode' } }
                 'Vibrance'     { $value=[int]$value; if ($value -lt 0 -or $value -gt 100) { throw 'range' } }
+                'Hue'           { $value=[int]$value; if ($value -lt -1 -or $value -gt 359) { throw 'range' } }
                 'CS2Sensitivity' {
                     $value=[string]$value
                     if ($value -and $value -notmatch '^(?:[0-9]+(?:\.[0-9]+)?)$') { throw 'invalid sensitivity' }
@@ -2533,7 +2839,7 @@ function Export-ProfileValues {
     $profileValues = [ordered]@{
         PointerSpeed=[int]$p.PointerSpeed; LogitechDPI=[int]$p.LogitechDPI; DisableAcceleration=[bool]$p.DisableAcceleration
         ApplyNvidia=[bool]$p.ApplyNvidia; Width=[int]$p.Width; Height=[int]$p.Height
-        RefreshHz=[int]$p.RefreshHz; Vibrance=[int]$p.Vibrance; ScalingMode=[int]$p.ScalingMode
+        RefreshHz=[int]$p.RefreshHz; Vibrance=[int]$p.Vibrance; Hue=[int]$p.Hue; ScalingMode=[int]$p.ScalingMode
         CS2Sensitivity=[string]$p.CS2Sensitivity; CfgDownloadUrl=[string]$p.CfgDownloadUrl
         LaunchApps=[bool]$p.LaunchApps
     }
@@ -3048,15 +3354,20 @@ function Show-ProfileEditor {
     $mouseHint.ForeColor=$MUTED
     Add-EditorTabWide -Grid $mouseGrid -Control $mouseHint -Row 2
 
-    $displayGrid=New-EditorTabGrid -Page $displayPage -Rows 3
+    $displayGrid=New-EditorTabGrid -Page $displayPage -Rows 5
     $width=New-EditorTabNumber -Grid $displayGrid -Title 'Resolution width' -Column 0 -Row 0 -Min 640 -Max 7680 -Value ([int]$p.Width)
     $height=New-EditorTabNumber -Grid $displayGrid -Title 'Resolution height' -Column 1 -Row 0 -Min 480 -Max 4320 -Value ([int]$p.Height)
     $hz=New-EditorTabNumber -Grid $displayGrid -Title 'Refresh rate (Hz)' -Column 0 -Row 1 -Min 30 -Max 600 -Value ([int]$p.RefreshHz)
     $vibrance=New-EditorTabNumber -Grid $displayGrid -Title 'NVIDIA Digital Vibrance (%)' -Column 1 -Row 1 -Min 0 -Max 100 -Value ([int]$p.Vibrance)
+    $hue=New-EditorTabNumber -Grid $displayGrid -Title 'NVIDIA Hue (-1 = driver default)' -Column 0 -Row 2 -Min -1 -Max 359 -Value ([int]$p.Hue)
+    $brightnessHint=New-Object System.Windows.Forms.Label
+    $brightnessHint.Text='Brightness is not changed by the profile; NVIDIA Control Panel default is 50%.'
+    $brightnessHint.ForeColor=$MUTED
+    Add-EditorTabWide -Grid $displayGrid -Control $brightnessHint -Row 3
     $nv=New-Object System.Windows.Forms.CheckBox
-    $nv.Text='Apply NVIDIA settings (including resolution + vibrance)'
+    $nv.Text='Apply NVIDIA settings (resolution, vibrance, and hue)'
     $nv.Checked=[bool]$p.ApplyNvidia
-    Add-EditorTabWide -Grid $displayGrid -Control $nv -Row 2
+    Add-EditorTabWide -Grid $displayGrid -Control $nv -Row 4
 
     $cs2Grid=New-EditorTabGrid -Page $cs2Page -Rows 18
     $cfgFile=New-Object System.Windows.Forms.TextBox
@@ -3423,6 +3734,7 @@ function Show-ProfileEditor {
         $p.Height=[int]$height.Value
         $p.RefreshHz=[int]$hz.Value
         $p.Vibrance=[int]$vibrance.Value
+        $p.Hue=[int]$hue.Value
         $p.ApplyNvidia=[bool]$nv.Checked
         $p.LaunchApps=[bool]$apps.Checked
         $p.CS2Sensitivity=$sensValue
@@ -3430,7 +3742,7 @@ function Show-ProfileEditor {
         # Use the captured shared dictionary, not script: scope in this closure.
         $pendingSyncState[$ProfileName] = $true
         Save-ProfileSettings
-        Write-Log "$ProfileName edited locally: pointer=$($p.PointerSpeed), acceleration enabled=$(-not $p.DisableAcceleration), display=$($p.Width)x$($p.Height)@$($p.RefreshHz), CS2=$($graphicsPreset.Settings.Width)x$($graphicsPreset.Settings.Height) refresh=$refreshPolicy scaling=$scalingMode, vibrance=$($p.Vibrance)%, LogitechDPI=$($p.LogitechDPI), sensitivity=$sensValue."
+        Write-Log "$ProfileName edited locally: pointer=$($p.PointerSpeed), acceleration enabled=$(-not $p.DisableAcceleration), display=$($p.Width)x$($p.Height)@$($p.RefreshHz), CS2=$($graphicsPreset.Settings.Width)x$($graphicsPreset.Settings.Height) refresh=$refreshPolicy scaling=$scalingMode, vibrance=$($p.Vibrance)%, hue=$($p.Hue) degrees, LogitechDPI=$($p.LogitechDPI), sensitivity=$sensValue."
     }.GetNewClosure()
 
     $saveLocal.Add_Click({
@@ -3815,7 +4127,7 @@ function Invoke-GamingProfile {
         } }
     )
     if ($profile.ApplyNvidia) {
-        $steps += @{ Name = 'NVIDIA settings'; Action = { Apply-NvidiaGamingSettings -Width ([int]$profile.Width) -Height ([int]$profile.Height) -RefreshHz ([int]$profile.RefreshHz) -Vibrance ([int]$profile.Vibrance) -ScalingMode ([int]$profile.ScalingMode) } }
+        $steps += @{ Name = 'NVIDIA settings'; Action = { Apply-NvidiaGamingSettings -Width ([int]$profile.Width) -Height ([int]$profile.Height) -RefreshHz ([int]$profile.RefreshHz) -Vibrance ([int]$profile.Vibrance) -Hue ([int]$profile.Hue) -ScalingMode ([int]$profile.ScalingMode) } }
     }
     $profileCfgName = [string]$profile.ConfigFile
     if (-not [string]::IsNullOrWhiteSpace($profileCfgName)) {

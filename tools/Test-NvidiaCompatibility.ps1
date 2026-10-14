@@ -19,6 +19,13 @@ $scanCode=$functions['Get-NvidiaCompatibilityScan']
 foreach($required in @('Get-CimInstance Win32_VideoController','DriverVersion','IsAdvertisedMode','GetDisplayModesReport','nvapi64.dll','Get-StartApps','NVIDIA Control Panel')){
     if(-not $scanCode.Contains($required)){throw ('NVIDIA preflight missing '+$required)}
 }
+if($scanCode -notmatch 'TryCheckHueSupport' -or
+   $scanCode -notmatch 'Hue settings will be skipped'){
+    throw 'NVIDIA compatibility scan must preflight Hue support and report when it will be skipped.'
+}
+foreach($required in @('TryCheckDigitalVibranceSupport','TryCheckDriverProfileSupport','TryCheckGpuScalingSupport')){
+    if(-not $scanCode.Contains($required)){throw ('NVIDIA capability scan missing '+$required)}
+}
 $apply=$functions['Apply-NvidiaGamingSettings']
 if($apply -notmatch 'Write-NvidiaCompatibilityScan' -or
    $apply -notmatch '\$compat\.DisplayHelper' -or
@@ -27,6 +34,12 @@ if($apply -notmatch 'Write-NvidiaCompatibilityScan' -or
 }
 foreach($required in @('TrySetDisplayMode','TrySetDigitalVibrance','TryApplyPerformanceProfile','TrySetGpuScalingMode')){
     if(-not $apply.Contains($required)){throw ('Must preserve independent apply step '+$required)}
+}
+foreach($required in @('$compat.Vibrance','$compat.Hue','$compat.DriverProfile','$compat.GpuScaling')){
+    if(-not $apply.Contains($required)){throw ('Profile Apply must gate NVIDIA setting on '+$required)}
+}
+foreach($required in @('TrySetDigitalVibrance','TrySetHueAngle','TryApplyPerformanceProfile','TrySetGpuScalingMode','skipped')){
+    if(-not $apply.Contains($required)){throw ('Profile Apply must preserve per-setting fallback/reporting for '+$required)}
 }
 if($functions['Get-PCDiagnostics'] -notmatch 'Get-NvidiaCompatibilityScan'){throw 'Detect PC must include NVIDIA scan.'}
 $profileApply=$functions['Invoke-GamingProfile']
@@ -45,7 +58,7 @@ if($scanCode -match 'Start-Process|Invoke-WebRequest|Stop-Process|Install-|Updat
 Invoke-Expression $scanCode
 $scan=Get-NvidiaCompatibilityScan -Width 1280 -Height 960 -RefreshHz 360
 if($null -eq $scan -or $null -eq $scan.Report){throw 'NVIDIA scan did not return diagnostic report.'}
-foreach($key in @('NVAPI','DisplayHelper','ExactMode')){
+foreach($key in @('NVAPI','DisplayHelper','ExactMode','Vibrance','Hue','DriverProfile','GpuScaling')){
     if($null -eq $scan.$key){throw ('Missing compatibility field: '+$key)}
 }
 if(@($scan.Report).Count -lt 2){throw 'NVIDIA preflight did not record capability diagnostics.'}

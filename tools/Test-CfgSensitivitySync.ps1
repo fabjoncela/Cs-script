@@ -52,12 +52,15 @@ $script:FakeWrites=New-Object System.Collections.ArrayList
 $script:FailJsonPut=$false
 $script:FakeSha=('a'*40)
 function Write-Log {param([string]$Message,[string]$Level='INFO')}
+# Sync invalidates history after a successful write. Keep this test isolated
+# from the user's real per-profile history cache.
+function Clear-ProfileGraphicsHistoryCache {param([string]$ProfileName)}
 foreach($name in @('FabMode','ArliMode','BrileMode','ArmlMode','OliMode')){
     $cfgName=($name -replace 'Mode$','').ToLowerInvariant()+'.cfg'
     $script:GamingProfiles[$name]=@{
         ConfigFile=$cfgName;CS2Sensitivity='1.5';PointerSpeed=10;LogitechDPI=800
         DisableAcceleration=$true;ApplyNvidia=$true;Width=1920;Height=1080
-        RefreshHz=360;Vibrance=75;ScalingMode=2;CfgDownloadUrl='';LaunchApps=$true
+        RefreshHz=360;Vibrance=75;Hue=-1;ScalingMode=2;CfgDownloadUrl='';LaunchApps=$true
     }
     $script:PendingSync[$name]=$true
     $script:GraphicsPresets[$name]=[pscustomobject]@{

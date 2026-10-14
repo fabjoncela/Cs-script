@@ -3,7 +3,7 @@
 This file gives Codex and maintainers the operational context needed to work safely in this repository. **Always follow the checked-out source tree.** The generated state block below reports the launcher release marker, not whether that code has shipped to `main`.
 
 <!-- BEGIN GENERATED LAUNCHER STATE -->
-- Launcher release: `2026.10.14.4`
+- Launcher release: `2026.10.14.8`
 - Generated from the unique `# CAFE_RELEASE` marker in `cafe.bat` by `tools/Update-Context.ps1`.
 <!-- END GENERATED LAUNCHER STATE -->
 
@@ -37,6 +37,7 @@ Main project files:
 - CS2 resolution width and height, aspect ratio, fullscreen/windowed mode.
 - Highest supported refresh or a user-selected exact Hz.
 - NVIDIA scaling: stretch to fill, preserve aspect ratio, or center without scaling.
+- NVIDIA profile Apply runs a read-only capability scan for Windows display modes, Digital Vibrance (extended then legacy query), Hue, NVIDIA DRS settings, and display-scaling APIs. Unsupported or uncheckable operations are skipped and logged. Digital Vibrance falls back to the legacy interface's queried min/max, maps the requested percentage to its quantized range, sets it, and verifies read-back. That legacy interface and Hue interfaces are private/undocumented; success is reported only after verification. DRS settings are handled individually: supported values are written and read back, while rejected or unavailable settings are reported. Display resolution uses advertised modes and verifies the selected mode; GPU scaling validates the topology, applies, and reads back. PhysX processor selection, the NVIDIA scaling override checkbox, and the G-SYNC Control Panel checkbox remain manual because the launcher does not have a reliable supported setter for them. Brightness is not changed by a profile; keep it at NVIDIA Control Panel's 50% default.
 - MSAA, shadows, textures, shaders, particles, ambient occlusion, HDR, Reflex, texture filtering, FSR, VSync, and CMAA.
 
 Each profile's canonical preset is stored independently in `graphics/<ProfileName>.json` (`FabMode`, `ArliMode`, `ArmlMode`, `OliMode`, and `BrileMode`). The editor validates and displays the selected profile's file; Apply Graphics validates that same profile name before using its settings. FabMode, ArliMode, ArmlMode, and OliMode currently use 1280×960 4:3 fullscreen defaults. BrileMode uses 1920×1080 16:9 fullscreen. Presets request the highest advertised refresh for the selected CS2 resolution; a saved 360 Hz value is not treated as proof the monitor supports 360 Hz.
@@ -91,4 +92,4 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tools\Test-StepResults
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tools\Update-Context.ps1 -Check
 ```
 
-These checks cover parser/formatting, mocked persistence and GitHub sync, graphics fixtures, read-only NVIDIA inventory, mocked Steam launch arguments, and status reporting. A real CS2/Steam account and monitor smoke test is still separate.
+These checks cover parser/formatting, mocked persistence and GitHub sync, graphics fixtures, legacy DVC range mapping without hardware writes, read-only NVIDIA capability inventory, mocked Steam launch arguments, and status reporting. A real CS2/Steam account and monitor smoke test is still separate.

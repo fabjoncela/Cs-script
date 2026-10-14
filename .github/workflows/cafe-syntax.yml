@@ -10,6 +10,7 @@ on:
       - 'tools/Test-SteamLaunchOptions.ps1'
       - 'tools/Test-Graphics.ps1'
       - 'tools/Test-NvidiaCompatibility.ps1'
+      - 'tools/Test-NvidiaDvcFallback.ps1'
       - 'tools/Test-SuperlightDevice.ps1'
       - 'tools/Test-StepResults.ps1'
       - 'tools/Test-LogitechDPI.ps1'
@@ -31,6 +32,7 @@ on:
       - 'tools/Test-SteamLaunchOptions.ps1'
       - 'tools/Test-Graphics.ps1'
       - 'tools/Test-NvidiaCompatibility.ps1'
+      - 'tools/Test-NvidiaDvcFallback.ps1'
       - 'tools/Test-SuperlightDevice.ps1'
       - 'tools/Test-StepResults.ps1'
       - 'tools/Update-Context.ps1'
@@ -86,6 +88,10 @@ jobs:
         shell: powershell
         run: |
           & "$env:GITHUB_WORKSPACE\tools\Test-NvidiaCompatibility.ps1"
+      - name: Test legacy NVIDIA Digital Vibrance fallback without hardware writes
+        shell: powershell
+        run: |
+          & "$env:GITHUB_WORKSPACE\tools\Test-NvidiaDvcFallback.ps1"
       - name: Test Logitech Superlight device selection
         shell: powershell
         run: |
