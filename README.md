@@ -4,11 +4,11 @@ A portable Windows **CS2 internet-café setup launcher**. A single hybrid `cafe.
 
 [Technical architecture and maintenance notes](./context.md)
 
-> Testing branch build: **2026.10.14.2**. Features depend on the PC's hardware, installed programs and user permissions.
+> Launcher build: **2026.10.14.3**. Features depend on the PC's hardware, installed programs and user permissions.
 
-## Dashboard and tabbed editor (testing build v2026.10.14.2)
+## Dashboard and tabbed editor (build v2026.10.14.3)
 
-Per-profile CS2 graphics controls live in the existing **CS2 / Apps** tab. Choose the game's resolution, aspect ratio, fullscreen/windowed mode, highest or exact refresh, stretch behavior, and video quality. **Copy graphics** copies only the selected source profile's CS2 graphics settings; **Reset CS2 graphics to profile defaults** reloads that profile's canonical preset. Both changes stay in the editor until saved. **Apply Graphics** now reports applied/confirmed, changed, and skipped settings, display fallbacks, NVIDIA scaling verification, and backup location. **Save Locally** keeps a custom preset in `%LOCALAPPDATA%\CafeLauncher\profiles.json`; Apply Graphics uses pending local edits even while offline. **Save & Sync to GitHub** uploads the normal profile JSON, `graphics/<ProfileName>.json`, and only the matching CFG's sensitivity command if one is set. Binds and other CFG commands remain untouched.
+Per-profile CS2 graphics controls live in the existing **CS2 / Apps** tab. Choose the game's resolution, aspect ratio, fullscreen/windowed mode, highest or exact refresh, stretch behavior, and video quality. **Copy graphics** copies only the selected source profile's CS2 graphics settings; **Reset CS2 graphics to profile defaults** reloads that profile's canonical preset. Both changes stay in the editor until saved. **Apply Graphics** reports applied/confirmed, changed, and skipped settings, display fallbacks, NVIDIA scaling verification, and backup location. Routine profile summaries also identify each failed or partial step and suggest what to check next. **Save Locally** keeps a custom preset in `%LOCALAPPDATA%\CafeLauncher\profiles.json`; Apply Graphics uses pending local edits even while offline. **Save & Sync to GitHub** uploads the normal profile JSON, `graphics/<ProfileName>.json`, and only the matching CFG's sensitivity command if one is set. Binds and other CFG commands remain untouched.
 
 The dashboard still has five independent player cards with **Apply**, **Play + Exec**, **Graphics**, and **Edit** actions, a selected-profile summary, a manual live DPI field, and collapsible live logs. Less-used shortcuts live on the **Tools & Apps** tab.
 

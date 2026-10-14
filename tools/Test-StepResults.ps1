@@ -21,7 +21,7 @@ function Write-Log {param([string]$Message,[string]$Level='INFO')
     if($script:StepScope -and $Level -eq 'ERROR'){$script:StepScopeError=$true}
     if($script:StepScope -and $Level -eq 'WARN'){$script:StepScopeWarning=$true}
 }
-foreach($n in @('Set-StepResult','Start-StepScope','Complete-StepScope','Write-RunSummary')){Invoke-Expression $functions[$n]}
+foreach($n in @('Set-StepResult','Start-StepScope','Complete-StepScope','Get-StepRecoveryAdvice','Write-RunSummary')){Invoke-Expression $functions[$n]}
 Start-StepScope -Run FabMode -Step Mouse
 Complete-StepScope
 Start-StepScope -Run FabMode -Step NVIDIA
@@ -39,6 +39,18 @@ if($statuses.Mouse -ne 'SUCCESS' -or $statuses.NVIDIA -ne 'PARTIAL' -or $statuse
 if($script:StepResults.Count -ne 4){throw 'Pending result not replaced'}
 if(($script:messages -join ' ') -notmatch '1 PARTIAL, 0 SKIPPED, 1 FAILED'){throw 'Summary missing failure'}
 if(($script:messages -join ' ') -match '\[RESULT\] RESULT '){throw 'Duplicate RESULT prefix'}
+if(-not ($script:messages | Where-Object {$_ -match '\[WARN\] FabMode \| NVIDIA \| PARTIAL: .*Next: .*LIVE LOGS'})){
+    throw 'Partial step summary must name the step and direct the user to its warnings.'
+}
+if(-not ($script:messages | Where-Object {$_ -match '\[ERROR\] FabMode \| Config \| FAILED: .*Next: .*LIVE LOGS'})){
+    throw 'Failed step summary must name the failure and include a next step.'
+}
+if((Get-StepRecoveryAdvice -Step 'Install CS2 fab.cfg' -Status 'FAILED') -notmatch 'CS2 cfg folder'){
+    throw 'CFG installation failures must include actionable recovery advice.'
+}
+if((Get-StepRecoveryAdvice -Step 'Logitech live DPI' -Status 'PENDING') -notmatch 'still running|helper download'){
+    throw 'Pending DPI guidance must explain that helper work may still be running.'
+}
 if($functions['Invoke-GamingProfile'] -notmatch 'Start-StepScope' -or $functions['Invoke-GamingProfile'] -notmatch 'PENDING'){throw 'Profile not instrumented'}
 if($functions['Invoke-GraphicsOnly'] -notmatch 'Complete-StepScope'){throw 'Graphics not instrumented'}
 Write-Host 'PASS: status tracking, errors, partial warnings, summary, pending resolution, profile and graphics instrumentation.'

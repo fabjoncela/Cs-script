@@ -4,7 +4,7 @@ start "" powershell.exe -NoProfile -ExecutionPolicy Bypass -STA -WindowStyle Hid
 exit /b
 
 # POWERSHELL_GUI
-# CAFE_RELEASE=2026.10.14.2
+# CAFE_RELEASE=2026.10.14.3
 
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
@@ -93,12 +93,36 @@ function Complete-StepScope {
     elseif($warnSeen){$Detail='One or more warnings were reported; step may be partially applied. '+$Detail}
     Set-StepResult -Run $scope.Run -Step $scope.Step -Status $state -Detail $Detail
 }
+function Get-StepRecoveryAdvice {
+    param([string]$Step,[string]$Status)
+    if($Status -eq 'PENDING'){
+        return 'This action is still running. Keep the launcher open, allow the helper download if prompted, and check LIVE LOGS for completion.'
+    }
+    if($Status -eq 'PARTIAL'){
+        return 'Open LIVE LOGS and review the warnings for this step; verify the affected setting before retrying the profile.'
+    }
+    switch -Wildcard ($Step) {
+        'Windows mouse speed/acceleration' { return 'Check LIVE LOGS for Windows read-back or permission errors, then verify pointer speed and acceleration in Windows Mouse settings.' }
+        'NVIDIA settings' { return 'Check LIVE LOGS for the failed display, vibrance, or scaling operation; confirm the NVIDIA driver and requested display mode, then retry.' }
+        'Install CS2 *' { return 'Check internet access and the CS2 cfg folder under the active Steam account; confirm the profile CFG URL or local file, then retry.' }
+        'Launch apps*' { return 'Check the configured application paths and whether each app is installed; fix the missing path and retry Launch Apps.' }
+        'Logitech live DPI' { return 'Check LIVE LOGS for the selected mouse/dongle and DPI read-back; keep the intended mouse connected and retry after helper download finishes.' }
+        'Delayed Logitech DPI verification' { return 'Keep the target mouse connected, then retry the profile and confirm the requested DPI in LIVE LOGS.' }
+        default { return 'Open LIVE LOGS for the error details for this step, resolve the reported device, permission, file, or network issue, then retry the profile.' }
+    }
+}
 function Write-RunSummary {
     param([string]$Run)
     $items=@($script:StepResults | Where-Object {$_.Run -eq $Run})
     $counts=@{}
     foreach($state in @('SUCCESS','PARTIAL','SKIPPED','FAILED','PENDING')){$counts[$state]=@($items | Where-Object {$_.Status -eq $state}).Count}
     Write-Log ($Run+': '+$counts.SUCCESS+' SUCCESS, '+$counts.PARTIAL+' PARTIAL, '+$counts.SKIPPED+' SKIPPED, '+$counts.FAILED+' FAILED, '+$counts.PENDING+' PENDING') 'SUMMARY'
+    foreach($item in @($items | Where-Object {$_.Status -in @('PARTIAL','FAILED','PENDING')})){
+        $level=if($item.Status -eq 'FAILED'){'ERROR'}else{'WARN'}
+        $detail=if([string]::IsNullOrWhiteSpace([string]$item.Detail)){'No additional error detail was recorded.'}else{[string]$item.Detail}
+        $advice=Get-StepRecoveryAdvice -Step ([string]$item.Step) -Status ([string]$item.Status)
+        Write-Log ($Run+' | '+$item.Step+' | '+$item.Status+': '+$detail+' Next: '+$advice) $level
+    }
 }
 
 Write-Log "Launcher starting."

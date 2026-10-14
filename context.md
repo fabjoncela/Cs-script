@@ -3,7 +3,7 @@
 This file gives Codex and maintainers the operational context needed to work safely in this repository. **Always follow the checked-out source tree.** The generated state block below reports the launcher release marker, not whether that code has shipped to `main`.
 
 <!-- BEGIN GENERATED LAUNCHER STATE -->
-- Launcher release: `2026.10.14.2`
+- Launcher release: `2026.10.14.3`
 - Generated from the unique `# CAFE_RELEASE` marker in `cafe.bat` by `tools/Update-Context.ps1`.
 <!-- END GENERATED LAUNCHER STATE -->
 
@@ -57,6 +57,7 @@ Dashboard **Apply Graphics** is a separate action from the normal profile Apply 
 
 - Startup PC detection is informational. It must not change monitor settings.
 - A normal profile Apply refreshes public profile values unless the profile has pending local edits, then applies mouse/NVIDIA settings, installs its CFG, and optionally launches configured apps. It does not start CS2 or write persistent Steam launch options.
+- Run summaries report total SUCCESS/PARTIAL/SKIPPED/FAILED/PENDING counts. For each partial, failed, or pending step, they also repeat the step name, recorded detail, and a step-specific next action in LIVE LOGS and the status line.
 - **Play + Exec** installs the selected CFG and requests a one-time Steam launch argument. It does not persist launch options or apply mouse/display settings.
 - **Apply Graphics** requires CS2 to be closed, detects the active Steam account at the write boundary, changes only recognized keys in that account's `cs2_video.txt`, backs up before replacing, verifies the result, and restores on failure where possible.
 - The CS2 refresh choice applies to the selected **game resolution**, independently of Windows desktop resolution. `Highest` chooses the highest advertised progressive rate for that resolution. `Exact` applies only if the exact resolution/Hz is advertised; otherwise it preserves existing display values and reports why.
