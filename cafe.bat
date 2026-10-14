@@ -4,7 +4,7 @@ start "" powershell.exe -NoProfile -ExecutionPolicy Bypass -STA -WindowStyle Hid
 exit /b
 
 # POWERSHELL_GUI
-# CAFE_RELEASE=2026.10.14.27
+# CAFE_RELEASE=2026.10.14.28
 
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
@@ -3009,7 +3009,11 @@ function Get-CafeCS2GraphicsCapture {
 }
 
 function Get-ProfileGraphicsPreset {
-    param([Parameter(Mandatory=$true)][string]$ProfileName,[switch]$Canonical)
+    param([Parameter(Mandatory=$true)][string]$ProfileName,[switch]$Canonical,[switch]$RequireGitHub)
+    if(-not $script:GamingProfiles.Contains($ProfileName)){throw ('Unknown graphics profile: '+$ProfileName)}
+    if($RequireGitHub -and $script:PendingSync[$ProfileName]){
+        throw ('This profile has unsynced local edits. Resolve them before refreshing its GitHub graphics preset.')
+    }
     if(-not $Canonical -and $script:PendingSync[$ProfileName] -and $script:GraphicsPresets.Contains($ProfileName)){
         return $script:GraphicsPresets[$ProfileName]
     }
@@ -3024,7 +3028,10 @@ function Get-ProfileGraphicsPreset {
         }
         try{$dir=Split-Path -Parent $cache;if(-not(Test-Path -LiteralPath $dir)){[void](New-Item -ItemType Directory -Path $dir -Force)};[IO.File]::WriteAllText($cache,($preset|ConvertTo-Json -Depth 6),(New-Object Text.UTF8Encoding($false)))}catch{Write-Log ('Graphics preset cache warning: '+$_.Exception.Message) 'WARN'}
         return $preset
-    }catch{Write-Log ('Graphics preset download unavailable: '+$_.Exception.Message) 'WARN'}
+    }catch{
+        Write-Log ('Graphics preset download unavailable: '+$_.Exception.Message) 'WARN'
+        if($RequireGitHub){throw ('Could not verify the latest GitHub graphics preset for '+$ProfileName+': '+$_.Exception.Message)}
+    }
     foreach($file in @($cache,$local)){
         if(-not(Test-Path -LiteralPath $file -PathType Leaf)){continue}
         try{
@@ -3390,7 +3397,7 @@ function Compare-GitHubCommitOrder {
 }
 
 function Refresh-ProfileFromGitHub {
-    param([Parameter(Mandatory=$true)][string]$ProfileName)
+    param([Parameter(Mandatory=$true)][string]$ProfileName,[switch]$NoSave,[switch]$ForceLoad)
     if (-not $script:GamingProfiles.Contains($ProfileName)) { throw "Unknown profile: $ProfileName" }
     if ($script:PendingSync[$ProfileName]) {
         Write-Log "$ProfileName profile refresh: decision=local-pending; remote was not checked; keeping localPointer=$($script:GamingProfiles[$ProfileName].PointerSpeed)." 'INFO'
@@ -3405,11 +3412,11 @@ function Refresh-ProfileFromGitHub {
         # a fresh install with no local verification metadata. Load by immutable
         # commit SHA so a stale mutable branch response cannot win over GitHub.
         $latestCommit=Get-LatestGitHubFileCommit -Repo $script:GithubRepo -Branch $script:GithubBranch -Path $path
-        if($verifiedState -and $latestCommit -ceq $verifiedState.CommitSha){
+        if($verifiedState -and $latestCommit -ceq $verifiedState.CommitSha -and -not $ForceLoad){
             Write-Log "$ProfileName profile refresh: decision=verified-cache; repo=$script:GithubRepo; branch=$script:GithubBranch; path=$path; latestCommit=$latestCommit; verifiedCommit=$($verifiedState.CommitSha); pointer=$priorPointer. Using values verified from this commit."
             return 'VerifiedGitHub'
         }
-        if($verifiedState){
+        if($verifiedState -and $latestCommit -cne $verifiedState.CommitSha){
             $commitOrder=Compare-GitHubCommitOrder -Repo $script:GithubRepo -BaseSha $verifiedState.CommitSha -HeadSha $latestCommit
             if($commitOrder -eq 'behind'){
                 Write-Log "$ProfileName profile refresh: decision=ignore-stale-ancestor; repo=$script:GithubRepo; branch=$script:GithubBranch; path=$path; latestCommit=$latestCommit; verifiedCommit=$($verifiedState.CommitSha); comparison=$commitOrder; pointer=$priorPointer. Keeping verified settings." 'WARN'
@@ -3428,7 +3435,7 @@ function Refresh-ProfileFromGitHub {
         $priorCommit=if($verifiedState){[string]$verifiedState.CommitSha}else{'none'}
         Write-Log "$ProfileName profile refresh: decision=loaded-remote; repo=$script:GithubRepo; branch=$script:GithubBranch; path=$path; latestCommit=$latestCommit; priorVerifiedCommit=$priorCommit; blobSha=$($remoteRead.BlobSha); pointerBefore=$priorPointer; pointerLoaded=$remotePointer."
         Import-ProfileValues -ProfileName $ProfileName -SavedProfile $remote -SourceLabel 'GitHub'
-        try { Save-ProfileSettings } catch { Write-Log "Unable to cache cloud settings: $($_.Exception.Message)" 'WARN' }
+        if(-not $NoSave){try { Save-ProfileSettings } catch { Write-Log "Unable to cache cloud settings: $($_.Exception.Message)" 'WARN' }}
         Write-Log "$ProfileName settings loaded from GitHub commit $latestCommit (no login needed)."
         return 'GitHub'
     } catch {
@@ -3440,14 +3447,16 @@ function Refresh-ProfileFromGitHub {
 }
 
 function Confirm-LocalProfileApply {
-    param([Parameter(Mandatory=$true)][string]$ProfileName,[Parameter(Mandatory=$true)][string]$Source)
+    param([Parameter(Mandatory=$true)][string]$ProfileName,[Parameter(Mandatory=$true)][string]$Source,
+        [ValidateSet('apply','edit')][string]$Action='apply')
     if($Source -notin @('LocalPending','LocalFallback')){return $true}
     $reason=if($Source -eq 'LocalPending'){
         'This profile has local changes that have not been synced to GitHub.'
     }else{
         'CafeLauncher could not verify the latest profile on GitHub.'
     }
-    $message="$reason`r`n`r`nApplying now will use the local saved values, which may be older than GitHub. Choose Yes to apply local values anyway, or No to cancel and try again when GitHub is available."
+    $verb=if($Action -eq 'edit'){'Opening the editor'}else{'Applying now'}
+    $message="$reason`r`n`r`n$verb will use the local saved values, which may be older than GitHub. Choose Yes to continue with local values, or No to cancel and try again when GitHub is available."
     $answer=[System.Windows.Forms.MessageBox]::Show($message,'Confirm local profile settings','YesNo','Warning','Button2')
     if($answer -eq [System.Windows.Forms.DialogResult]::Yes){
         Write-Log "$ProfileName local settings apply explicitly confirmed ($Source)." 'WARN'
@@ -3455,6 +3464,70 @@ function Confirm-LocalProfileApply {
     }
     Write-Log "$ProfileName apply canceled; local settings were not applied because GitHub priority could not be confirmed." 'INFO'
     return $false
+}
+
+function Resolve-PendingProfileChanges {
+    param([Parameter(Mandatory=$true)][string]$ProfileName)
+    if(-not $script:PendingSync[$ProfileName]){return $true}
+    $message="$ProfileName has local profile and/or CS2 graphics edits that are not synced to GitHub.`r`n`r`nYes = Sync these local edits to GitHub, then continue.`r`nNo = Discard them and download the latest profile and graphics from GitHub.`r`nCancel = leave everything unchanged."
+    $choice=[System.Windows.Forms.MessageBox]::Show($message,'Resolve unsynced profile edits','YesNoCancel','Warning','Button3')
+    if($choice -eq [System.Windows.Forms.DialogResult]::Cancel){Write-Log "$ProfileName action canceled; unsynced local edits were kept.";return $false}
+    if($choice -eq [System.Windows.Forms.DialogResult]::Yes){
+        $authorization=$null;$token=$null
+        try{
+            $authorization=Get-GitHubSyncAuthorization -OwnerWindow $form
+            if($null -eq $authorization -or [string]::IsNullOrWhiteSpace([string]$authorization.Token)){
+                Write-Log "$ProfileName action canceled; GitHub authorization was not completed." 'WARN'
+                return $false
+            }
+            if($authorization.Method -eq 'GitHub device sign-in'){
+                $confirm=[System.Windows.Forms.MessageBox]::Show(
+                    ('Sync these local edits using GitHub account @'+$authorization.Login+'?'),
+                    'Confirm GitHub account','YesNo','Question')
+                if($confirm -ne [System.Windows.Forms.DialogResult]::Yes){return $false}
+            }
+            $token=[string]$authorization.Token
+            $authorization.Token=$null
+            Sync-ProfileToGitHub -ProfileName $ProfileName -Token $token
+            $script:PendingSync[$ProfileName]=$false
+            Save-ProfileSettings
+            Write-Log "$ProfileName pending local profile and graphics edits synced and read-back verified before continuing."
+            return $true
+        }catch{
+            Write-Log "$ProfileName could not sync pending edits; action canceled and local edits remain pending. $($_.Exception.Message)" 'ERROR'
+            [void][System.Windows.Forms.MessageBox]::Show(
+                ("Could not sync $ProfileName. The local edits remain saved and pending; no action was applied.`n`n"+$_.Exception.Message),
+                'Profile Sync Required','OK','Warning')
+            return $false
+        }finally{$token=$null;$authorization=$null}
+    }
+
+    # Discard only after both current GitHub files have been fetched and
+    # validated. Restore the local state if either read fails.
+    $profileBefore=@{}
+    foreach($key in $script:GamingProfiles[$ProfileName].Keys){$profileBefore[$key]=$script:GamingProfiles[$ProfileName][$key]}
+    $graphicsBefore=$script:GraphicsPresets[$ProfileName]
+    $verifiedBefore=$script:VerifiedProfileState[$ProfileName]
+    try{
+        $script:PendingSync[$ProfileName]=$false
+        $profileSource=Refresh-ProfileFromGitHub -ProfileName $ProfileName -NoSave -ForceLoad
+        if($profileSource -notin @('GitHub','VerifiedGitHub')){throw 'The latest GitHub profile could not be verified.'}
+        [void](Get-ProfileGraphicsPreset -ProfileName $ProfileName -RequireGitHub)
+        Save-ProfileSettings
+        Write-Log "$ProfileName unsynced edits discarded only after the latest GitHub profile and graphics files were verified."
+        return $true
+    }catch{
+        foreach($key in @($script:GamingProfiles[$ProfileName].Keys)){[void]$script:GamingProfiles[$ProfileName].Remove($key)}
+        foreach($key in $profileBefore.Keys){$script:GamingProfiles[$ProfileName][$key]=$profileBefore[$key]}
+        if($graphicsBefore){$script:GraphicsPresets[$ProfileName]=$graphicsBefore}else{$script:GraphicsPresets.Remove($ProfileName)}
+        if($verifiedBefore){$script:VerifiedProfileState[$ProfileName]=$verifiedBefore}else{$script:VerifiedProfileState.Remove($ProfileName)}
+        $script:PendingSync[$ProfileName]=$true
+        Write-Log "$ProfileName could not discard local edits because GitHub refresh failed; local values remain pending. $($_.Exception.Message)" 'ERROR'
+        [void][System.Windows.Forms.MessageBox]::Show(
+            ("Could not load current GitHub settings for $ProfileName. Local edits were kept and no action was applied.`n`n"+$_.Exception.Message),
+            'GitHub Refresh Failed','OK','Warning')
+        return $false
+    }
 }
 
 function Get-GitHubSyncPersonalToken {
@@ -4186,7 +4259,25 @@ function Add-EditorTabWide {
 
 function Show-ProfileEditor {
     param([Parameter(Mandatory=$true)][string]$ProfileName)
-    $graphicsPreset=Get-ProfileGraphicsPreset -ProfileName $ProfileName
+    if(-not $script:GamingProfiles.Contains($ProfileName)){throw "Unknown profile: $ProfileName"}
+    if(-not (Resolve-PendingProfileChanges -ProfileName $ProfileName)){return}
+    $profileSource=Refresh-ProfileFromGitHub -ProfileName $ProfileName
+    if(-not (Confirm-LocalProfileApply -ProfileName $ProfileName -Source $profileSource -Action edit)){return}
+    try{
+        $graphicsPreset=Get-ProfileGraphicsPreset -ProfileName $ProfileName -RequireGitHub
+    }catch{
+        try{$localGraphics=Get-ProfileGraphicsPreset -ProfileName $ProfileName}catch{
+            [void][System.Windows.Forms.MessageBox]::Show(
+                ("GitHub graphics could not be refreshed and no valid local preset is available:`n"+$_.Exception.Message),
+                'CS2 Graphics Unavailable','OK','Warning')
+            return
+        }
+        $message="CafeLauncher could not verify the latest GitHub CS2 graphics preset for $ProfileName.`r`n`r`nUse the available local graphics copy anyway? It may be older than GitHub.`r`n`r`nYes = open using local graphics; No = cancel."
+        $answer=[System.Windows.Forms.MessageBox]::Show($message,'Confirm local CS2 graphics','YesNo','Warning','Button2')
+        if($answer -ne [System.Windows.Forms.DialogResult]::Yes){return}
+        $graphicsPreset=$localGraphics
+        Write-Log "$ProfileName editor using explicitly confirmed local CS2 graphics after GitHub refresh failed." 'WARN'
+    }
     $p = $script:GamingProfiles[$ProfileName]
     if (-not $p) { throw "Unknown profile: $ProfileName" }
     # GetNewClosure() creates a new dynamic module scope. The script: scope
@@ -4805,11 +4896,10 @@ function Show-ProfileEditor {
 
     [void]$dialog.ShowDialog($form)
     $dialog.Dispose()
-    # Recheck when returning to the dashboard (including when the user closes
-    # this editor with its X). Pending local edits are protected by the refresh.
-    try { Refresh-ProfileOnDashboard -Name $ProfileName } catch {
-        Write-Log "Dashboard refresh after editing $ProfileName failed: $($_.Exception.Message)" 'WARN'
-    }
+    # Editor open already refreshed this profile and its graphics preset; the
+    # local snapshot is updated by Save/Sync handlers. Avoid a duplicate fetch
+    # merely because the editor closed.
+    Update-SelectedProfileCard -Name $ProfileName
 }
 
 
@@ -5120,6 +5210,7 @@ function Invoke-GamingProfile {
         Write-Log "Unknown gaming profile: $ProfileName" 'ERROR'
         return
     }
+    if(-not (Resolve-PendingProfileChanges -ProfileName $ProfileName)){return}
     $profileSource=Refresh-ProfileFromGitHub -ProfileName $ProfileName
     if(-not (Confirm-LocalProfileApply -ProfileName $ProfileName -Source $profileSource)){return}
     $script:ActiveRunName=$ProfileName
@@ -5200,6 +5291,7 @@ function Start-CS2WithProfileCfg {
         ) | Out-Null
         return
     }
+    if(-not (Resolve-PendingProfileChanges -ProfileName $ProfileName)){return}
     $profileSource=Refresh-ProfileFromGitHub -ProfileName $ProfileName
     if(-not (Confirm-LocalProfileApply -ProfileName $ProfileName -Source $profileSource)){return}
     $profile = $script:GamingProfiles[$ProfileName]
@@ -5238,6 +5330,7 @@ function Invoke-GraphicsOnly {
     Clear-RunOutcomes -Run $graphicsRun
     Start-StepScope -Run $graphicsRun -Step 'Apply Graphics'
     try {
+    if(-not (Resolve-PendingProfileChanges -ProfileName $ModeName)){return}
     $expected='0f30b0ae6af34e60e9a6b68eafcf8baf78bd7a3c'
     $source=Add-CafeCacheBust -Uri 'https://raw.githubusercontent.com/fabjoncela/Cs-script/main/graphics/ApplyGraphics.ps1'
     $cache=Join-Path $env:LOCALAPPDATA 'CafeLauncher\graphics-module.ps1'
@@ -5336,25 +5429,9 @@ function Update-SelectedProfileCard {
             [Environment]::NewLine+'Display: '+[string]$p.Width+'x'+[string]$p.Height+' @'+[string]$p.RefreshHz+' Hz')
     }
     if($script:SelectedProfileHint){
-        $script:SelectedProfileHint.Text='Selected for review. Click Apply on a profile row to run settings.'
+        $script:SelectedProfileHint.Text='Cloud settings refresh when you open Edit or apply this profile.'
     }
 }
-function Refresh-ProfileOnDashboard {
-    param([Parameter(Mandatory=$true)][string]$Name)
-    if(-not $script:GamingProfiles.Contains($Name)){return 'UnknownProfile'}
-    $result=Refresh-ProfileFromGitHub -ProfileName $Name
-    Update-SelectedProfileCard -Name $Name
-    return $result
-}
-function Refresh-DashboardProfiles {
-    $selectedName=[string]$script:SelectedProfile
-    foreach($name in @($script:GamingProfiles.Keys)){
-        try { $null=Refresh-ProfileFromGitHub -ProfileName ([string]$name) }
-        catch { Write-Log "Dashboard refresh failed for ${name}: $($_.Exception.Message)" 'WARN' }
-    }
-    if($selectedName){Update-SelectedProfileCard -Name $selectedName}
-}
-
 $root=New-Object System.Windows.Forms.TableLayoutPanel
 $root.Dock='Fill'
 $root.ColumnCount=1
@@ -5692,9 +5769,8 @@ $startupTimer.Add_Tick({
     # inventory cannot delay the update prompt. The updater only prompts when
     # GitHub reports a newer release; failures remain in LIVE LOGS.
     Check-CafeLauncherUpdates
-    # Refresh all profiles after the dashboard appears, so Edit opens from the
-    # current remote values without performing a second check on button click.
-    Refresh-DashboardProfiles
+    # Profile and graphics settings refresh only when their profile is opened
+    # or applied, instead of spending requests on every profile at startup.
     try {
         Write-Log 'Automatic startup inventory:'
         $summary = Get-PCDiagnostics
