@@ -39,6 +39,8 @@ Main project files:
 - NVIDIA scaling: stretch to fill, preserve aspect ratio, or center without scaling.
 - MSAA, shadows, textures, shaders, particles, ambient occlusion, HDR, Reflex, texture filtering, FSR, VSync, and CMAA.
 
+Each profile's canonical preset is stored independently in `graphics/<ProfileName>.json` (`FabMode`, `ArliMode`, `ArmlMode`, `OliMode`, and `BrileMode`). The editor validates and displays the selected profile's file; Apply Graphics validates that same profile name before using its settings. FabMode, ArliMode, ArmlMode, and OliMode currently use 1280×960 4:3 fullscreen defaults. BrileMode uses 1920×1080 16:9 fullscreen. Presets request the highest advertised refresh for the selected CS2 resolution; a saved 360 Hz value is not treated as proof the monitor supports 360 Hz.
+
 Dashboard **Apply Graphics** is a separate action from the normal profile Apply and **Play + Exec** buttons. Saving in the editor does not apply the settings immediately.
 
 ### Local and GitHub persistence
