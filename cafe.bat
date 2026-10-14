@@ -4,7 +4,7 @@ start "" powershell.exe -NoProfile -ExecutionPolicy Bypass -STA -WindowStyle Hid
 exit /b
 
 # POWERSHELL_GUI
-# CAFE_RELEASE=2026.10.14.32
+# CAFE_RELEASE=2026.10.14.33
 
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
@@ -4798,9 +4798,9 @@ function Show-ProfileEditor {
             Write-Log ('Loaded earlier GitHub graphics version '+$version.Sha+' for '+$ProfileName+' into the editor; no save or game settings were changed.')
         }catch{
             Write-Log ('Could not restore GitHub graphics version for '+$ProfileName+': '+$_.Exception.Message) 'WARN'
-            [void][System.Windows.Forms.MessageBox]::Show(
+            $null=[System.Windows.Forms.MessageBox]::Show(
                 ('Could not load the selected graphics version:`n'+$_.Exception.Message),
-                'Restore Graphics Version','OK','Warning')|Out-Null
+                'Restore Graphics Version','OK','Warning')
         }finally{$dialog.Cursor=[System.Windows.Forms.Cursors]::Default}
     }.GetNewClosure())
     $captureGraphics.Add_Click({
@@ -4825,7 +4825,7 @@ function Show-ProfileEditor {
             Write-Log ('Captured '+$capture.CapturedFields.Count+' CS2 graphics values from '+$capture.Path+' for '+$ProfileName+'; missing values kept the current preset. No game, local profile, or GitHub data was changed.')
         }catch{
             Write-Log ('CS2 graphics capture for '+$ProfileName+' failed: '+$_.Exception.Message) 'WARN'
-            [void][System.Windows.Forms.MessageBox]::Show(('Could not capture CS2 graphics:`n'+$_.Exception.Message),'Capture CS2 Graphics','OK','Warning')|Out-Null
+            $null=[System.Windows.Forms.MessageBox]::Show(('Could not capture CS2 graphics:`n'+$_.Exception.Message),'Capture CS2 Graphics','OK','Warning')
         }finally{
             $captureGraphics.Enabled=$true
             if(-not $dialog.IsDisposed){$dialog.Cursor=[System.Windows.Forms.Cursors]::Default}
