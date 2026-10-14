@@ -122,7 +122,7 @@ try {
 }
 
 # All profile graphics files stay independent; four currently share the
-# same validated video settings. BrileMode intentionally keeps its defaults.
+# same validated video settings. BrileMode uses native 1080p fullscreen 16:9.
 $profileNames=@('FabMode','ArliMode','BrileMode','ArmlMode','OliMode')
 $identicalToFab=@('FabMode','ArliMode','ArmlMode','OliMode')
 $fabPreset=Get-Content -LiteralPath (Join-Path $root 'graphics\FabMode.json') -Raw | ConvertFrom-Json
@@ -145,10 +145,20 @@ foreach($name in $profileNames){
                 throw ($name+' graphics setting '+$key+' differs from FabMode.')
             }
         }
+    }elseif($name -eq 'BrileMode'){
+        if([int]$values['Width'] -ne 1920 -or [int]$values['Height'] -ne 1080 -or
+           [int]$values['AspectRatioMode'] -ne 1 -or [int]$values['Fullscreen'] -ne 1 -or
+           $values.Contains('RefreshHz')){
+            throw 'BrileMode must request native 1920x1080 fullscreen 16:9 and preserve refresh.'
+        }
+        if([int]$values['MSAASamples'] -ne 2 -or [int]$values['TextureDetail'] -ne 0 -or
+           [int]$values['NvidiaReflex'] -ne 1){
+            throw 'BrileMode original advanced-video defaults changed unexpectedly.'
+        }
     }else{
         if($values.Contains('Width') -or $values.Contains('Height') -or $values.Contains('RefreshHz') -or
            $values.Contains('AspectRatioMode') -or $values.Contains('Fullscreen')){
-            throw 'BrileMode must preserve the existing PC-specific display settings.'
+            throw ($name+' must preserve the existing PC-specific display settings.')
         }
         if([int]$values['MSAASamples'] -ne 2 -or [int]$values['TextureDetail'] -ne 0 -or
            [int]$values['NvidiaReflex'] -ne 1){
@@ -157,13 +167,15 @@ foreach($name in $profileNames){
     }
 }
 $brilePreset=Get-Content -LiteralPath (Join-Path $root 'graphics\BrileMode.json') -Raw | ConvertFrom-Json
-if($brilePreset.DisplayPolicy -cne 'PreserveCurrent'){
-    throw 'BrileMode must explicitly preserve the player current CS2 display settings.'
+if($brilePreset.DisplayPolicy -cne 'ApplyPreset'){
+    throw 'BrileMode must explicitly apply its native-resolution display settings.'
 }
 $brileSettings=ConvertTo-VideoGraphicsSettings -Preset $brilePreset
-if((Assert-CS2GraphicsDisplayPolicy -Preset $brilePreset) -cne 'PreserveCurrent' -or
-   @($brileSettings.Keys | Where-Object {$_ -in @('Width','Height','RefreshHz','AspectRatioMode','Fullscreen')}).Count -gt 0){
-    throw 'BrileMode must not request a fixed resolution, refresh, aspect ratio, or fullscreen mode.'
+if((Assert-CS2GraphicsDisplayPolicy -Preset $brilePreset) -cne 'ApplyPreset' -or
+   [int]$brileSettings['Width'] -ne 1920 -or [int]$brileSettings['Height'] -ne 1080 -or
+   [int]$brileSettings['AspectRatioMode'] -ne 1 -or [int]$brileSettings['Fullscreen'] -ne 1 -or
+   $brileSettings.Contains('RefreshHz')){
+    throw 'BrileMode must apply 1920x1080 fullscreen 16:9 and leave refresh rate unchanged.'
 }
 $legacyBrile=[pscustomobject]@{ProfileName='BrileMode';Settings=[pscustomobject]@{Width=$null;Height=$null;RefreshHz=$null;AspectRatioMode=$null;Fullscreen=$null}}
 if((Assert-CS2GraphicsDisplayPolicy -Preset $legacyBrile) -cne 'PreserveCurrent'){
@@ -171,11 +183,12 @@ if((Assert-CS2GraphicsDisplayPolicy -Preset $legacyBrile) -cne 'PreserveCurrent'
 }
 $brileEdit=Update-CS2VideoGraphicsText -Text $fixture -Settings $brileSettings
 foreach($displayValue in @('"setting.defaultres" "1920"','"setting.defaultresheight" "1080"',
+    '"setting.aspectratiomode" "1"','"setting.fullscreen" "1"',
     '"setting.refreshrate_numerator" "165003"','"setting.refreshrate_denominator" "1000"')){
-    if(-not $brileEdit.Text.Contains($displayValue)){throw ('BrileMode changed the native CS2 display setting '+$displayValue)}
+    if(-not $brileEdit.Text.Contains($displayValue)){throw ('BrileMode failed to apply/preserve CS2 display setting '+$displayValue)}
 }
 if(-not $brileEdit.Changed -or $brileEdit.Text -notmatch '"setting.msaa_samples"\s+"2"'){
-    throw 'BrileMode must apply quality settings while preserving native display values.'
+    throw 'BrileMode must apply native 1080p fullscreen 16:9 and quality settings.'
 }
 $batText=[IO.File]::ReadAllText($bat)
 if($batText -notmatch '\$graphics\.Add_Click' -or $batText -notmatch 'Invoke-GraphicsOnly -ModeName \$selectedProfile'){

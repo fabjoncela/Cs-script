@@ -1,8 +1,12 @@
 {
   "SchemaVersion": 1,
   "ProfileName": "BrileMode",
-  "DisplayPolicy": "PreserveCurrent",
+  "DisplayPolicy": "ApplyPreset",
   "Settings": {
+    "Width": 1920,
+    "Height": 1080,
+    "AspectRatioMode": 1,
+    "Fullscreen": 1,
     "MSAASamples": 2,
     "ShadowQuality": 0,
     "DynamicShadows": 1,
