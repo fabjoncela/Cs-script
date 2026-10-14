@@ -108,6 +108,11 @@ foreach($def in $psAst.FindAll({
 if(-not $definitions.ContainsKey('Launch-All') -or -not $definitions.ContainsKey('Invoke-GamingProfile') -or -not $definitions.ContainsKey('Show-ProfileEditor')){
     throw 'Missing expected launcher and editor functions.'
 }
+if(-not $definitions.ContainsKey('Get-CafeLauncherRelease')){throw 'Dynamic launcher release lookup is missing.'}
+Invoke-Expression $definitions['Get-CafeLauncherRelease']
+$env:CAFE_SCRIPT=$batPath
+$expectedRelease=[regex]::Match($versions[0], '\d{4}\.\d{2}\.\d{2}\.\d+').Value
+if((Get-CafeLauncherRelease) -ne $expectedRelease){throw 'Launcher release lookup must read the CAFE_RELEASE marker from the active BAT.'}
 if($definitions['Invoke-GamingProfile'] -notmatch 'Launch-All -SkipGHub' -or
    $definitions['Invoke-GamingProfile'] -notmatch 'Request-LogitechLiveDPI -DPI'){
     throw 'Profile actions must skip G HUB while retaining custom live DPI.'
@@ -211,10 +216,21 @@ if($dashboardSource -notmatch 'New-Object System.Windows.Forms.TabControl' -or
    $dashboardSource -notmatch 'Tools & Apps'){
     throw 'Main dashboard, profile summary, tools, or collapsible logs are missing.'
 }
+if($dashboardSource -match "New-CafeLabel -Text 'v\d{4}\.\d{2}\.\d{2}\.\d+'" -or
+   $dashboardSource -notmatch "New-CafeLabel -Text \('v'\+\(Get-CafeLauncherRelease\)\)" -or
+   $psSource -notmatch 'Check-CafeLauncherUpdates -Manual'){
+    throw 'Version badge must use the active CAFE_RELEASE marker and startup/manual update checks must remain wired.'
+}
 if($psSource -match 'CAFE_PREVIEW_BRANCH|\$script:PreviewBranch|UI PREVIEW' -or
    $definitions['Check-CafeLauncherUpdates'] -notmatch 'GitHub main release is' -or
    $definitions['Check-CafeLauncherUpdates'] -notmatch 'CafeLauncher Update Available'){
     throw 'Production dashboard must use normal verified main-branch updates without preview restrictions.'
+}
+$startupSource=$psSource.Substring($psSource.IndexOf('$startupTimer.Add_Tick({'))
+$updateCheckAt=$startupSource.IndexOf('Check-CafeLauncherUpdates')
+$inventoryAt=$startupSource.IndexOf('Get-PCDiagnostics')
+if($updateCheckAt -lt 0 -or $inventoryAt -lt 0 -or $updateCheckAt -gt $inventoryAt){
+    throw 'Startup must check for updates before hardware/game inventory can delay a newer-build prompt.'
 }
 if($editorSource -notmatch 'Sync-ProfileToGitHub -ProfileName \$ProfileName -Token \$token' -or
    $editorSource -notmatch 'Confirm GitHub sync'){

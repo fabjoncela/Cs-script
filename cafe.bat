@@ -4,7 +4,7 @@ start "" powershell.exe -NoProfile -ExecutionPolicy Bypass -STA -WindowStyle Hid
 exit /b
 
 # POWERSHELL_GUI
-# CAFE_RELEASE=2026.10.14.14
+# CAFE_RELEASE=2026.10.14.15
 
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
@@ -2622,6 +2622,17 @@ function Test-LauncherIsCurrent {
     return (Get-GitBlobSha -Bytes ([Text.Encoding]::UTF8.GetBytes($oneNewline))) -eq $RemoteBlobSha
 }
 
+function Get-CafeLauncherRelease {
+    $source=[string]$env:CAFE_SCRIPT
+    if([string]::IsNullOrWhiteSpace($source) -or -not(Test-Path -LiteralPath $source -PathType Leaf)){return 'unknown'}
+    try{
+        $pattern='(?m)^# CAFE_RELEASE=(\d{4}\.\d{1,2}\.\d{1,2}\.\d+)\s*$'
+        $match=[regex]::Match([IO.File]::ReadAllText($source),$pattern)
+        if($match.Success){return $match.Groups[1].Value}
+    }catch{}
+    return 'unknown'
+}
+
 function Check-CafeLauncherUpdates {
     param([switch]$Manual)
     $source=$env:CAFE_SCRIPT
@@ -5068,7 +5079,7 @@ $subtitle.Dock='None'
 $subtitle.Location=New-Object System.Drawing.Point(28,49)
 $subtitle.Size=New-Object System.Drawing.Size(600,25)
 $header.Controls.Add($subtitle)
-$versionTag=New-CafeLabel -Text 'v2026.10.13.24' -Strong
+$versionTag=New-CafeLabel -Text ('v'+(Get-CafeLauncherRelease)) -Strong
 $versionTag.Dock='Right'
 $versionTag.Width=185
 $versionTag.ForeColor=[System.Drawing.Color]::FromArgb(111,177,255)
@@ -5378,12 +5389,15 @@ $startupTimer.Interval=350
 $startupTimer.Add_Tick({
     $startupTimer.Stop()
     $startupTimer.Dispose()
+    # Check for a newer build before slower hardware/game discovery so startup
+    # inventory cannot delay the update prompt. The updater only prompts when
+    # GitHub reports a newer release; failures remain in LIVE LOGS.
+    Check-CafeLauncherUpdates
     try {
         Write-Log 'Automatic startup inventory:'
         $summary = Get-PCDiagnostics
         foreach ($line in ($summary -split '\r?\n')) { if ($line) { Write-Log ('PC: ' + $line) } }
     } catch { Write-Log "Startup inventory failed: $($_.Exception.Message)" 'WARN' }
-    Check-CafeLauncherUpdates
 })
 $form.Add_Shown({ $startupTimer.Start() })
 [void]$form.ShowDialog()
