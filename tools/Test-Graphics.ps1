@@ -180,10 +180,20 @@ if($csharpEnd -lt $csharpStart){throw 'Could not extract C# helper.'}
 $csharp=$batText.Substring($csharpStart,$csharpEnd-$csharpStart)
 Add-Type -TypeDefinition $csharp -ErrorAction Stop
 if(-not ('FabDisplayNative' -as [type]) -or
-   -not [FabDisplayNative].GetMethod('IsAdvertisedMode')){
+   -not [FabDisplayNative].GetMethod('IsAdvertisedMode') -or
+   -not [FabDisplayNative].GetMethod('TrySetHighestRefreshAtCurrentResolution')){
     throw 'Read-only advertised-mode helper was not compiled.'
 }
 if([FabDisplayNative]::IsAdvertisedMode(1,1,0)){
     throw 'Invalid resolution must not pass display mode validation.'
 }
-Write-Host 'PASS: Windows File.Replace backups, Steam account revalidation, five graphics presets, selective edits, graphics ranges, hardware preservation, and standalone GUI trigger.'
+foreach($testCase in @(
+    @{Active=60;Modes=[int[]]@(60,120,240);Expected=240},
+    @{Active=60;Modes=[int[]]@(60,120,360);Expected=360},
+    @{Active=60;Modes=[int[]]@(60,240,500,540);Expected=540},
+    @{Active=360;Modes=[int[]]@(60);Expected=360}
+)){
+    $selected=[FabDisplayNative]::GetHighestRefreshAtCurrentResolution([int]$testCase.Active,[int[]]$testCase.Modes)
+    if($selected -ne $testCase.Expected){throw ('Highest refresh selection expected '+$testCase.Expected+'Hz but returned '+$selected+'Hz.')}
+}
+Write-Host 'PASS: Windows File.Replace backups, Steam account guard, 240/360/540Hz max selection, five graphics presets, selective edits, and graphics ranges.'

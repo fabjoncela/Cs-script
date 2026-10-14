@@ -366,8 +366,8 @@ function Open-NvidiaControlPanel {
 
 
 # Windows display-mode API and NVIDIA NVAPI first-stage settings helper.
-# Automatically chooses highest driver-advertised refresh at preferred resolution
-# if the requested Hz is unavailable; falls back to the CURRENT resolution only.
+# Profile applies preserve their requested-resolution fallback rules; startup
+# separately raises refresh to the highest advertised rate at current resolution.
 # The display mode helper uses a byte-array placeholder for DEVMODE's 16-byte union,
 # avoiding compiler/layout problems from the prior explicit union implementation.
 try {
@@ -491,6 +491,86 @@ public static class FabDisplayNative {
             "; current-resolution Hz (available modes + active): " +
             (atCurrent.Count > 0 ? String.Join(", ", atCurrent) : "not advertised") +
             "; modes checked=" + count + ".";
+    }
+
+    // Pure helper shared by startup selection and tests. The active mode is
+    // included because some drivers omit it from indexed EnumDisplaySettings.
+    public static int GetHighestRefreshAtCurrentResolution(int activeHz, int[] advertisedHz) {
+        int highest = activeHz >= 24 ? activeHz : 0;
+        if (advertisedHz != null) {
+            for (int i=0; i<advertisedHz.Length; i++)
+                if (advertisedHz[i] >= 24 && advertisedHz[i] > highest) highest = advertisedHz[i];
+        }
+        return highest;
+    }
+
+    // Startup behavior: keep the current resolution and select its highest
+    // progressive mode at 24 bpp or above. This never changes resolution.
+    public static bool TrySetHighestRefreshAtCurrentResolution(out string report) {
+        const string device = @"\\.\DISPLAY1";
+        DEVMODE current = NewMode();
+        if (!EnumDisplaySettings(device, -1, ref current)) {
+            report = "Cannot read current DISPLAY1 mode; startup refresh was not changed.";
+            return false;
+        }
+        List<DEVMODE> candidates = new List<DEVMODE>();
+        List<int> rates = new List<int>();
+        int activeHz = 0;
+        if (current.dmPelsWidth >= 640 && current.dmPelsHeight >= 480 &&
+            current.dmBitsPerPel >= 24 && current.dmDisplayFrequency >= 24 &&
+            (current.dmDisplayFlags & 2) == 0) {
+            candidates.Add(current);
+            rates.Add(current.dmDisplayFrequency);
+            activeHz = current.dmDisplayFrequency;
+        }
+        int checkedModes = 0;
+        for (int i=0; i<4096; i++) {
+            DEVMODE dm = NewMode();
+            if (!EnumDisplaySettings(device, i, ref dm)) break;
+            checkedModes++;
+            if (dm.dmPelsWidth != current.dmPelsWidth || dm.dmPelsHeight != current.dmPelsHeight ||
+                dm.dmBitsPerPel < 24 || dm.dmDisplayFrequency < 24 || (dm.dmDisplayFlags & 2) != 0) continue;
+            candidates.Add(dm);
+            rates.Add(dm.dmDisplayFrequency);
+        }
+        int highest = GetHighestRefreshAtCurrentResolution(activeHz, rates.ToArray());
+        if (candidates.Count == 0 || highest < 24) {
+            report = device + " found no valid progressive refresh modes at current resolution " +
+                current.dmPelsWidth + "x" + current.dmPelsHeight + "; kept " + current.dmDisplayFrequency + "Hz.";
+            return false;
+        }
+        DEVMODE candidate = candidates[0];
+        for (int i=1; i<candidates.Count; i++) {
+            if (candidates[i].dmDisplayFrequency > candidate.dmDisplayFrequency ||
+                (candidates[i].dmDisplayFrequency == candidate.dmDisplayFrequency &&
+                 candidates[i].dmBitsPerPel > candidate.dmBitsPerPel)) candidate = candidates[i];
+        }
+        string mode = current.dmPelsWidth + "x" + current.dmPelsHeight;
+        if (current.dmDisplayFrequency == highest) {
+            report = device + " already uses the highest advertised refresh at " + mode + ": " + highest +
+                "Hz (" + checkedModes + " indexed modes checked).";
+            return true;
+        }
+        candidate.dmFields |= 0x00040000 | 0x00080000 | 0x00100000 | 0x00400000;
+        int test = ChangeDisplaySettingsEx(device, ref candidate, IntPtr.Zero, 0x00000002, IntPtr.Zero);
+        if (test != 0) {
+            report = device + " Windows rejected highest advertised refresh " + highest + "Hz at " + mode +
+                " during test: " + ResultName(test) + ". Current mode kept.";
+            return false;
+        }
+        int apply = ChangeDisplaySettingsEx(device, ref candidate, IntPtr.Zero, 0x00000001, IntPtr.Zero);
+        if (apply != 0) {
+            report = device + " Windows rejected highest advertised refresh " + highest + "Hz at " + mode +
+                " during apply: " + ResultName(apply) + ".";
+            return false;
+        }
+        DEVMODE after = NewMode();
+        bool readBack = EnumDisplaySettings(device, -1, ref after);
+        bool verified = readBack && after.dmPelsWidth == current.dmPelsWidth &&
+            after.dmPelsHeight == current.dmPelsHeight && after.dmDisplayFrequency == highest;
+        report = device + " " + (verified ? "set and verified " : "read-back mismatch for ") + mode + " @" + highest +
+            "Hz (highest advertised at current resolution; current was " + current.dmDisplayFrequency + "Hz).";
+        return verified;
     }
 
     public static bool TrySetDisplayMode(int desiredWidth, int desiredHeight, int desiredHz, out string report) {
@@ -1327,6 +1407,19 @@ function Write-NvidiaCompatibilityScan {
     $scan=Get-NvidiaCompatibilityScan -Width $Width -Height $Height -RefreshHz $RefreshHz
     foreach($line in $scan.Report){Write-Log ('NVIDIA compatibility: '+$line)}
     return $scan
+}
+
+function Set-StartupHighestRefreshRate {
+    Start-StepScope -Run 'Startup' -Step 'Highest refresh at current resolution'
+    try {
+        if(-not ('FabDisplayNative' -as [type])){throw 'Windows display-mode helper is unavailable.'}
+        $report=''
+        $ok=[FabDisplayNative]::TrySetHighestRefreshAtCurrentResolution([ref]$report)
+        if($ok){Write-Log ('Startup display refresh: '+$report)}
+        else{Write-Log ('Startup display refresh was not changed: '+$report) 'WARN'}
+    }catch{Write-Log ('Startup display refresh failed safely: '+$_.Exception.Message) 'WARN'}
+    Complete-StepScope -Detail 'Startup selected the highest advertised progressive refresh at the current resolution, then verified read-back.'
+    Write-RunSummary -Run 'Startup'
 }
 
 function Apply-NvidiaGamingSettings {
@@ -3663,6 +3756,7 @@ $startupTimer.Interval=350
 $startupTimer.Add_Tick({
     $startupTimer.Stop()
     $startupTimer.Dispose()
+    Set-StartupHighestRefreshRate
     try {
         Write-Log 'Automatic startup inventory:'
         $summary = Get-PCDiagnostics
