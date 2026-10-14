@@ -124,8 +124,15 @@ if((Get-LogitechDPIReadback -DeviceIndex 2) -ne 800){throw 'DPI read-back parser
 if($source -notmatch 'c54d'){
     throw 'C54D helper integration is missing.'
 }
+Invoke-Expression $functions['Assert-LogitechDPI']
 foreach($name in @('FabMode','ArliMode','BrileMode','ArmlMode','OliMode')){
     $profile=Get-Content -LiteralPath (Join-Path $root ('profiles\'+$name+'.json')) -Raw | ConvertFrom-Json
-    if([int]$profile.LogitechDPI -ne 800){throw ($name+' must default to 800 DPI.')}
+    $dpi=0
+    if(-not $profile.PSObject.Properties['LogitechDPI'] -or
+       -not [int]::TryParse([string]$profile.LogitechDPI,[ref]$dpi)){
+        throw ($name+' must define LogitechDPI as an integer.')
+    }
+    try { Assert-LogitechDPI -DPI $dpi }
+    catch { throw ($name+' LogitechDPI must be within the supported 100 to 25600 range; found '+$dpi+'.') }
 }
-Write-Host 'PASS: Logitech DPI presets, local/cloud editor persistence, auto LIVE apply, async shared helper, onboard button disabled.'
+Write-Host 'PASS: Logitech DPI presets accept each profile''s supported custom DPI, local/cloud editor persistence, auto LIVE apply, async shared helper, onboard button disabled.'
