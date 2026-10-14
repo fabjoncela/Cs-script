@@ -3258,7 +3258,7 @@ function Invoke-GraphicsOnly {
     param([Parameter(Mandatory=$true)][string]$ModeName)
     Start-StepScope -Run ('Graphics '+$ModeName) -Step 'Apply Graphics'
     try {
-    $expected='b2041ca886c888ebfc939324cd6c2b0940b03f9b'
+    $expected='68c4c073e30c5169c1f039724b0053dd3e47de5f'
     $source='https://raw.githubusercontent.com/fabjoncela/Cs-script/codex/fabmode-bugfix/graphics/ApplyGraphics.ps1'
     $cache=Join-Path $env:LOCALAPPDATA 'CafeLauncher\graphics-module.ps1'
     $parent=Split-Path -Parent $cache

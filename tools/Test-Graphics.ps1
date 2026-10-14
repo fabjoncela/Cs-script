@@ -156,6 +156,27 @@ foreach($name in $profileNames){
         }
     }
 }
+$brilePreset=Get-Content -LiteralPath (Join-Path $root 'graphics\BrileMode.json') -Raw | ConvertFrom-Json
+if($brilePreset.DisplayPolicy -cne 'PreserveCurrent'){
+    throw 'BrileMode must explicitly preserve the player current CS2 display settings.'
+}
+$brileSettings=ConvertTo-VideoGraphicsSettings -Preset $brilePreset
+if((Assert-CS2GraphicsDisplayPolicy -Preset $brilePreset) -cne 'PreserveCurrent' -or
+   @($brileSettings.Keys | Where-Object {$_ -in @('Width','Height','RefreshHz','AspectRatioMode','Fullscreen')}).Count -gt 0){
+    throw 'BrileMode must not request a fixed resolution, refresh, aspect ratio, or fullscreen mode.'
+}
+$legacyBrile=[pscustomobject]@{ProfileName='BrileMode';Settings=[pscustomobject]@{Width=$null;Height=$null;RefreshHz=$null;AspectRatioMode=$null;Fullscreen=$null}}
+if((Assert-CS2GraphicsDisplayPolicy -Preset $legacyBrile) -cne 'PreserveCurrent'){
+    throw 'Previously cached BrileMode presets with null display values must remain safe.'
+}
+$brileEdit=Update-CS2VideoGraphicsText -Text $fixture -Settings $brileSettings
+foreach($displayValue in @('"setting.defaultres" "1920"','"setting.defaultresheight" "1080"',
+    '"setting.refreshrate_numerator" "165003"','"setting.refreshrate_denominator" "1000"')){
+    if(-not $brileEdit.Text.Contains($displayValue)){throw ('BrileMode changed the native CS2 display setting '+$displayValue)}
+}
+if(-not $brileEdit.Changed -or $brileEdit.Text -notmatch '"setting.msaa_samples"\s+"2"'){
+    throw 'BrileMode must apply quality settings while preserving native display values.'
+}
 $batText=[IO.File]::ReadAllText($bat)
 if($batText -notmatch '\$graphics\.Add_Click' -or $batText -notmatch 'Invoke-GraphicsOnly -ModeName \$selectedProfile'){
     throw 'Apply Graphics GUI button missing.'

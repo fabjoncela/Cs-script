@@ -54,6 +54,22 @@ function ConvertTo-VideoGraphicsSettings {
     }
     return ,$settings
 }
+function Assert-CS2GraphicsDisplayPolicy {
+    param($Preset)
+    $policy=if($Preset.PSObject.Properties['DisplayPolicy']){[string]$Preset.DisplayPolicy}else{
+        if($Preset.ProfileName -ceq 'BrileMode'){'PreserveCurrent'}else{'ApplyPreset'}
+    }
+    if($policy -notin @('ApplyPreset','PreserveCurrent')){throw ('Unknown graphics display policy: '+$policy)}
+    if($policy -eq 'PreserveCurrent'){
+        foreach($field in @('Width','Height','RefreshHz','AspectRatioMode','Fullscreen')){
+            $property=$Preset.Settings.PSObject.Properties[$field]
+            if($property -and $null -ne $property.Value){
+                throw ('PreserveCurrent display policy cannot set '+$field+'.')
+            }
+        }
+    }
+    return $policy
+}
 function Get-CS2ModeGraphicsPreset {
     param([string]$ModeName)
     if($ModeName -notin @('FabMode','ArliMode','BrileMode','ArmlMode','OliMode')){throw 'Invalid graphics mode name.'}
@@ -64,6 +80,7 @@ function Get-CS2ModeGraphicsPreset {
         [Net.ServicePointManager]::SecurityProtocol=[Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
         $preset=Invoke-RestMethod -Uri $url -Method Get -TimeoutSec 10 -Headers @{'Cache-Control'='no-cache'} -ErrorAction Stop
         if($preset.ProfileName -cne $ModeName -or [int]$preset.SchemaVersion -ne 1){throw 'Preset profile/schema mismatch.'}
+        [void](Assert-CS2GraphicsDisplayPolicy -Preset $preset)
         [void](ConvertTo-VideoGraphicsSettings -Preset $preset)
         try{
             $dir=Split-Path -Parent $cache
@@ -78,6 +95,7 @@ function Get-CS2ModeGraphicsPreset {
         try{
             $preset=Get-Content -LiteralPath $file -Raw -ErrorAction Stop|ConvertFrom-Json -ErrorAction Stop
             if($preset.ProfileName -cne $ModeName -or [int]$preset.SchemaVersion -ne 1){throw 'Preset profile/schema mismatch.'}
+            [void](Assert-CS2GraphicsDisplayPolicy -Preset $preset)
             [void](ConvertTo-VideoGraphicsSettings -Preset $preset)
             Write-Log ("Using offline graphics preset: "+$file) 'WARN'
             return $preset
@@ -211,8 +229,12 @@ function Apply-CS2ModeGraphics {
     try{
         if(Get-Process -Name cs2 -ErrorAction SilentlyContinue){throw 'CS2 is running. Close it before applying graphics.'}
         $preset=Get-CS2ModeGraphicsPreset -ModeName $ModeName
+        $displayPolicy=Assert-CS2GraphicsDisplayPolicy -Preset $preset
         $settings=ConvertTo-VideoGraphicsSettings -Preset $preset
         if($settings.Count -eq 0){throw 'Graphics preset has no values selected.'}
+        if($displayPolicy -eq 'PreserveCurrent'){
+            Write-Log ($ModeName+' display policy: preserving the current CS2 resolution, refresh and fullscreen/aspect settings; only graphics-quality fields will change.')
+        }
         $active=Get-ActiveSteamCS2Video
         $bytes=[IO.File]::ReadAllBytes($active.Path)
         if($bytes.Length -lt 16 -or $bytes.Length -gt 1048576){throw 'cs2_video.txt size is unexpected.'}
