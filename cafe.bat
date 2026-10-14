@@ -4,7 +4,7 @@ start "" powershell.exe -NoProfile -ExecutionPolicy Bypass -STA -WindowStyle Hid
 exit /b
 
 # POWERSHELL_GUI
-# CAFE_RELEASE=2026.10.14.10
+# CAFE_RELEASE=2026.10.14.11
 
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
@@ -1957,11 +1957,72 @@ UmVzb2x1dGlvbjogRElTQUJMRUQNCi8vDQovLyBCb29zdCBQbGF5ZXIgQ29udHJhc3Q6IEVOQUJMRUQN
 QUJMRUQNCi8vIE5WSURJQSBSZWZsZXg6IEVOQUJMRUQgKyBCT09TVA0KLy8gTWF4aW11bSBGUFM6IDQwMA==
 "@
 
+function Get-SteamLibraryCachePath {
+    if ([string]::IsNullOrWhiteSpace($env:LOCALAPPDATA)) { return $null }
+    return (Join-Path $env:LOCALAPPDATA 'CafeLauncher\steam-library-cache.json')
+}
+
+function Read-SteamLibraryCache {
+    $cachePath=Get-SteamLibraryCachePath
+    if(-not $cachePath -or -not (Test-Path -LiteralPath $cachePath -PathType Leaf)){return @()}
+    try{
+        $item=Get-Item -LiteralPath $cachePath -ErrorAction Stop
+        if($item.Length -gt 65536){throw 'cache is too large'}
+        $cache=Get-Content -LiteralPath $cachePath -Raw -ErrorAction Stop|ConvertFrom-Json -ErrorAction Stop
+        if([int]$cache.SchemaVersion -ne 1 -or @($cache.Libraries).Count -gt 64){throw 'cache schema or entry count is invalid'}
+        $valid=New-Object 'System.Collections.Generic.List[string]'
+        foreach($entry in @($cache.Libraries)){
+            $path=[string]$entry
+            if([string]::IsNullOrWhiteSpace($path) -or $path -notmatch '^[A-Za-z]:\\'){continue}
+            $apps=Join-Path $path 'steamapps'
+            if((Test-Path -LiteralPath $path -PathType Container) -and
+               (Test-Path -LiteralPath $apps -PathType Container) -and
+               -not $valid.Contains($path)){$valid.Add($path)}
+        }
+        return $valid.ToArray()
+    }catch{
+        Write-Log ("Ignoring invalid Steam library cache: "+$_.Exception.Message) 'WARN'
+        return @()
+    }
+}
+
+function Write-SteamLibraryCache {
+    param([string[]]$Libraries)
+    $cachePath=Get-SteamLibraryCachePath
+    if(-not $cachePath){return}
+    $temporary=$null
+    try{
+        $directory=Split-Path -Parent $cachePath
+        if(-not (Test-Path -LiteralPath $directory -PathType Container)){
+            [void](New-Item -ItemType Directory -Path $directory -Force -ErrorAction Stop)
+        }
+        $unique=@($Libraries|Where-Object{$_}|Select-Object -Unique|Select-Object -First 64)
+        $json=@{SchemaVersion=1;UpdatedUtc=[DateTime]::UtcNow.ToString('o');Libraries=$unique}|ConvertTo-Json -Depth 3
+        $temporary=$cachePath+'.'+[Guid]::NewGuid().ToString('N')+'.tmp'
+        [IO.File]::WriteAllText($temporary,$json,(New-Object Text.UTF8Encoding($false)))
+        Move-Item -LiteralPath $temporary -Destination $cachePath -Force -ErrorAction Stop
+    }catch{
+        Write-Log ("Could not refresh Steam library cache: "+$_.Exception.Message) 'WARN'
+    }finally{
+        if($temporary -and (Test-Path -LiteralPath $temporary -PathType Leaf)){
+            Remove-Item -LiteralPath $temporary -Force -ErrorAction SilentlyContinue
+        }
+    }
+}
+
 function Get-SteamLibraryRoots {
     $steamInstalls = New-Object 'System.Collections.Generic.List[string]'
     $libraryRoots = New-Object 'System.Collections.Generic.List[string]'
     $seenSteam = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::OrdinalIgnoreCase)
     $seenLibrary = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::OrdinalIgnoreCase)
+
+    # Cached roots are only hints: each is checked again and fresh registry/VDF
+    # data is still scanned so moved or newly added libraries are discovered.
+    $cachedRoots=@(Read-SteamLibraryCache)
+    foreach($cachedRoot in $cachedRoots){
+        if($seenLibrary.Add($cachedRoot)){$libraryRoots.Add($cachedRoot)}
+    }
+    if($cachedRoots.Count){Write-Log ("Revalidated "+$cachedRoots.Count+' Steam library path(s) from the local cache.')}
 
     $registryKeys = @(
         'HKCU:\Software\Valve\Steam',
@@ -1995,6 +2056,9 @@ function Get-SteamLibraryRoots {
     } catch {}
 
     foreach ($drive in (Get-PSDrive -PSProvider FileSystem -ErrorAction SilentlyContinue)) {
+        # Do not probe disconnected mapped/network drives during startup.
+        if(($drive.DisplayRoot -and [string]$drive.DisplayRoot -match '^\\\\') -or
+           ([string]$drive.Root -match '^\\\\')){continue}
         foreach ($folderName in @('SteamLibrary', 'Steam', 'Games\SteamLibrary', 'Games\Steam')) {
             $guessSteam += (Join-Path $drive.Root $folderName)
         }
@@ -2029,62 +2093,127 @@ function Get-SteamLibraryRoots {
         }
     }
 
+    Write-SteamLibraryCache -Libraries $libraryRoots.ToArray()
     return $libraryRoots.ToArray()
+}
+
+function Find-CS2ConfigInsideInstall {
+    param([Parameter(Mandatory=$true)][string]$InstallRoot)
+    $root=[IO.Path]::GetFullPath($InstallRoot).TrimEnd('\')
+    $queue=New-Object 'System.Collections.Generic.Queue[object]'
+    $queue.Enqueue([pscustomobject]@{Path=$root;Depth=0})
+    $visited=0
+    $maxDirectories=1200
+    $maxDepth=8
+    while($queue.Count -gt 0 -and $visited -lt $maxDirectories){
+        $current=$queue.Dequeue();$visited++
+        if($current.Depth -ge $maxDepth){continue}
+        try{$children=@(Get-ChildItem -LiteralPath $current.Path -Directory -Force -ErrorAction Stop)}catch{continue}
+        foreach($child in $children){
+            if(($child.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0){continue}
+            if($child.Name -ieq 'cfg' -and $child.Parent.Name -ieq 'csgo' -and $child.Parent.Parent.Name -ieq 'game'){
+                $candidate=[IO.Path]::GetFullPath($child.FullName)
+                if($candidate.StartsWith($root+[IO.Path]::DirectorySeparatorChar,[StringComparison]::OrdinalIgnoreCase)){
+                    Write-Log ("Found CS2 cfg folder by bounded search inside confirmed install: "+$candidate) 'WARN'
+                    return $candidate
+                }
+            }
+            if($visited+$queue.Count -lt $maxDirectories){$queue.Enqueue([pscustomobject]@{Path=$child.FullName;Depth=($current.Depth+1)})}
+        }
+    }
+    if($visited -ge $maxDirectories){Write-Log ("Bounded CS2 folder search stopped after "+$maxDirectories+' directories.') 'WARN'}
+    return $null
+}
+
+function Get-CS2InstallFromManifest {
+    param([Parameter(Mandatory=$true)][string]$LibraryRoot)
+    $manifestPath=Join-Path $LibraryRoot 'steamapps\appmanifest_730.acf'
+    if(-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)){return $null}
+    try{
+        $manifest=Get-Item -LiteralPath $manifestPath -ErrorAction Stop
+        if($manifest.Length -lt 1 -or $manifest.Length -gt 262144){throw 'manifest size is unexpected'}
+        $text=[IO.File]::ReadAllText($manifestPath)
+        $appIdMatch=[regex]::Match($text,'(?im)^\s*"appid"\s+"(\d+)"\s*$')
+        $installMatch=[regex]::Match($text,'(?im)^\s*"installdir"\s+"([^"\r\n]+)"\s*$')
+        if(-not $appIdMatch.Success -or $appIdMatch.Groups[1].Value -cne '730'){
+            throw 'manifest appid is missing or is not 730'
+        }
+        if(-not $installMatch.Success){throw 'manifest installdir is missing'}
+        $installDir=$installMatch.Groups[1].Value
+        if($installDir -notmatch '^[A-Za-z0-9 _.-]{1,120}$' -or $installDir -in @('.','..')){
+            throw 'manifest installdir is not a safe folder name'
+        }
+        $common=Join-Path (Join-Path $LibraryRoot 'steamapps') 'common'
+        $installRoot=[IO.Path]::GetFullPath((Join-Path $common $installDir)).TrimEnd('\')
+        $commonPrefix=[IO.Path]::GetFullPath($common).TrimEnd('\')+[IO.Path]::DirectorySeparatorChar
+        if(-not $installRoot.StartsWith($commonPrefix,[StringComparison]::OrdinalIgnoreCase)){
+            throw 'manifest install path is outside this Steam library'
+        }
+        $gameRoot=Join-Path $installRoot 'game'
+        $csgoRoot=Join-Path $gameRoot 'csgo'
+        $binRoot=Join-Path $gameRoot 'bin'
+        if(-not (Test-Path -LiteralPath $gameRoot -PathType Container) -or
+           -not (Test-Path -LiteralPath $csgoRoot -PathType Container) -or
+           -not (Test-Path -LiteralPath $binRoot -PathType Container)){
+            throw 'expected CS2 game, game\csgo, or game\bin folder is missing'
+        }
+        $cfg=Join-Path $csgoRoot 'cfg'
+        if(-not (Test-Path -LiteralPath $cfg -PathType Container)){
+            $cfg=Find-CS2ConfigInsideInstall -InstallRoot $installRoot
+        }
+        if(-not $cfg){throw 'CS2 config folder was not found inside the confirmed install'}
+        Write-Log ("Validated CS2 app 730 manifest "+$manifestPath+"; install="+$installRoot+"; cfg="+$cfg)
+        return [pscustomobject]@{LibraryRoot=$LibraryRoot;InstallRoot=$installRoot;ManifestPath=$manifestPath;ConfigPath=$cfg}
+    }catch{
+        Write-Log ("Rejected CS2 install metadata in "+$manifestPath+": "+$_.Exception.Message) 'WARN'
+        return $null
+    }
 }
 
 function Find-CS2ConfigFolder {
     param([switch]$NoPrompt)
     $roots = @(Get-SteamLibraryRoots)
-    Write-Log "Searching $($roots.Count) Steam library location(s) for CS2 (app 730)."
-    $fallback = $null
-
+    Write-Log "Searching $($roots.Count) Steam library location(s) for a validated CS2 app 730 install."
+    $installs=New-Object 'System.Collections.Generic.List[object]'
     foreach ($root in $roots) {
-        $steamApps = Join-Path $root 'steamapps'
-        $manifestPath = Join-Path $steamApps 'appmanifest_730.acf'
-        $gameNames = New-Object 'System.Collections.Generic.List[string]'
-        if (Test-Path -LiteralPath $manifestPath -PathType Leaf) {
-            try {
-                $manifestText = Get-Content -LiteralPath $manifestPath -Raw -ErrorAction Stop
-                $nameMatch = [regex]::Match($manifestText, '(?m)^\s*"installdir"\s+"([^"\r\n]+)"')
-                if ($nameMatch.Success) { $gameNames.Add($nameMatch.Groups[1].Value) }
-            } catch {
-                Write-Log "Could not read CS2 manifest at $manifestPath`: $($_.Exception.Message)" "WARN"
-            }
-        }
-        $gameNames.Add('Counter-Strike Global Offensive')
-        foreach ($gameName in ($gameNames | Select-Object -Unique)) {
-            $candidate = Join-Path $steamApps ("common\{0}\game\csgo\cfg" -f $gameName)
-            if (Test-Path -LiteralPath $candidate -PathType Container) {
-                if (Test-Path -LiteralPath $manifestPath -PathType Leaf) {
-                    Write-Log "Found installed CS2 config folder: $candidate"
-                    return $candidate
-                }
-                if (-not $fallback) { $fallback = $candidate }
-            }
-        }
+        $install=Get-CS2InstallFromManifest -LibraryRoot $root
+        if($install){$installs.Add($install)}
     }
-
-    if ($fallback) {
-        Write-Log "Found CS2 config folder without appmanifest_730.acf: $fallback" "WARN"
-        return $fallback
+    if($installs.Count -eq 1){return $installs[0].ConfigPath}
+    if($installs.Count -gt 1){
+        $paths=@($installs|ForEach-Object{$_.ConfigPath})
+        Write-Log ("Multiple validated CS2 installations found; refusing to choose automatically: "+($paths -join '; ')) 'WARN'
     }
 
     if ($NoPrompt) {
-        Write-Log 'CS2 was not found in any discovered Steam library. Skipping config install (no popup).' 'WARN'
+        if($installs.Count -gt 1){Write-Log 'CFG install skipped because the CS2 target is ambiguous. Select the intended cfg folder during an interactive install.' 'WARN'}
+        else{Write-Log 'No validated CS2 app 730 installation was found; CFG install skipped. Launch CS2 once or select its cfg folder from the interactive installer.' 'WARN'}
         return $null
     }
-    Write-Log 'Automatic CS2 installation detection failed; requesting the game cfg folder.' 'WARN'
+    Write-Log 'No unique validated CS2 install was found; asking the user to select the CS2 cfg folder.' 'WARN'
     $pick = New-Object System.Windows.Forms.FolderBrowserDialog
-    $pick.Description = 'Select the CS2 folder ending in game\csgo\cfg'
+    $pick.Description = 'Select the existing CS2 folder ending in game\csgo\cfg'
     $pick.ShowNewFolderButton = $false
     if ($pick.ShowDialog() -ne [System.Windows.Forms.DialogResult]::OK) { return $null }
     $selected = $pick.SelectedPath.TrimEnd('\')
-    if ($selected -notmatch '(?i)\\game\\csgo\\cfg$') {
-        throw "Selected path is not the CS2 game\\csgo\\cfg folder: $selected"
+    if (-not (Test-Path -LiteralPath $selected -PathType Container) -or
+        $selected -notmatch '(?i)\\game\\csgo\\cfg$') {
+        throw "Selected path is not an existing CS2 game\csgo\cfg folder: $selected"
     }
+    $parent=Split-Path -Parent $selected
+    if((Split-Path -Leaf $parent) -ine 'csgo' -or
+       (Split-Path -Leaf (Split-Path -Parent $parent)) -ine 'game'){
+        throw "Selected path does not have the expected CS2 game\csgo\cfg structure: $selected"
+    }
+    $confirm=[System.Windows.Forms.MessageBox]::Show(
+        "Automatic detection could not select a unique verified install:`n`n$selected`n`nUse this exact folder for the CFG install?",
+        'Confirm CS2 config folder',
+        [System.Windows.Forms.MessageBoxButtons]::YesNo,
+        [System.Windows.Forms.MessageBoxIcon]::Warning)
+    if($confirm -ne [System.Windows.Forms.DialogResult]::Yes){return $null}
+    Write-Log ("User-selected and confirmed CS2 CFG folder: "+$selected) 'WARN'
     return $selected
 }
-
 function Assert-ConfigUrl {
     param([string]$Url)
     $uri = $null
@@ -2344,13 +2473,32 @@ function Install-AtCfg {
 # Automatic PC inventory; safe to run without administrator rights.
 # ============================================================== 
 function Get-SteamExecutable {
-    $candidates = @(
+    $candidates=New-Object 'System.Collections.Generic.List[string]'
+    # Prefer the client whose ActiveProcess registry value supplied the user ID.
+    # This avoids pairing an active account with another stale Steam install.
+    try{
+        foreach($process in @(Get-Process -Name 'steam' -ErrorAction Stop)){
+            if($process.Path -and (Test-Path -LiteralPath $process.Path -PathType Leaf)){$candidates.Add($process.Path)}
+        }
+    }catch{}
+    foreach($key in @('HKCU:\Software\Valve\Steam','HKLM:\SOFTWARE\WOW6432Node\Valve\Steam','HKLM:\SOFTWARE\Valve\Steam')){
+        try{
+            $props=Get-ItemProperty -LiteralPath $key -ErrorAction Stop
+            foreach($name in @('SteamExe','SteamPath','InstallPath')){
+                $value=[string]$props.$name
+                if([string]::IsNullOrWhiteSpace($value)){continue}
+                if($name -eq 'SteamExe'){$candidate=$value}else{$candidate=Join-Path $value 'steam.exe'}
+                if(Test-Path -LiteralPath $candidate -PathType Leaf){$candidates.Add($candidate)}
+            }
+        }catch{}
+    }
+    foreach($candidate in @(
         "${env:ProgramFiles(x86)}\Steam\steam.exe",
         "$env:ProgramFiles\Steam\steam.exe",
         "$env:LOCALAPPDATA\Steam\steam.exe"
-    )
-    foreach ($root in @(Get-SteamLibraryRoots)) { $candidates += (Join-Path $root 'steam.exe') }
-    return Find-App -Paths $candidates
+    )){if($candidate){$candidates.Add($candidate)}}
+    foreach ($root in @(Get-SteamLibraryRoots)) { $candidates.Add((Join-Path $root 'steam.exe')) }
+    return Find-App -Paths $candidates.ToArray()
 }
 
 function Start-DetectedSteam {
