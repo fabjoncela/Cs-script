@@ -4,7 +4,7 @@ start "" powershell.exe -NoProfile -ExecutionPolicy Bypass -STA -WindowStyle Hid
 exit /b
 
 # POWERSHELL_GUI
-# CAFE_RELEASE=2026.10.14.20
+# CAFE_RELEASE=2026.10.14.21
 
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
@@ -3749,6 +3749,8 @@ function Sync-ProfileToGitHub {
         'Accept'='application/vnd.github+json'
         'User-Agent'='CafeLauncher-ProfileSync'
         'X-GitHub-Api-Version'='2022-11-28'
+        'Cache-Control'='no-cache'
+        Pragma='no-cache'
     }
     $existingSha = $null
     $existingGraphicsSha=$null
@@ -3757,6 +3759,7 @@ function Sync-ProfileToGitHub {
     $profileUploaded=$false
     $cfgBody=$null
     $cfgUploaded=$false
+    $readbackFailed=$false
     $cfgStatus='left unchanged because sensitivity is blank'
     [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
     try {
@@ -3797,6 +3800,7 @@ function Sync-ProfileToGitHub {
     }
     if ($existingSha) { $body.sha = $existingSha }
     $graphicsPreset=Get-ProfileGraphicsPreset -ProfileName $ProfileName
+    $graphicsPreset=ConvertTo-CafeGraphicsPreset -ProfileName $ProfileName -Preset $graphicsPreset
     $graphicsPayload=[ordered]@{
         SchemaVersion=1;ProfileName=$ProfileName;DisplayPolicy='ApplyPreset'
         RefreshPolicy=[string]$graphicsPreset.RefreshPolicy;ScalingMode=[int]$graphicsPreset.ScalingMode
@@ -3865,9 +3869,64 @@ function Sync-ProfileToGitHub {
             if(-not $graphicsResult.commit.sha){throw ('GitHub did not confirm '+$graphicsPath+' update.')}
             $graphicsUploaded=$true
             Clear-ProfileGraphicsHistoryCache -ProfileName $ProfileName
-            Write-Log ("GitHub sync completed: "+$path+" and "+$graphicsPath+" updated; "+$cfgName+" "+$cfgStatus+"; graphics commit="+$graphicsResult.commit.sha)
+        }
+
+        # A successful PUT response confirms a commit, but read the committed
+        # files back before declaring sync complete or allowing local edits to
+        # lose their pending state. Use authenticated, no-cache Contents API reads.
+        $readbackFailed=$true
+        $fresh=[guid]::NewGuid().ToString('N')
+        $profileReadUrl=$uri+'?ref='+[Uri]::EscapeDataString([string]$script:GithubBranch)+'&fresh='+$fresh
+        $remoteProfile=Invoke-RestMethod -Uri $profileReadUrl -Method Get -Headers $headers -TimeoutSec 20 -MaximumRedirection 0 -ErrorAction Stop
+        if($remoteProfile.type -ne 'file' -or $remoteProfile.path -cne $path -or
+           $remoteProfile.encoding -ne 'base64' -or [string]$remoteProfile.sha -notmatch '^[a-fA-F0-9]{40}$' -or
+           [string]::IsNullOrWhiteSpace([string]$remoteProfile.content) -or [int64]$remoteProfile.size -gt 65536){
+            throw ('GitHub returned invalid profile read-back metadata for '+$path)
+        }
+        $remoteProfileJson=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String(([string]$remoteProfile.content -replace '\s','')))
+        $verifiedProfile=ConvertFrom-Json -InputObject $remoteProfileJson -ErrorAction Stop
+        if($verifiedProfile.ProfileName -cne $ProfileName -or [int]$verifiedProfile.SchemaVersion -ne 1){
+            throw ('GitHub profile read-back identity/schema did not match '+$ProfileName)
+        }
+        foreach($key in @($values.Keys)){
+            $remoteProperty=$verifiedProfile.PSObject.Properties[$key]
+            if(-not $remoteProperty){throw ('GitHub profile read-back is missing '+$key)}
+            $expectedValue=ConvertTo-Json -InputObject $values[$key] -Compress -Depth 5
+            $actualValue=ConvertTo-Json -InputObject $remoteProperty.Value -Compress -Depth 5
+            if($actualValue -cne $expectedValue){throw ('GitHub profile read-back mismatch for '+$key)}
+        }
+
+        $graphicsReadUrl=$graphicsUri+'?ref='+[Uri]::EscapeDataString([string]$script:GithubBranch)+'&fresh='+$fresh
+        $remoteGraphics=Invoke-RestMethod -Uri $graphicsReadUrl -Method Get -Headers $headers -TimeoutSec 20 -MaximumRedirection 0 -ErrorAction Stop
+        if($remoteGraphics.type -ne 'file' -or $remoteGraphics.path -cne $graphicsPath -or
+           $remoteGraphics.encoding -ne 'base64' -or [string]$remoteGraphics.sha -notmatch '^[a-fA-F0-9]{40}$' -or
+           [string]::IsNullOrWhiteSpace([string]$remoteGraphics.content) -or [int64]$remoteGraphics.size -gt 1048576){
+            throw ('GitHub returned invalid graphics read-back metadata for '+$graphicsPath)
+        }
+        $remoteGraphicsJson=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String(([string]$remoteGraphics.content -replace '\s','')))
+        $verifiedGraphics=ConvertTo-CafeGraphicsPreset -ProfileName $ProfileName -Preset (ConvertFrom-Json -InputObject $remoteGraphicsJson -ErrorAction Stop)
+        $verifiedGraphicsPayload=[ordered]@{
+            SchemaVersion=1;ProfileName=$ProfileName;DisplayPolicy='ApplyPreset'
+            RefreshPolicy=[string]$verifiedGraphics.RefreshPolicy;ScalingMode=[int]$verifiedGraphics.ScalingMode
+            Settings=$verifiedGraphics.Settings
+        }
+        if(($verifiedGraphicsPayload|ConvertTo-Json -Depth 6 -Compress) -cne ($graphicsPayload|ConvertTo-Json -Depth 6 -Compress)){
+            throw ('GitHub graphics read-back does not match the selected preset in '+$graphicsPath)
+        }
+
+        # Adopt the verified remote snapshot before the caller clears SyncPending
+        # and persists the local profile file.
+        foreach($key in @($values.Keys)){
+            $verifiedProperty=$verifiedProfile.PSObject.Properties[$key]
+            $script:GamingProfiles[$ProfileName][$key]=$verifiedProperty.Value
+        }
+        $script:GraphicsPresets[$ProfileName]=$verifiedGraphics
+        $script:GamingProfiles[$ProfileName].ScalingMode=[int]$verifiedGraphics.ScalingMode
+        $readbackFailed=$false
+        if($graphicsChanged){
+            Write-Log ("GitHub sync and read-back verified: "+$path+" and "+$graphicsPath+"; "+$cfgName+" "+$cfgStatus+"; profile commit="+$result.commit.sha+"; graphics commit="+$graphicsResult.commit.sha)
         }else{
-            Write-Log ("GitHub sync completed: "+$path+" updated; "+$graphicsPath+" already matched the selected preset; no redundant graphics revision created.")
+            Write-Log ("GitHub sync and read-back verified: "+$path+" updated; "+$graphicsPath+" already matched the selected preset; no redundant graphics revision created.")
         }
     } catch {
         $status = $null
@@ -3878,6 +3937,9 @@ function Sync-ProfileToGitHub {
         } elseif($status -eq 409 -or $status -eq 422) {
             'GitHub file versions changed; reload and retry.'
         } else { $_.Exception.Message }
+        if($readbackFailed){
+            throw ("GitHub accepted the upload, but read-back verification failed. Local settings remain pending; retry Save & Sync. "+$detail)
+        }
         if($cfgUploaded -or $profileUploaded){
             $savedFiles=New-Object 'System.Collections.Generic.List[string]'
             $remainingFiles=New-Object 'System.Collections.Generic.List[string]'
