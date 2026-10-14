@@ -1,7 +1,7 @@
 {
     "SchemaVersion":  1,
     "ProfileName":  "FabMode",
-    "PointerSpeed":  10,
+    "PointerSpeed":  2,
     "LogitechDPI":  800,
     "DisableAcceleration":  true,
     "ApplyNvidia":  true,
@@ -11,7 +11,7 @@
     "Vibrance":  75,
     "Hue":  -1,
     "ScalingMode":  2,
-    "CS2Sensitivity":  "",
+    "CS2Sensitivity":  "1",
     "CfgDownloadUrl":  "https://raw.githubusercontent.com/fabjoncela/Cs-script/main/fab.cfg",
     "LaunchApps":  true
 }
