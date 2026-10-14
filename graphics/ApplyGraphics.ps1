@@ -311,6 +311,8 @@ function Apply-CS2ModeGraphics {
         $displayPolicy=Assert-CS2GraphicsDisplayPolicy -Preset $preset
         $refreshPolicy=if($preset.PSObject.Properties['RefreshPolicy'] -and $preset.RefreshPolicy){[string]$preset.RefreshPolicy}else{'Highest'}
         $scalingMode=if($preset.PSObject.Properties['ScalingMode'] -and $null -ne $preset.ScalingMode){[int]$preset.ScalingMode}else{2}
+        $scalingName=switch($scalingMode){2{'Stretch to fill'}3{'Center without scaling'}5{'Keep aspect ratio'}}
+        $scalingTarget='NVIDIA display associated with Windows DISPLAY1'
         $settings=ConvertTo-VideoGraphicsSettings -Preset $preset
         if($settings.Count -eq 0){throw 'Graphics preset has no values selected.'}
         $displaySummary=if($displayPolicy -eq 'PreserveCurrent'){'preserved by this profile policy.'}else{'not changed by this preset.'}
@@ -421,13 +423,13 @@ function Apply-CS2ModeGraphics {
         if('FabNvApi' -as [type]){
             $scalingReport=''
             $scalingVerified=[FabNvApi]::TrySetGpuScalingMode($scalingMode,[ref]$scalingReport)
-            if($scalingVerified){Write-Log $scalingReport}
-            else{Write-Log ('CS2 graphics saved, but NVIDIA scaling was not verified: '+$scalingReport) 'WARN'}
         }else{
             $scalingVerified=$false
             $scalingReport='could not be changed because NVAPI is unavailable.'
-            Write-Log ('CS2 graphics saved; NVIDIA scaling '+$scalingReport) 'WARN'
         }
+        $scalingStatus=if($scalingVerified){'APPLIED'}else{'FAILED'}
+        $scalingLog="NVIDIA scaling | profile=$ModeName | requested=$scalingName (NVAPI mode $scalingMode) | target=$scalingTarget | status=$scalingStatus | panelOverride=not-read-or-set | result=$scalingReport"
+        Write-Log $scalingLog $(if($scalingVerified){'INFO'}else{'WARN'})
         if($edit.Changed){Write-Log ("Applied "+$edit.Applied.Count+' graphics keys for '+$ModeName+' (Steam '+$active.AccountID+'). Backup: '+$backup)}
         else{Write-Log ("Verified/applied NVIDIA scaling mode for "+$ModeName+' (Steam '+$active.AccountID+').')}
         $allSkipped=@($edit.Skipped)+@($hardwareSkipped.ToArray())
@@ -443,8 +445,8 @@ function Apply-CS2ModeGraphics {
                 -Requested ($settings.Keys -join ', ') -Target ('Steam account '+$active.AccountID) `
                 -Status $graphicsState -Actual ($appliedDetails -join ', ') `
                 -Detail (($displaySummary)+$(if($allSkipped.Count){' Skipped: '+($allSkipped -join '; ')}else{''}))
-            Set-RunOutcome -Run $graphicsRun -Setting 'NVIDIA scaling' -Requested ([string]$scalingMode) `
-                -Target ('Display for Steam account '+$active.AccountID) -Status $(if($scalingVerified){'APPLIED'}else{'FAILED'}) `
+            Set-RunOutcome -Run $graphicsRun -Setting 'NVIDIA scaling' -Requested ("$scalingName (NVAPI mode $scalingMode)") `
+                -Target $scalingTarget -Status $scalingStatus `
                 -Actual $scalingReport -Detail $scalingReport
         }
         foreach($summaryLine in ($summary -split '\r?\n')){

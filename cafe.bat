@@ -4,7 +4,7 @@ start "" powershell.exe -NoProfile -ExecutionPolicy Bypass -STA -WindowStyle Hid
 exit /b
 
 # POWERSHELL_GUI
-# CAFE_RELEASE=2026.10.14.31
+# CAFE_RELEASE=2026.10.14.32
 
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
@@ -1938,21 +1938,25 @@ function Apply-NvidiaGamingSettings {
             }
         }
 
+        $scalingName=switch($ScalingMode){2{'Stretch to fill'}3{'Center without scaling'}5{'Keep aspect ratio'}}
+        $scalingTarget='NVIDIA display associated with Windows DISPLAY1'
+        $scalingRequest="$scalingName (NVAPI mode $ScalingMode)"
         if(-not $compat.GpuScaling){
-            Write-Log "GPU scaling skipped: the current driver/display did not pass the read-only scaling API check." "WARN"
-            Set-RunOutcome -Run $runName -Setting 'GPU scaling mode' -Requested ([string]$ScalingMode) -Target 'NVIDIA display selected for DISPLAY1' -Status SKIPPED -Detail 'Read-only GPU scaling capability check failed.'
+            $scalingDetail='Read-only GPU scaling capability check failed; no mode change was attempted.'
+            Write-Log ("NVIDIA scaling | profile=$runName | requested=$scalingRequest | target=$scalingTarget | status=SKIPPED | detail=$scalingDetail") 'WARN'
+            Set-RunOutcome -Run $runName -Setting 'GPU scaling mode' -Requested $scalingRequest -Target $scalingTarget -Status SKIPPED -Detail $scalingDetail
         }else{
             try {
                 $scalingReport = ""
                 $scalingOk = [FabNvApi]::TrySetGpuScalingMode($ScalingMode, [ref]$scalingReport)
                 $scalingStatus=if($scalingOk){'APPLIED'}else{'FAILED'}
                 if($scalingOk -and $scalingReport -match 'matched Windows GDI-primary display because DISPLAY1 name could not be mapped'){$scalingStatus='FALLBACK'}
-                Set-RunOutcome -Run $runName -Setting 'GPU scaling mode' -Requested ([string]$ScalingMode) -Target 'NVIDIA display selected for DISPLAY1' -Status $scalingStatus -Actual $scalingReport -Detail $scalingReport
-                if ($scalingOk) { Write-Log $scalingReport }
-                else { Write-Log ("GPU scaling was not applied or verified: "+$scalingReport) "WARN" }
+                Write-Log ("NVIDIA scaling | profile=$runName | requested=$scalingRequest | target=$scalingTarget | status=$scalingStatus | result=$scalingReport") $(if($scalingOk){'INFO'}else{'WARN'})
+                Set-RunOutcome -Run $runName -Setting 'GPU scaling mode' -Requested $scalingRequest -Target $scalingTarget -Status $scalingStatus -Actual $scalingReport -Detail $scalingReport
             } catch {
-                Set-RunOutcome -Run $runName -Setting 'GPU scaling mode' -Requested ([string]$ScalingMode) -Target 'NVIDIA display selected for DISPLAY1' -Status FAILED -Detail $_.Exception.Message
-                Write-Log "GPU scaling was not applied or verified: $($_.Exception.Message)" "WARN"
+                $scalingDetail=$_.Exception.Message
+                Write-Log ("NVIDIA scaling | profile=$runName | requested=$scalingRequest | target=$scalingTarget | status=FAILED | detail=$scalingDetail") 'WARN'
+                Set-RunOutcome -Run $runName -Setting 'GPU scaling mode' -Requested $scalingRequest -Target $scalingTarget -Status FAILED -Detail $scalingDetail
             }
         }
     }
@@ -5451,7 +5455,7 @@ function Invoke-GraphicsOnly {
     Start-StepScope -Run $graphicsRun -Step 'Apply Graphics'
     try {
     if(-not (Resolve-PendingProfileChanges -ProfileName $ModeName)){return}
-    $expected='ec2ee9fc7afce195d8b081aa95a71e0048a32158'
+    $expected='47d01c55176a2c2b23ac94d4a818599818761c93'
     $source=Add-CafeCacheBust -Uri 'https://raw.githubusercontent.com/fabjoncela/Cs-script/main/graphics/ApplyGraphics.ps1'
     $cache=Join-Path $env:LOCALAPPDATA 'CafeLauncher\graphics-module.ps1'
     $parent=Split-Path -Parent $cache
