@@ -83,9 +83,9 @@ foreach($requiredEditorFeature in @(
     'New-EditorTabNumber -Grid $cs2Grid -Title ''CS2 resolution width''',
     'New-EditorTabChoice -Grid $cs2Grid -Title ''Stretch / scaling''',
     'Stretch / scaling',
-    'Earlier GitHub graphics versions',
+    'Earlier GitHub file revisions (commit ID shown)',
     'Restore selected version',
-    'Get-ProfileGraphicsHistory -ProfileName $ProfileName -ForceRefresh:$forceRefresh',
+    'Get-ProfileGraphicsHistory -ProfileName $ProfileName -ForceRefresh -ResponseJson ([string]$worker.ResultText)',
     'Get-ProfileGraphicsVersion -ProfileName $ProfileName -Version $version',
     '$graphicsPresetState[$ProfileName]=$graphicsPreset',
     'GraphicsSettings',
@@ -134,10 +134,24 @@ if($script:TestGHubCalls -ne 1){throw 'Standalone Launch All must still open G H
 # Preview UI: fixed-coordinate label overlays have been replaced by isolated
 # table cells on distinct tabs, so labels cannot cover neighboring inputs.
 $editorSource=$definitions['Show-ProfileEditor']
-foreach($historyFunction in @('ConvertTo-CafeGraphicsHistoryEntry','Get-ProfileGraphicsHistory','Get-ProfileGraphicsVersion')){
+foreach($historyFunction in @('ConvertTo-CafeGraphicsHistoryEntry','Get-CachedProfileGraphicsHistory','Get-ProfileGraphicsHistory','Get-ProfileGraphicsVersion','New-CafeGraphicsHistoryWorker')){
     if(-not $definitions.ContainsKey($historyFunction)){
         throw ('GitHub graphics history helper missing: '+$historyFunction)
     }
+}
+$historyLoadStart=$editorSource.IndexOf('$loadHistory.Add_Click({',[StringComparison]::Ordinal)
+$historyLoadEnd=$editorSource.IndexOf('}.GetNewClosure())',$historyLoadStart,[StringComparison]::Ordinal)
+if($historyLoadStart -lt 0 -or $historyLoadEnd -le $historyLoadStart){throw 'Cannot identify graphics history load handler.'}
+$historyLoadBody=$editorSource.Substring($historyLoadStart,$historyLoadEnd-$historyLoadStart)
+if(-not $editorSource.Contains('$pollTimer.Add_Tick({') -or
+   $editorSource -notmatch '\$worker\.RunWorkerAsync\(\$historyUri\)' -or
+   $editorSource -notmatch '\$worker\.IsBusy' -or
+   $definitions['New-CafeGraphicsHistoryWorker'] -notmatch 'class CafeGraphicsHistoryBackgroundWorker : BackgroundWorker'){
+    throw 'Graphics history must load in the background without blocking its button handler.'
+}
+if($editorSource -notmatch 'You can continue using the editor' -or
+   $editorSource -notmatch '\$dialog\.IsDisposed -or \$dialog\.Disposing'){
+    throw 'Background history loading must keep the editor responsive and ignore completion after close.'
 }
 $restoreStart=$editorSource.IndexOf('$restoreHistory.Add_Click({',[StringComparison]::Ordinal)
 $restoreEnd=$editorSource.IndexOf('}.GetNewClosure())',$restoreStart,[StringComparison]::Ordinal)

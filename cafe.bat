@@ -2324,11 +2324,19 @@ function ConvertTo-CafeGraphicsHistoryEntry {
     if($message.Length -gt 120){$message=$message.Substring(0,117)+'...'}
     return [pscustomobject]@{Sha=([string]$Commit.sha).ToLowerInvariant();DateUtc=$date.ToUniversalTime().ToString('o');Message=$message}
 }
-function Get-ProfileGraphicsHistory {
-    param([Parameter(Mandatory=$true)][string]$ProfileName,[switch]$ForceRefresh)
+function Clear-ProfileGraphicsHistoryCache {
+    param([Parameter(Mandatory=$true)][string]$ProfileName)
     if(-not $script:GamingProfiles.Contains($ProfileName)){throw ('Unknown graphics profile: '+$ProfileName)}
     $cache=Join-Path $env:LOCALAPPDATA ('CafeLauncher\graphics-history\'+$ProfileName+'.json')
-    if(-not $ForceRefresh -and (Test-Path -LiteralPath $cache -PathType Leaf)){
+    try{
+        if(Test-Path -LiteralPath $cache -PathType Leaf){Remove-Item -LiteralPath $cache -Force -ErrorAction Stop}
+    }catch{Write-Log ('Could not invalidate graphics history cache for '+$ProfileName+': '+$_.Exception.Message) 'WARN'}
+}
+function Get-CachedProfileGraphicsHistory {
+    param([Parameter(Mandatory=$true)][string]$ProfileName)
+    if(-not $script:GamingProfiles.Contains($ProfileName)){throw ('Unknown graphics profile: '+$ProfileName)}
+    $cache=Join-Path $env:LOCALAPPDATA ('CafeLauncher\graphics-history\'+$ProfileName+'.json')
+    if(Test-Path -LiteralPath $cache -PathType Leaf){
         try{
             $cached=Get-Content -LiteralPath $cache -Raw -ErrorAction Stop|ConvertFrom-Json -ErrorAction Stop
             $cachedAt=[DateTimeOffset]::MinValue
@@ -2344,16 +2352,31 @@ function Get-ProfileGraphicsHistory {
                         })
                         if($clean){$valid.Add($clean)}
                     }
-                    return @($valid.ToArray())
+                    return [pscustomobject]@{Found=$true;Versions=[object[]]$valid.ToArray()}
                 }
             }
         }catch{Write-Log ('Ignoring invalid graphics history cache for '+$ProfileName+': '+$_.Exception.Message) 'WARN'}
     }
-    $encodedPath=[Uri]::EscapeDataString('graphics/'+$ProfileName+'.json')
-    $encodedBranch=[Uri]::EscapeDataString([string]$script:GithubBranch)
-    $uri='https://api.github.com/repos/'+$script:GithubRepo+'/commits?path='+$encodedPath+'&per_page=4&sha='+$encodedBranch
-    $headers=@{'User-Agent'='CafeLauncher-Graphics-History';'Accept'='application/vnd.github+json'}
-    $response=Invoke-RestMethod -Uri $uri -Method Get -Headers $headers -TimeoutSec 12 -ErrorAction Stop
+    return [pscustomobject]@{Found=$false;Versions=[object[]]@()}
+}
+function Get-ProfileGraphicsHistory {
+    param([Parameter(Mandatory=$true)][string]$ProfileName,[switch]$ForceRefresh,[string]$ResponseJson)
+    if(-not $script:GamingProfiles.Contains($ProfileName)){throw ('Unknown graphics profile: '+$ProfileName)}
+    if(-not $ForceRefresh){
+        $cached=Get-CachedProfileGraphicsHistory -ProfileName $ProfileName
+        if($cached.Found){return @($cached.Versions)}
+    }
+    if($PSBoundParameters.ContainsKey('ResponseJson')){
+        if([string]::IsNullOrWhiteSpace($ResponseJson)){throw 'GitHub returned an empty graphics history response.'}
+        $response=ConvertFrom-Json -InputObject $ResponseJson -ErrorAction Stop
+    }else{
+        $encodedPath=[Uri]::EscapeDataString('graphics/'+$ProfileName+'.json')
+        $encodedBranch=[Uri]::EscapeDataString([string]$script:GithubBranch)
+        $uri='https://api.github.com/repos/'+$script:GithubRepo+'/commits?path='+$encodedPath+'&per_page=4&sha='+$encodedBranch
+        $headers=@{'User-Agent'='CafeLauncher-Graphics-History';'Accept'='application/vnd.github+json'}
+        $response=Invoke-RestMethod -Uri $uri -Method Get -Headers $headers -TimeoutSec 12 -ErrorAction Stop
+    }
+    $cache=Join-Path $env:LOCALAPPDATA ('CafeLauncher\graphics-history\'+$ProfileName+'.json')
     $versions=New-Object 'System.Collections.Generic.List[object]'
     # The newest path commit is the current version. Keep the next three older versions.
     foreach($commit in @($response|Select-Object -Skip 1 -First 3)){
@@ -2371,6 +2394,45 @@ function Get-ProfileGraphicsHistory {
     }catch{Write-Log ('Graphics history cache warning for '+$ProfileName+': '+$_.Exception.Message) 'WARN'}
     return @($versions.ToArray())
 }
+function New-CafeGraphicsHistoryWorker {
+    if(-not ('CafeGraphicsHistoryBackgroundWorker' -as [type])){
+        Add-Type -Language CSharp -TypeDefinition @'
+using System;
+using System.ComponentModel;
+using System.IO;
+using System.Net;
+using System.Text;
+
+public sealed class CafeGraphicsHistoryBackgroundWorker : BackgroundWorker {
+    public string WorkerName { get { return "GraphicsHistory"; } }
+    public string ResultText { get; private set; }
+    public string ErrorText { get; private set; }
+    public int WorkerThreadId { get; private set; }
+    public CafeGraphicsHistoryBackgroundWorker() {
+        DoWork += delegate(object sender, DoWorkEventArgs e) {
+            WorkerThreadId = System.Threading.Thread.CurrentThread.ManagedThreadId;
+            try {
+                var request = (HttpWebRequest)WebRequest.Create((string)e.Argument);
+                request.Method = "GET";
+                request.UserAgent = "CafeLauncher-Graphics-History";
+                request.Accept = "application/vnd.github+json";
+                request.Timeout = 12000;
+                request.ReadWriteTimeout = 12000;
+                request.Headers[HttpRequestHeader.CacheControl] = "no-cache";
+                using (var response = (HttpWebResponse)request.GetResponse())
+                using (var reader = new StreamReader(response.GetResponseStream(), Encoding.UTF8)) {
+                    ResultText = reader.ReadToEnd();
+                }
+            } catch (Exception error) {
+                ErrorText = error.Message;
+            }
+        };
+    }
+}
+'@
+    }
+    return (New-Object CafeGraphicsHistoryBackgroundWorker)
+}
 function Get-ProfileGraphicsVersion {
     param([Parameter(Mandatory=$true)][string]$ProfileName,[Parameter(Mandatory=$true)]$Version)
     if(-not $script:GamingProfiles.Contains($ProfileName)){throw ('Unknown graphics profile: '+$ProfileName)}
@@ -2380,7 +2442,16 @@ function Get-ProfileGraphicsVersion {
     $encodedSha=[Uri]::EscapeDataString($sha)
     $uri='https://api.github.com/repos/'+$script:GithubRepo+'/contents/'+$path+'?ref='+$encodedSha
     $headers=@{'User-Agent'='CafeLauncher-Graphics-History';'Accept'='application/vnd.github+json'}
-    $response=Invoke-RestMethod -Uri $uri -Method Get -Headers $headers -TimeoutSec 12 -ErrorAction Stop
+    try{
+        $response=Invoke-RestMethod -Uri $uri -Method Get -Headers $headers -TimeoutSec 12 -ErrorAction Stop
+    }catch{
+        $status=$null
+        $responseProp=$_.Exception.PSObject.Properties['Response']
+        if($responseProp -and $responseProp.Value){try{$status=[int]$responseProp.Value.StatusCode}catch{}}
+        $shortSha=$sha.Substring(0,7)
+        if($status -eq 404){throw ('Historical version '+$shortSha+' is no longer available on GitHub. Refresh history and choose another version.')}
+        throw ('Could not download historical version '+$shortSha+': '+$_.Exception.Message)
+    }
     if([string]$response.path -cne ('graphics/'+$ProfileName+'.json')){throw 'GitHub returned a different graphics profile file.'}
     $encodedContent=([string]$response.content -replace '\s','')
     if(-not $encodedContent){throw 'Selected GitHub graphics version has no file content.'}
@@ -2643,6 +2714,7 @@ function Sync-ProfileToGitHub {
     }
     $existingSha = $null
     $existingGraphicsSha=$null
+    $currentGraphics=$null
     $graphicsUploaded=$false
     $profileUploaded=$false
     $cfgBody=$null
@@ -2693,6 +2765,22 @@ function Sync-ProfileToGitHub {
         Settings=$graphicsPreset.Settings
     }
     $graphicsJson=$graphicsPayload|ConvertTo-Json -Depth 6
+    $graphicsChanged=$true
+    if($currentGraphics){
+        try{
+            $currentGraphicsJson=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String(([string]$currentGraphics.content -replace '\s','')))|ConvertFrom-Json -ErrorAction Stop
+            $currentGraphicsPreset=ConvertTo-CafeGraphicsPreset -ProfileName $ProfileName -Preset $currentGraphicsJson
+            $currentGraphicsPayload=[ordered]@{
+                SchemaVersion=1;ProfileName=$ProfileName;DisplayPolicy='ApplyPreset'
+                RefreshPolicy=[string]$currentGraphicsPreset.RefreshPolicy;ScalingMode=[int]$currentGraphicsPreset.ScalingMode
+                Settings=$currentGraphicsPreset.Settings
+            }
+            $graphicsChanged=(($currentGraphicsPayload|ConvertTo-Json -Depth 6 -Compress) -cne ($graphicsPayload|ConvertTo-Json -Depth 6 -Compress))
+        }catch{
+            # Replace a malformed/older file with the validated editor preset.
+            $graphicsChanged=$true
+        }
+    }
     $graphicsBody=@{
         message="Update $ProfileName CS2 graphics preset from CafeLauncher"
         content=[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($graphicsJson+"`n"))
@@ -2734,10 +2822,15 @@ function Sync-ProfileToGitHub {
         $result = Invoke-RestMethod -Uri $uri -Method Put -Headers $headers -ContentType 'application/json' -Body ($body | ConvertTo-Json -Depth 5 -Compress) -TimeoutSec 25 -MaximumRedirection 0 -ErrorAction Stop
         if (-not $result.commit.sha) { throw 'GitHub did not return a successful commit.' }
         $profileUploaded=$true
-        $graphicsResult=Invoke-RestMethod -Uri $graphicsUri -Method Put -Headers $headers -ContentType 'application/json' -Body ($graphicsBody|ConvertTo-Json -Depth 6 -Compress) -TimeoutSec 25 -MaximumRedirection 0 -ErrorAction Stop
-        if(-not $graphicsResult.commit.sha){throw ('GitHub did not confirm '+$graphicsPath+' update.')}
-        $graphicsUploaded=$true
-        Write-Log ("GitHub sync completed: "+$path+" and "+$graphicsPath+" updated; "+$cfgName+" "+$cfgStatus+"; graphics commit="+$graphicsResult.commit.sha)
+        if($graphicsChanged){
+            $graphicsResult=Invoke-RestMethod -Uri $graphicsUri -Method Put -Headers $headers -ContentType 'application/json' -Body ($graphicsBody|ConvertTo-Json -Depth 6 -Compress) -TimeoutSec 25 -MaximumRedirection 0 -ErrorAction Stop
+            if(-not $graphicsResult.commit.sha){throw ('GitHub did not confirm '+$graphicsPath+' update.')}
+            $graphicsUploaded=$true
+            Clear-ProfileGraphicsHistoryCache -ProfileName $ProfileName
+            Write-Log ("GitHub sync completed: "+$path+" and "+$graphicsPath+" updated; "+$cfgName+" "+$cfgStatus+"; graphics commit="+$graphicsResult.commit.sha)
+        }else{
+            Write-Log ("GitHub sync completed: "+$path+" updated; "+$graphicsPath+" already matched the selected preset; no redundant graphics revision created.")
+        }
     } catch {
         $status = $null
         $responseProp=$_.Exception.PSObject.Properties['Response']
@@ -2752,7 +2845,7 @@ function Sync-ProfileToGitHub {
             $remainingFiles=New-Object 'System.Collections.Generic.List[string]'
             if($cfgUploaded){$savedFiles.Add($cfgName)}elseif($cfgBody){$remainingFiles.Add($cfgName)}
             if($profileUploaded){$savedFiles.Add($path)}else{$remainingFiles.Add($path)}
-            if($graphicsUploaded){$savedFiles.Add($graphicsPath)}else{$remainingFiles.Add($graphicsPath)}
+            if($graphicsUploaded){$savedFiles.Add($graphicsPath)}elseif($graphicsChanged){$remainingFiles.Add($graphicsPath)}
             throw ("PARTIAL SYNC: saved ["+($savedFiles -join ', ')+"]. Not confirmed ["+($remainingFiles -join ', ') +"]. Retry Save & Sync. "+$detail)
         }
         throw ("GitHub sync failed; neither file was confirmed updated. "+$detail)
@@ -3028,7 +3121,7 @@ function Show-ProfileEditor {
     [void]$historyChoice.Items.Add('Load history first')
     $historyChoice.SelectedIndex=0
     $historyChoice.Enabled=$false
-    [void](Add-EditorTabField -Grid $cs2Grid -Title 'Earlier GitHub graphics versions' -Control $historyChoice -Column 0 -Row 16)
+    [void](Add-EditorTabField -Grid $cs2Grid -Title 'Earlier GitHub file revisions (commit ID shown)' -Control $historyChoice -Column 0 -Row 16)
     $loadHistory=New-Object System.Windows.Forms.Button
     $loadHistory.Text='Load history'
     $loadHistory.BackColor=[System.Drawing.Color]::FromArgb(58,67,83)
@@ -3150,40 +3243,92 @@ function Show-ProfileEditor {
         }finally{$dialog.Cursor=[System.Windows.Forms.Cursors]::Default}
     }.GetNewClosure())
 
-    $historyLoaded=$false
-    $loadHistory.Add_Click({
-        try{
-            $dialog.Cursor=[System.Windows.Forms.Cursors]::WaitCursor
-            $forceRefresh=[bool]$historyLoaded
-            $versions=@(Get-ProfileGraphicsHistory -ProfileName $ProfileName -ForceRefresh:$forceRefresh)
-            $historyChoice.Items.Clear()
-            $historyChoice.Tag=[object[]]$versions
-            if($versions.Count -eq 0){
-                [void]$historyChoice.Items.Add('No earlier GitHub versions found')
-                $historyChoice.Enabled=$false
-                $restoreHistory.Enabled=$false
-                $historyChoice.SelectedIndex=0
-                $status.Text='No earlier synced graphics versions were found for this profile.'
-            }else{
-                foreach($version in $versions){
-                    $dateLabel=[string]$version.DateUtc
-                    try{$dateLabel=([DateTimeOffset]::Parse([string]$version.DateUtc)).ToLocalTime().ToString('yyyy-MM-dd HH:mm')}catch{}
-                    [void]$historyChoice.Items.Add(($dateLabel+' — '+[string]$version.Message))
-                }
-                $historyChoice.Enabled=$true
-                $historyChoice.SelectedIndex=0
-                $restoreHistory.Enabled=$true
-                $status.Text=('Loaded '+$versions.Count+' earlier version(s). Select one and restore it into the editor.')
+    $historyState=[pscustomobject]@{Loaded=$false;Worker=$null;PollTimer=$null}
+    $showGraphicsHistory={
+        param($versions)
+        $historyChoice.Items.Clear()
+        $historyChoice.Tag=[object[]]$versions
+        if($versions.Count -eq 0){
+            [void]$historyChoice.Items.Add('No earlier GitHub versions found')
+            $historyChoice.Enabled=$false
+            $restoreHistory.Enabled=$false
+            $historyChoice.SelectedIndex=0
+            $status.Text='No earlier synced graphics versions were found for this profile.'
+        }else{
+            foreach($version in $versions){
+                $dateLabel=[string]$version.DateUtc
+                try{$dateLabel=([DateTimeOffset]::Parse([string]$version.DateUtc)).ToLocalTime().ToString('yyyy-MM-dd HH:mm')}catch{}
+                [void]$historyChoice.Items.Add(($dateLabel+' — '+[string]$version.Message+' ['+$version.Sha.Substring(0,7)+']'))
             }
-            $historyLoaded=$true
-            $loadHistory.Text='Refresh history'
-            $status.ForeColor=[System.Drawing.Color]::FromArgb(255,190,105)
+            $historyChoice.Enabled=$true
+            $historyChoice.SelectedIndex=0
+            $restoreHistory.Enabled=$true
+            $status.Text=('Loaded '+$versions.Count+' earlier version(s). Select one and restore it into the editor.')
+        }
+        $historyState.Loaded=$true
+        $loadHistory.Text='Refresh history'
+        $status.ForeColor=[System.Drawing.Color]::FromArgb(255,190,105)
+    }.GetNewClosure()
+    $loadHistory.Add_Click({
+        if($historyState.Worker -and $historyState.Worker.IsBusy){return}
+        if(-not $historyState.Loaded){
+            try{
+                $cachedHistory=Get-CachedProfileGraphicsHistory -ProfileName $ProfileName
+                if($cachedHistory.Found){[void](& $showGraphicsHistory @($cachedHistory.Versions));return}
+            }catch{Write-Log ('Could not read cached graphics history for '+$ProfileName+': '+$_.Exception.Message) 'WARN'}
+        }
+        $encodedPath=[Uri]::EscapeDataString('graphics/'+$ProfileName+'.json')
+        $encodedBranch=[Uri]::EscapeDataString([string]$script:GithubBranch)
+        $historyUri='https://api.github.com/repos/'+$script:GithubRepo+'/commits?path='+$encodedPath+'&per_page=4&sha='+$encodedBranch
+        $loadHistory.Enabled=$false
+        $historyChoice.Enabled=$false
+        $restoreHistory.Enabled=$false
+        $status.Text='Loading GitHub graphics history in the background. You can continue using the editor.'
+        $status.ForeColor=$MUTED
+        try{
+            $worker=New-CafeGraphicsHistoryWorker
+            $historyState.Worker=$worker
+            $pollTimer=New-Object System.Windows.Forms.Timer
+            $pollTimer.Interval=200
+            $pollTimer.Add_Tick({
+                if($worker.IsBusy){return}
+                $pollTimer.Stop()
+                $pollTimer.Dispose()
+                $historyState.PollTimer=$null
+                $historyState.Worker=$null
+                if($dialog.IsDisposed -or $dialog.Disposing){return}
+                try{
+                    if($worker.ErrorText){throw ([System.Exception]::new([string]$worker.ErrorText))}
+                    $versions=@(Get-ProfileGraphicsHistory -ProfileName $ProfileName -ForceRefresh -ResponseJson ([string]$worker.ResultText))
+                    [void](& $showGraphicsHistory $versions)
+                }catch{
+                    $message=$_.Exception.Message
+                    Write-Log ('Could not load GitHub graphics history for '+$ProfileName+': '+$message) 'WARN'
+                    $status.Text=('History load failed: '+$message)
+                    $status.ForeColor=[System.Drawing.Color]::FromArgb(255,190,105)
+                    $available=@($historyChoice.Tag)
+                    $historyChoice.Enabled=($available.Count -gt 0)
+                    $restoreHistory.Enabled=($available.Count -gt 0)
+                }finally{
+                    if(-not $dialog.IsDisposed -and -not $dialog.Disposing){
+                        $loadHistory.Enabled=$true
+                        $dialog.Cursor=[System.Windows.Forms.Cursors]::Default
+                    }
+                }
+            }.GetNewClosure())
+            $historyState.PollTimer=$pollTimer
+            $worker.RunWorkerAsync($historyUri)
+            $pollTimer.Start()
         }catch{
-            Write-Log ('Could not load GitHub graphics history for '+$ProfileName+': '+$_.Exception.Message) 'WARN'
-            [void][System.Windows.Forms.MessageBox]::Show(
-                ('Could not load graphics history for '+$ProfileName+[Environment]::NewLine+$_.Exception.Message),
-                'Graphics History','OK','Warning')|Out-Null
-        }finally{$dialog.Cursor=[System.Windows.Forms.Cursors]::Default}
+            if($historyState.PollTimer){$historyState.PollTimer.Stop();$historyState.PollTimer.Dispose();$historyState.PollTimer=$null}
+            $historyState.Worker=$null
+            $loadHistory.Enabled=$true
+            $available=@($historyChoice.Tag)
+            $historyChoice.Enabled=($available.Count -gt 0)
+            $restoreHistory.Enabled=($available.Count -gt 0)
+            $status.Text=('Could not start history load: '+$_.Exception.Message)
+            $status.ForeColor=[System.Drawing.Color]::FromArgb(255,190,105)
+        }
     }.GetNewClosure())
     $restoreHistory.Add_Click({
         try{
@@ -3194,7 +3339,7 @@ function Show-ProfileEditor {
             $version=$versions[$selectedIndex]
             $preset=Get-ProfileGraphicsVersion -ProfileName $ProfileName -Version $version
             [void](& $applyGraphicsPresetToEditor $preset)
-            $status.Text=('Loaded '+$version.Message+' into the editor. Save locally or sync to keep it; Apply Graphics applies it to CS2.')
+            $status.Text=('Loaded '+$version.Message+' into the editor only. Not saved or applied. Use Save Locally or Save & Sync, then Apply Graphics to change CS2.')
             $status.ForeColor=[System.Drawing.Color]::FromArgb(255,190,105)
             Write-Log ('Loaded earlier GitHub graphics version '+$version.Sha+' for '+$ProfileName+' into the editor; no save or game settings were changed.')
         }catch{
@@ -3334,7 +3479,7 @@ function Show-ProfileEditor {
                 Sync-ProfileToGitHub -ProfileName $ProfileName -Token $token
                 $pendingSyncState[$ProfileName] = $false
                 Save-ProfileSettings
-                [System.Windows.Forms.MessageBox]::Show("$ProfileName settings and CS2 graphics preset committed to GitHub and saved locally.`nOther PCs can now download the new settings without signing in.`nIf CS2 sensitivity was set, it was also synced into the matching .cfg; binds and other commands remain unchanged.", 'GitHub sync complete', 'OK', 'Information') | Out-Null
+                [System.Windows.Forms.MessageBox]::Show("$ProfileName settings saved locally and synced to GitHub. The CS2 graphics preset was updated or already matched GitHub.`nOther PCs can now download the settings without signing in.`nIf CS2 sensitivity was set, it was also synced into the matching .cfg; binds and other commands remain unchanged.", 'GitHub sync complete', 'OK', 'Information') | Out-Null
                 $dialog.DialogResult=[System.Windows.Forms.DialogResult]::OK
                 $dialog.Close()
             } finally {

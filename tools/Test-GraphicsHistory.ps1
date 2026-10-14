@@ -1,4 +1,10 @@
 # Mocked GitHub graphics-history test. No network, UI, Steam, or CS2 writes.
+class HistoryTestHttpException : System.Exception {
+    [object]$Response
+    HistoryTestHttpException([int]$Status) : base(('HTTP '+$Status)) {
+        $this.Response=[pscustomobject]@{StatusCode=$Status}
+    }
+}
 Set-StrictMode -Version Latest
 $ErrorActionPreference='Stop'
 $root=Split-Path -Parent $PSScriptRoot
@@ -13,7 +19,7 @@ $functions=@{}
 foreach($node in $ast.FindAll({param($n)$n -is [Management.Automation.Language.FunctionDefinitionAst]},$true)){
     $functions[$node.Name]=$node.Extent.Text
 }
-foreach($name in @('ConvertTo-CafeGraphicsPreset','ConvertTo-CafeGraphicsHistoryEntry','Get-ProfileGraphicsHistory','Get-ProfileGraphicsVersion')){
+foreach($name in @('ConvertTo-CafeGraphicsPreset','ConvertTo-CafeGraphicsHistoryEntry','Clear-ProfileGraphicsHistoryCache','Get-CachedProfileGraphicsHistory','Get-ProfileGraphicsHistory','Get-ProfileGraphicsVersion')){
     if(-not $functions.ContainsKey($name)){throw ('Missing graphics history function '+$name)}
     Invoke-Expression $functions[$name]
 }
@@ -28,6 +34,7 @@ $script:HistoryCommitCalls=0
 $script:HistoryContentCalls=0
 $script:HistoryWrongPath=$false
 $script:HistoryOffline=$false
+$script:HistoryGone=$false
 $currentPreset=Get-Content -LiteralPath (Join-Path $root 'graphics\FabMode.json') -Raw | ConvertFrom-Json
 $oldPreset=$currentPreset | ConvertTo-Json -Depth 8 | ConvertFrom-Json
 $oldPreset.Settings.MSAASamples=4
@@ -56,6 +63,7 @@ function Invoke-RestMethod {
     }
     if($Uri -match '/contents/'){
         $script:HistoryContentCalls++
+        if($script:HistoryGone){throw (New-Object HistoryTestHttpException 404)}
         if($script:HistoryWrongPath){return [pscustomobject]@{path='graphics/OliMode.json';content=$script:HistoryBase64}}
         if($Uri -notmatch ('ref='+('2'*40))){throw ('Unexpected content ref: '+$Uri)}
         return [pscustomobject]@{path='graphics/FabMode.json';content=$script:HistoryBase64}
@@ -101,12 +109,31 @@ try{
     if(-not $wrongPath){throw 'A response for a different profile must be rejected.'}
 
     $script:HistoryWrongPath=$false
+    $script:HistoryGone=$true
+    $goneMessage=''
+    try{[void](Get-ProfileGraphicsVersion -ProfileName 'FabMode' -Version $versions[0])}catch{$goneMessage=$_.Exception.Message}
+    if($goneMessage -notmatch 'no longer available.*Refresh history'){
+        throw 'A deleted history commit must explain that it is unavailable and suggest refreshing history.'
+    }
+    $script:HistoryGone=$false
+
+    if(-not (Test-Path -LiteralPath $cache -PathType Leaf)){throw 'Expected history cache before invalidation test.'}
+    Clear-ProfileGraphicsHistoryCache -ProfileName 'FabMode'
+    if(Test-Path -LiteralPath $cache -PathType Leaf){throw 'A successful graphics sync must be able to invalidate the cached history file.'}
+    [void](Get-ProfileGraphicsHistory -ProfileName 'FabMode')
+    if($script:HistoryCommitCalls -ne 5){throw 'History must refetch after its cache is invalidated.'}
+
+    $script:HistoryWrongPath=$false
     $script:HistoryOffline=$true
     $cache=$null
     $offlineFailure=$false
     try{[void](Get-ProfileGraphicsHistory -ProfileName 'ArliMode')}catch{$offlineFailure=$_.Exception.Message -match 'network unavailable'}
     if(-not $offlineFailure){throw 'Unavailable GitHub history should fail clearly for the UI to report.'}
-    Write-Host 'PASS: three prior versions, 24-hour cache, refresh, commit fetch/validation, and safe network failures.'
+    if($source -notmatch 'Earlier GitHub file revisions \(commit ID shown\)' -or
+       $source -notmatch 'Not saved or applied' -or $source -notmatch '\$version\.Sha\.Substring\(0,7\)'){
+        throw 'History UI must identify commit revisions and make restore save/apply behavior explicit.'
+    }
+    Write-Host 'PASS: history caching/invalidation, prior commit fetch/validation, unavailable commit messaging, and explicit restore behavior.'
 }finally{
     $env:LOCALAPPDATA=$oldLocalAppData
     Remove-Item -LiteralPath $sandbox -Recurse -Force -ErrorAction SilentlyContinue
