@@ -4,7 +4,7 @@ start "" powershell.exe -NoProfile -ExecutionPolicy Bypass -STA -WindowStyle Hid
 exit /b
 
 # POWERSHELL_GUI
-# CAFE_RELEASE=2026.10.14.12
+# CAFE_RELEASE=2026.10.14.13
 
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
@@ -2756,6 +2756,9 @@ function Launch-All {
 # ==============================================================
 $script:GithubRepo = 'fabjoncela/Cs-script'
 $script:GithubBranch = 'main'
+# Public GitHub App client ID used only by the optional device sign-in flow.
+# Leave blank until a GitHub App with device flow is registered and configured.
+$script:GithubDeviceFlowClientId = ''
 $script:FabCfgCloudUrl = 'https://raw.githubusercontent.com/fabjoncela/Cs-script/main/fab.cfg'
 $script:GamingProfiles = [ordered]@{
     FabMode = @{
@@ -3255,7 +3258,7 @@ function Refresh-ProfileFromGitHub {
     }
 }
 
-function Get-GitHubSyncToken {
+function Get-GitHubSyncPersonalToken {
     param($OwnerWindow)
     $authForm = New-Object System.Windows.Forms.Form
     $authForm.Text = 'Authorize GitHub Sync'
@@ -3325,6 +3328,307 @@ function Get-GitHubSyncToken {
         $secretBox.Clear()
         $authForm.Dispose()
     }
+}
+
+function New-CafeGitHubDeviceFlowWorker {
+    param([Parameter(Mandatory=$true)][string]$ClientId,[Parameter(Mandatory=$true)][string]$Repository)
+    if(-not ('CafeGitHubDeviceFlowWorker' -as [type])){
+        $serializationPath=Join-Path ([Runtime.InteropServices.RuntimeEnvironment]::GetRuntimeDirectory()) 'System.Runtime.Serialization.dll'
+        [void][Reflection.Assembly]::LoadFrom($serializationPath)
+        [void](Add-Type -Language CSharp -TypeDefinition @'
+using System;
+using System.ComponentModel;
+using System.IO;
+using System.Net;
+using System.Text;
+using System.Threading;
+using System.Runtime.Serialization;
+using System.Runtime.Serialization.Json;
+
+[DataContract]
+public sealed class CafeGitHubRepositoryPermissions {
+    [DataMember(Name="push")] public bool Push { get; set; }
+}
+
+[DataContract]
+public sealed class CafeGitHubResponse {
+    [DataMember(Name="device_code")] public string DeviceCode { get; set; }
+    [DataMember(Name="user_code")] public string UserCode { get; set; }
+    [DataMember(Name="verification_uri")] public string VerificationUri { get; set; }
+    [DataMember(Name="expires_in")] public int ExpiresIn { get; set; }
+    [DataMember(Name="interval")] public int Interval { get; set; }
+    [DataMember(Name="error")] public string Error { get; set; }
+    [DataMember(Name="access_token")] public string AccessToken { get; set; }
+    [DataMember(Name="login")] public string Login { get; set; }
+    [DataMember(Name="full_name")] public string FullName { get; set; }
+    [DataMember(Name="permissions")] public CafeGitHubRepositoryPermissions Permissions { get; set; }
+}
+
+public sealed class CafeGitHubDeviceFlowWorker : BackgroundWorker {
+    private readonly string clientId;
+    private readonly string repository;
+    public string UserCode { get; private set; }
+    public string VerificationUri { get; private set; }
+    public string AuthenticatedLogin { get; private set; }
+    public string AccessToken { get; private set; }
+    public string ErrorText { get; private set; }
+
+    public CafeGitHubDeviceFlowWorker(string clientId, string repository) {
+        this.clientId = clientId;
+        this.repository = repository;
+        WorkerReportsProgress = true;
+        WorkerSupportsCancellation = true;
+        DoWork += RunDeviceFlow;
+    }
+
+    public string TakeAccessToken() {
+        string token = AccessToken;
+        AccessToken = null;
+        return token;
+    }
+
+    public void ClearAccessToken() { AccessToken = null; }
+
+    private static CafeGitHubResponse ReadJson(HttpWebResponse response) {
+        using (var stream = response.GetResponseStream())
+            return (CafeGitHubResponse)new DataContractJsonSerializer(typeof(CafeGitHubResponse)).ReadObject(stream);
+    }
+
+    private static CafeGitHubResponse Request(string url, string method, string[,] form, string token) {
+        var request = (HttpWebRequest)WebRequest.Create(url);
+        request.Method = method;
+        request.UserAgent = "CafeLauncher-GitHub-Device-Login";
+        bool isApi = url.StartsWith("https://api.github.com/", StringComparison.OrdinalIgnoreCase);
+        request.Accept = isApi ? "application/vnd.github+json" : "application/json";
+        if (isApi) request.Headers["X-GitHub-Api-Version"] = "2022-11-28";
+        request.Timeout = 12000;
+        request.ReadWriteTimeout = 12000;
+        if (!String.IsNullOrEmpty(token)) request.Headers[HttpRequestHeader.Authorization] = "Bearer " + token;
+        if (form != null) {
+            request.ContentType = "application/x-www-form-urlencoded";
+            var pairs = new string[form.GetLength(0)];
+            for (int i=0;i<form.GetLength(0);i++)
+                pairs[i] = Uri.EscapeDataString(form[i,0]) + "=" + Uri.EscapeDataString(form[i,1]);
+            byte[] bytes = Encoding.UTF8.GetBytes(String.Join("&", pairs));
+            request.ContentLength = bytes.Length;
+            using (var stream = request.GetRequestStream()) stream.Write(bytes, 0, bytes.Length);
+        }
+        using (var response = (HttpWebResponse)request.GetResponse()) return ReadJson(response);
+    }
+
+    private void RunDeviceFlow(object sender, DoWorkEventArgs e) {
+        try {
+            var form = new string[,] { { "client_id", clientId }, { "scope", "offline_access" } };
+            var code = Request("https://github.com/login/device/code", "POST", form, null);
+            string deviceCode = code.DeviceCode;
+            UserCode = code.UserCode;
+            VerificationUri = code.VerificationUri;
+            int expires = code.ExpiresIn;
+            int interval = Math.Max(1, code.Interval);
+            if (String.IsNullOrEmpty(deviceCode) || String.IsNullOrEmpty(UserCode) ||
+                VerificationUri != "https://github.com/login/device" || expires < 1 || expires > 1800)
+                throw new InvalidOperationException("GitHub returned an invalid device-login response.");
+            ReportProgress(1, new string[] { VerificationUri, UserCode });
+
+            var deadline = DateTime.UtcNow.AddSeconds(expires);
+            while (DateTime.UtcNow < deadline) {
+                int waitMs = interval * 1000;
+                while (waitMs > 0) {
+                    if (CancellationPending) { e.Cancel = true; return; }
+                    int slice = Math.Min(waitMs, 250);
+                    Thread.Sleep(slice);
+                    waitMs -= slice;
+                }
+                var tokenForm = new string[,] {
+                    { "client_id", clientId },
+                    { "device_code", deviceCode },
+                    { "grant_type", "urn:ietf:params:oauth:grant-type:device_code" }
+                };
+                var result = Request("https://github.com/login/oauth/access_token", "POST", tokenForm, null);
+                string error = result.Error;
+                if (error == "authorization_pending") continue;
+                if (error == "slow_down") { interval += 5; continue; }
+                if (!String.IsNullOrEmpty(error)) throw new InvalidOperationException("GitHub sign-in failed: " + error.Replace('_', ' ') + ".");
+                string token = result.AccessToken;
+                if (String.IsNullOrEmpty(token)) throw new InvalidOperationException("GitHub did not return an access token.");
+                if (result.ExpiresIn < 1)
+                    throw new InvalidOperationException("GitHub did not issue an expiring token. Enable token expiration for the GitHub App and try again.");
+
+                var user = Request("https://api.github.com/user", "GET", null, token);
+                AuthenticatedLogin = user.Login;
+                if (String.IsNullOrEmpty(AuthenticatedLogin)) throw new InvalidOperationException("Could not verify the GitHub account returned by sign-in.");
+                // Confirm this account can at least access the exact repository before returning the token.
+                var repo = Request("https://api.github.com/repos/" + repository, "GET", null, token);
+                if (!String.Equals(repo.FullName, repository, StringComparison.OrdinalIgnoreCase))
+                    throw new InvalidOperationException("The signed-in account cannot access the CafeLauncher repository.");
+                if (repo.Permissions == null || !repo.Permissions.Push)
+                    throw new InvalidOperationException("The signed-in account does not have verified write access to the CafeLauncher repository. Grant it repository write access and try again.");
+                if (CancellationPending) { e.Cancel = true; return; }
+                AccessToken = token;
+                return;
+            }
+            throw new TimeoutException("The GitHub device code expired. Start sign-in again.");
+        } catch (Exception error) {
+            ErrorText = error.Message;
+        }
+    }
+}
+'@ -ReferencedAssemblies @('System.dll','System.Runtime.Serialization.dll','System.Xml.dll'))
+    }
+    return [CafeGitHubDeviceFlowWorker]::new($ClientId,$Repository)
+}
+
+function Get-GitHubDeviceAuthorization {
+    param($OwnerWindow)
+    if([string]::IsNullOrWhiteSpace([string]$script:GithubDeviceFlowClientId)){
+        [void][System.Windows.Forms.MessageBox]::Show(
+            'GitHub sign-in is not configured yet. Register a GitHub App with device flow enabled, Contents read/write permission, repository access, and expiring user tokens; then add its public Client ID to CafeLauncher.',
+            'GitHub sign-in setup','OK','Information')
+        return $null
+    }
+    $worker=New-CafeGitHubDeviceFlowWorker -ClientId $script:GithubDeviceFlowClientId -Repository $script:GithubRepo
+    $authForm=New-Object System.Windows.Forms.Form
+    $authForm.Text='Sign in to GitHub'
+    $authForm.ClientSize=New-Object System.Drawing.Size(560,260)
+    $authForm.StartPosition='CenterParent'
+    $authForm.FormBorderStyle='FixedDialog'
+    $authForm.MaximizeBox=$false
+    $authForm.MinimizeBox=$false
+    $authForm.BackColor=$PANEL
+    $authForm.ForeColor=$WHITE
+    $authForm.Font=New-Object System.Drawing.Font('Segoe UI',10)
+    $instructions=New-Object System.Windows.Forms.Label
+    $instructions.Text='On your phone or another trusted device, open github.com/login/device and enter this one-time code:'
+    $instructions.Location=New-Object System.Drawing.Point(20,18)
+    $instructions.Size=New-Object System.Drawing.Size(520,52)
+    $authForm.Controls.Add($instructions)
+    $codeBox=New-Object System.Windows.Forms.TextBox
+    $codeBox.ReadOnly=$true
+    $codeBox.Text='Requesting code from GitHub...'
+    $codeBox.Font=New-Object System.Drawing.Font('Consolas',18,[System.Drawing.FontStyle]::Bold)
+    $codeBox.TextAlign='Center'
+    $codeBox.Location=New-Object System.Drawing.Point(20,76)
+    $codeBox.Size=New-Object System.Drawing.Size(300,42)
+    $authForm.Controls.Add($codeBox)
+    $copyCode=New-Object System.Windows.Forms.Button
+    $copyCode.Text='Copy code'
+    $copyCode.Location=New-Object System.Drawing.Point(335,76)
+    $copyCode.Size=New-Object System.Drawing.Size(100,42)
+    $copyCode.Enabled=$false
+    $copyCode.Add_Click({if($codeBox.Text -match '^[A-Z0-9-]{6,16}$'){[System.Windows.Forms.Clipboard]::SetText($codeBox.Text)}})
+    $authForm.Controls.Add($copyCode)
+    $openLink=New-Object System.Windows.Forms.Button
+    $openLink.Text='Open GitHub here'
+    $openLink.Location=New-Object System.Drawing.Point(20,128)
+    $openLink.Size=New-Object System.Drawing.Size(160,34)
+    $openLink.Enabled=$false
+    $openLink.Add_Click({Start-Process 'https://github.com/login/device'})
+    $authForm.Controls.Add($openLink)
+    $status=New-Object System.Windows.Forms.Label
+    $status.Text='Waiting for GitHub authorization...'
+    $status.Location=New-Object System.Drawing.Point(195,130)
+    $status.Size=New-Object System.Drawing.Size(345,35)
+    $authForm.Controls.Add($status)
+    $cancel=New-Object System.Windows.Forms.Button
+    $cancel.Text='Cancel'
+    $cancel.Location=New-Object System.Drawing.Point(420,200)
+    $cancel.Size=New-Object System.Drawing.Size(120,36)
+    $cancel.DialogResult=[System.Windows.Forms.DialogResult]::Cancel
+    $cancel.Add_Click({if($worker.IsBusy){$worker.CancelAsync()}}.GetNewClosure())
+    $authForm.Controls.Add($cancel)
+    $authForm.CancelButton=$cancel
+    $authorizationState=[pscustomobject]@{Result=$null}
+    $worker.Add_ProgressChanged({
+        if($authForm.IsDisposed){return}
+        if($worker.UserCode){$codeBox.Text=$worker.UserCode;$copyCode.Enabled=$true;$openLink.Enabled=$true}
+        $status.Text='Waiting for you to approve access on GitHub...'
+    }.GetNewClosure())
+    $worker.Add_RunWorkerCompleted({
+        if($authForm.IsDisposed){$worker.ClearAccessToken();return}
+        if($worker.Cancelled){$status.Text='GitHub sign-in canceled.';return}
+        if($worker.ErrorText){
+            Write-Log ('GitHub device sign-in failed: '+$worker.ErrorText) 'WARN'
+            [void][System.Windows.Forms.MessageBox]::Show($worker.ErrorText,'GitHub sign-in','OK','Warning')
+            $authForm.DialogResult=[System.Windows.Forms.DialogResult]::Cancel
+            $authForm.Close();return
+        }
+        $token=$worker.TakeAccessToken()
+        if([string]::IsNullOrWhiteSpace($token)){
+            $status.Text='GitHub did not return an access token.'
+            $authForm.DialogResult=[System.Windows.Forms.DialogResult]::Cancel
+            $authForm.Close();return
+        }
+        $authorizationState.Result=[pscustomobject]@{Token=$token;Method='GitHub device sign-in';Login=[string]$worker.AuthenticatedLogin}
+        $status.Text=('Signed in as '+$worker.AuthenticatedLogin+'.')
+        $authForm.DialogResult=[System.Windows.Forms.DialogResult]::OK
+        $authForm.Close()
+    }.GetNewClosure())
+    try{
+        $worker.RunWorkerAsync()
+        [void]$authForm.ShowDialog($OwnerWindow)
+        return $authorizationState.Result
+    }finally{
+        if($worker.IsBusy){$worker.CancelAsync()}
+        $worker.ClearAccessToken()
+        $authForm.Dispose()
+    }
+}
+
+function Get-GitHubSyncAuthorization {
+    param($OwnerWindow)
+    $chooser=New-Object System.Windows.Forms.Form
+    $chooser.Text='Choose GitHub sync method'
+    $chooser.ClientSize=New-Object System.Drawing.Size(500,190)
+    $chooser.StartPosition='CenterParent'
+    $chooser.FormBorderStyle='FixedDialog'
+    $chooser.MaximizeBox=$false
+    $chooser.MinimizeBox=$false
+    $chooser.BackColor=$PANEL
+    $chooser.ForeColor=$WHITE
+    $chooser.Font=New-Object System.Drawing.Font('Segoe UI',10)
+    $label=New-Object System.Windows.Forms.Label
+    $label.Text='Choose how to authorize this sync. CafeLauncher will not save either credential.'
+    $label.Location=New-Object System.Drawing.Point(20,18)
+    $label.Size=New-Object System.Drawing.Size(460,45)
+    $chooser.Controls.Add($label)
+    $tokenButton=New-Object System.Windows.Forms.Button
+    $tokenButton.Text='Use a token'
+    $tokenButton.Location=New-Object System.Drawing.Point(20,78)
+    $tokenButton.Size=New-Object System.Drawing.Size(205,42)
+    $tokenButton.BackColor=$BLUE
+    $tokenButton.ForeColor=$WHITE
+    $chooser.Controls.Add($tokenButton)
+    $deviceButton=New-Object System.Windows.Forms.Button
+    $deviceButton.Text='Sign in with GitHub'
+    $deviceButton.Location=New-Object System.Drawing.Point(245,78)
+    $deviceButton.Size=New-Object System.Drawing.Size(235,42)
+    $deviceButton.BackColor=[System.Drawing.Color]::FromArgb(38,132,102)
+    $deviceButton.ForeColor=$WHITE
+    $chooser.Controls.Add($deviceButton)
+    $cancel=New-Object System.Windows.Forms.Button
+    $cancel.Text='Cancel'
+    $cancel.Location=New-Object System.Drawing.Point(360,138)
+    $cancel.Size=New-Object System.Drawing.Size(120,34)
+    $cancel.DialogResult=[System.Windows.Forms.DialogResult]::Cancel
+    $chooser.Controls.Add($cancel)
+    $chooser.CancelButton=$cancel
+    $authorizationState=[pscustomobject]@{Value=$null}
+    $tokenButton.Add_Click({
+        $token=Get-GitHubSyncPersonalToken -OwnerWindow $chooser
+        if(-not [string]::IsNullOrWhiteSpace($token)){
+            $authorizationState.Value=[pscustomobject]@{Token=$token;Method='Personal access token';Login='not verified'}
+            $chooser.DialogResult=[System.Windows.Forms.DialogResult]::OK
+            $chooser.Close()
+        }
+    }.GetNewClosure())
+    $deviceButton.Add_Click({
+        $authorization=Get-GitHubDeviceAuthorization -OwnerWindow $chooser
+        if($authorization){$authorizationState.Value=$authorization;$chooser.DialogResult=[System.Windows.Forms.DialogResult]::OK;$chooser.Close()}
+    }.GetNewClosure())
+    try{
+        if($chooser.ShowDialog($OwnerWindow) -ne [System.Windows.Forms.DialogResult]::OK){return $null}
+        return $authorizationState.Value
+    }finally{$chooser.Dispose()}
 }
 
 # Replace the active CS2 sensitivity command without changing binds or comments.
@@ -4165,13 +4469,27 @@ function Show-ProfileEditor {
                 Write-Log "$ProfileName GitHub sync canceled; local edits preserved."
                 return
             }
-            $token = Get-GitHubSyncToken -OwnerWindow $dialog
-            if ([string]::IsNullOrWhiteSpace($token)) {
+            $authorization = Get-GitHubSyncAuthorization -OwnerWindow $dialog
+            if ($null -eq $authorization -or [string]::IsNullOrWhiteSpace([string]$authorization.Token)) {
                 $status.Text='Saved locally. GitHub sync canceled; local edits preserved.'
                 $status.ForeColor=[System.Drawing.Color]::FromArgb(255,190,105)
                 Write-Log "$ProfileName GitHub sync canceled; local changes preserved."
                 return
             }
+            if($authorization.Method -eq 'GitHub device sign-in'){
+                $accountConfirm=[System.Windows.Forms.MessageBox]::Show(
+                    ('Sync these settings using GitHub account @'+$authorization.Login+'?'),
+                    'Confirm GitHub account','YesNo','Question')
+                if($accountConfirm -ne [System.Windows.Forms.DialogResult]::Yes){
+                    $authorization.Token=$null
+                    $status.Text='Saved locally. GitHub sync canceled; local edits preserved.'
+                    $status.ForeColor=[System.Drawing.Color]::FromArgb(255,190,105)
+                    Write-Log "$ProfileName GitHub sync canceled after account verification; local changes preserved."
+                    return
+                }
+            }
+            $token = [string]$authorization.Token
+            $authorization.Token=$null
             try {
                 $saveSync.Enabled=$false
                 $dialog.Cursor=[System.Windows.Forms.Cursors]::WaitCursor
@@ -4183,6 +4501,7 @@ function Show-ProfileEditor {
                 $dialog.Close()
             } finally {
                 $token = $null
+                $authorization = $null
                 if (-not $dialog.IsDisposed) {
                     $saveSync.Enabled=$true
                     $dialog.Cursor=[System.Windows.Forms.Cursors]::Default
