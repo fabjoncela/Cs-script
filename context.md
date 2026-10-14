@@ -3,7 +3,7 @@
 This file gives Codex and maintainers the operational context needed to work safely in this repository. **Always follow the checked-out source tree.** The generated state block below reports the launcher release marker, not whether that code has shipped to `main`.
 
 <!-- BEGIN GENERATED LAUNCHER STATE -->
-- Launcher release: `2026.10.14.16`
+- Launcher release: `2026.10.14.17`
 - Generated from the unique `# CAFE_RELEASE` marker in `cafe.bat` by `tools/Update-Context.ps1`.
 <!-- END GENERATED LAUNCHER STATE -->
 
@@ -58,7 +58,7 @@ Dashboard **Apply Graphics** is a separate action from the normal profile Apply 
 - Save & Sync offers two one-time authorization choices: paste a personal access token, or sign in through GitHub's device flow using the `github.com/login/device` link and a short code. Device sign-in checks the authenticated username, repository identity, and verified push permission before the sync; the UI asks the user to confirm that GitHub account. Both credentials stay in memory for the sync and are not written to disk. The device flow uses the public GitHub App Client ID configured in `cafe.bat`; the app must have device flow enabled, Contents read/write permission, and access to this repository. The client ID is not a secret; do not put a client secret or access/refresh token in the launcher.
 - A partial upload reports the files confirmed saved and the files not confirmed. Local settings remain pending until the entire sync succeeds.
 - GitHub profile reads and the sync target are configured in `cafe.bat` (`$script:GithubBranch`). Check this before any claim about which remote branch receives profile data.
-- The launcher version badge reads the `CAFE_RELEASE` marker from the active BAT. It checks GitHub `main` after the dashboard appears and before slower hardware/game inventory; startup shows a dialog only when a newer build is available, while manual **Check for Updates** reports current or failed checks too. Automatic check failures are written to LIVE LOGS.
+- The launcher captures its running `CAFE_RELEASE` at startup and compares that version with GitHub `main`; this avoids confusing the currently running PowerShell UI with a newer BAT that replaced its file on disk. If the newer BAT is already installed, the updater says to close and reopen it; otherwise it offers the verified download. Startup checks before slower hardware/game inventory and only shows a dialog when a newer build exists; manual **Check for Updates** reports current or failed checks too. Automatic check failures are written to LIVE LOGS.
 - The CS2 graphics editor's copy/reset click handlers avoid `[void]` typed expressions inside `try` blocks because Windows PowerShell can fail compiling those event handlers at click time; the launcher test guards this regression.
 
 ## Runtime behavior and safety boundaries

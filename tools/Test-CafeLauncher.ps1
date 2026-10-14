@@ -122,7 +122,10 @@ if(-not $definitions.ContainsKey('Get-CafeLauncherRelease')){throw 'Dynamic laun
 Invoke-Expression $definitions['Get-CafeLauncherRelease']
 $env:CAFE_SCRIPT=$batPath
 $expectedRelease=[regex]::Match($versions[0], '\d{4}\.\d{2}\.\d{2}\.\d+').Value
-if((Get-CafeLauncherRelease) -ne $expectedRelease){throw 'Launcher release lookup must read the CAFE_RELEASE marker from the active BAT.'}
+$script:LauncherRunningRelease='2026.10.14.15'
+if((Get-CafeLauncherRelease) -ne $script:LauncherRunningRelease){throw 'Launcher release lookup must retain the version captured by the running process even if the BAT on disk is replaced.'}
+$script:LauncherRunningRelease=$expectedRelease
+if((Get-CafeLauncherRelease) -ne $expectedRelease){throw 'Launcher release lookup must use the active CAFE_RELEASE marker captured at startup.'}
 if($definitions['Invoke-GamingProfile'] -notmatch 'Launch-All -SkipGHub' -or
    $definitions['Invoke-GamingProfile'] -notmatch 'Request-LogitechLiveDPI -DPI'){
     throw 'Profile actions must skip G HUB while retaining custom live DPI.'
@@ -235,6 +238,11 @@ if($psSource -match 'CAFE_PREVIEW_BRANCH|\$script:PreviewBranch|UI PREVIEW' -or
    $definitions['Check-CafeLauncherUpdates'] -notmatch 'GitHub main release is' -or
    $definitions['Check-CafeLauncherUpdates'] -notmatch 'CafeLauncher Update Available'){
     throw 'Production dashboard must use normal verified main-branch updates without preview restrictions.'
+}
+if($definitions['Check-CafeLauncherUpdates'] -notmatch '\$runningReleaseText=Get-CafeLauncherRelease' -or
+   $definitions['Check-CafeLauncherUpdates'] -notmatch 'Newer Build Already Installed' -or
+   $definitions['Check-CafeLauncherUpdates'] -notmatch 'Close and reopen the BAT'){
+    throw 'Update checks must compare the running release and explain when a newer BAT is already installed on disk.'
 }
 $startupSource=$psSource.Substring($psSource.IndexOf('$startupTimer.Add_Tick({'))
 $updateCheckAt=$startupSource.IndexOf('Check-CafeLauncherUpdates')

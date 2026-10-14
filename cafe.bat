@@ -4,11 +4,22 @@ start "" powershell.exe -NoProfile -ExecutionPolicy Bypass -STA -WindowStyle Hid
 exit /b
 
 # POWERSHELL_GUI
-# CAFE_RELEASE=2026.10.14.16
+# CAFE_RELEASE=2026.10.14.17
 
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 [System.Windows.Forms.Application]::EnableVisualStyles()
+
+# Capture the version represented by this process at startup. The BAT on disk
+# can be replaced while its already-open PowerShell UI is still running.
+$script:LauncherRunningRelease='unknown'
+try{
+    $startupSource=[string]$env:CAFE_SCRIPT
+    if(-not [string]::IsNullOrWhiteSpace($startupSource) -and (Test-Path -LiteralPath $startupSource -PathType Leaf)){
+        $startupVersionMatch=[regex]::Match([IO.File]::ReadAllText($startupSource),'(?m)^# CAFE_RELEASE=(\d{4}\.\d{1,2}\.\d{1,2}\.\d+)\s*$')
+        if($startupVersionMatch.Success){$script:LauncherRunningRelease=$startupVersionMatch.Groups[1].Value}
+    }
+}catch{}
 
 $BG = [System.Drawing.Color]::FromArgb(20,23,30)
 $PANEL = [System.Drawing.Color]::FromArgb(31,36,46)
@@ -2623,6 +2634,8 @@ function Test-LauncherIsCurrent {
 }
 
 function Get-CafeLauncherRelease {
+    $runningRelease=[string]$script:LauncherRunningRelease
+    if($runningRelease -match '^\d{4}\.\d{1,2}\.\d{1,2}\.\d+$'){return $runningRelease}
     $source=[string]$env:CAFE_SCRIPT
     if([string]::IsNullOrWhiteSpace($source) -or -not(Test-Path -LiteralPath $source -PathType Leaf)){return 'unknown'}
     try{
@@ -2661,15 +2674,26 @@ function Check-CafeLauncherUpdates {
             return
         }
         $remoteRelease=[version]::Parse($remoteMatch.Groups[1].Value)
-        $localRelease=if ($localMatch.Success) { [version]::Parse($localMatch.Groups[1].Value) } else { [version]'0.0.0.0' }
-        if ($remoteRelease -le $localRelease) {
-            Write-Log "CafeLauncher local release $localRelease is current; GitHub main release is $remoteRelease."
-            if ($Manual) { [System.Windows.Forms.MessageBox]::Show("CafeLauncher is current (local $localRelease; GitHub $remoteRelease).", 'Update Check', 'OK', 'Information') | Out-Null }
+        $runningReleaseText=Get-CafeLauncherRelease
+        $runningRelease=if($runningReleaseText -match '^\d{4}\.\d{1,2}\.\d{1,2}\.\d+$'){[version]::Parse($runningReleaseText)}else{[version]'0.0.0.0'}
+        $diskRelease=if ($localMatch.Success) { [version]::Parse($localMatch.Groups[1].Value) } else { [version]'0.0.0.0' }
+        if ($remoteRelease -le $runningRelease) {
+            Write-Log "CafeLauncher running release $runningRelease is current; GitHub main release is $remoteRelease."
+            if ($Manual) { [System.Windows.Forms.MessageBox]::Show("CafeLauncher is current (running $runningRelease; GitHub $remoteRelease).", 'Update Check', 'OK', 'Information') | Out-Null }
             return
         }
         if (Test-LauncherIsCurrent -CurrentPath $source -RemoteBlobSha $remote.sha) {
-            Write-Log 'CafeLauncher is up to date with GitHub main.'
-            if ($Manual) { [System.Windows.Forms.MessageBox]::Show('CafeLauncher is already up to date.', 'Update Check', 'OK', 'Information') | Out-Null }
+            Write-Log "A newer release $remoteRelease is already installed at $source; this open launcher is still running $runningRelease."
+            [System.Windows.Forms.MessageBox]::Show(
+                "CafeLauncher release $remoteRelease is already installed at:`n$source`n`nThis open window is still running release $runningRelease. Close and reopen the BAT to use the newer build.",
+                'Newer Build Already Installed','OK','Information') | Out-Null
+            return
+        }
+        if($diskRelease -gt $remoteRelease){
+            Write-Log "A newer local file release $diskRelease is already installed than GitHub main $remoteRelease; this open launcher is still running $runningRelease."
+            [System.Windows.Forms.MessageBox]::Show(
+                "A newer local CafeLauncher release ($diskRelease) is already installed at:`n$source`n`nThis open window is running release $runningRelease. Close and reopen the BAT to use the newer build.",
+                'Newer Build Already Installed','OK','Information') | Out-Null
             return
         }
         Write-Log 'A newer/different cafe.bat is available on GitHub main.' 'INFO'
