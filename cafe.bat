@@ -504,6 +504,29 @@ public static class FabDisplayNative {
         return highest;
     }
 
+    // Read-only: choose the highest progressive rate the active display advertises at a game resolution.
+    public static int GetHighestRefreshForResolution(int width, int height) {
+        const string device = @"\\.\DISPLAY1";
+        if (width < 640 || height < 480) return 0;
+        List<int> widths = new List<int>();
+        List<int> heights = new List<int>();
+        List<int> rates = new List<int>();
+        DEVMODE current = NewMode();
+        if (EnumDisplaySettings(device, -1, ref current) && current.dmBitsPerPel >= 24 &&
+            current.dmDisplayFrequency >= 24 && current.dmDisplayFrequency <= 600 &&
+            (current.dmDisplayFlags & 2) == 0) {
+            widths.Add(current.dmPelsWidth); heights.Add(current.dmPelsHeight); rates.Add(current.dmDisplayFrequency);
+        }
+        for (int i=0; i<4096; i++) {
+            DEVMODE dm = NewMode();
+            if (!EnumDisplaySettings(device, i, ref dm)) break;
+            if (dm.dmBitsPerPel < 24 || dm.dmDisplayFrequency < 24 || dm.dmDisplayFrequency > 600 ||
+                (dm.dmDisplayFlags & 2) != 0) continue;
+            widths.Add(dm.dmPelsWidth); heights.Add(dm.dmPelsHeight); rates.Add(dm.dmDisplayFrequency);
+        }
+        return GetHighestRefreshAtResolution(width, height, widths.ToArray(), heights.ToArray(), rates.ToArray());
+    }
+
     public static bool TrySetDisplayMode(int desiredWidth, int desiredHeight, int desiredHz, out string report) {
         const string device = @"\\.\DISPLAY1";
         DEVMODE current = NewMode();
@@ -3258,7 +3281,7 @@ function Invoke-GraphicsOnly {
     param([Parameter(Mandatory=$true)][string]$ModeName)
     Start-StepScope -Run ('Graphics '+$ModeName) -Step 'Apply Graphics'
     try {
-    $expected='68c4c073e30c5169c1f039724b0053dd3e47de5f'
+    $expected='2d8db574f68f7657082b92c9c5dcbd03b5b4cfa8'
     $source='https://raw.githubusercontent.com/fabjoncela/Cs-script/codex/fabmode-bugfix/graphics/ApplyGraphics.ps1'
     $cache=Join-Path $env:LOCALAPPDATA 'CafeLauncher\graphics-module.ps1'
     $parent=Split-Path -Parent $cache

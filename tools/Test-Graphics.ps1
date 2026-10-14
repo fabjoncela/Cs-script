@@ -53,10 +53,11 @@ foreach($unchanged in @('"VendorID" "4318"','"DeviceID" "12345"','"setting.monit
     if(-not $result.Text.Contains($unchanged)){throw ('Unrelated device/video setting changed: '+$unchanged)}
 }
 if((Update-CS2VideoGraphicsText -Text $result.Text -Settings $settings).Changed){throw 'Re-applying must be idempotent.'}
-$display=[ordered]@{Width=1280;Height=960;RefreshHz=240;Fullscreen=1}
-$skip=Update-CS2VideoGraphicsText -Text $fixture -Settings $display -SkipDisplay
+$display=[ordered]@{Width=1280;Height=960;RefreshHz=240;AspectRatioMode=0;Fullscreen=1}
+$fallbackDisplay=[ordered]@{Width=1280;Height=960;RefreshHz=360;AspectRatioMode=0;Fullscreen=0}
+$skip=Update-CS2VideoGraphicsText -Text $fixture -Settings $fallbackDisplay -SkipDisplay
 if($skip.Text -notmatch '"setting.defaultres" "1920"' -or $skip.Text -notmatch '"setting.fullscreen" "1"'){
-    throw 'Unsupported resolution must be preserved.'
+    throw 'Unsupported resolution fallback must preserve every existing CS2 display setting.'
 }
 $applied=Update-CS2VideoGraphicsText -Text $fixture -Settings $display
 if($applied.Text -notmatch '"setting.refreshrate_numerator" "240"' -or
@@ -215,6 +216,7 @@ $csharp=$batText.Substring($csharpStart,$csharpEnd-$csharpStart)
 Add-Type -TypeDefinition $csharp -ErrorAction Stop
 if(-not ('FabDisplayNative' -as [type]) -or
    -not [FabDisplayNative].GetMethod('IsAdvertisedMode') -or
+   -not [FabDisplayNative].GetMethod('GetHighestRefreshForResolution') -or
    -not [FabDisplayNative].GetMethod('GetHighestRefreshAtResolution') -or
    -not [FabDisplayNative].GetMethod('TrySetDisplayMode')){
     throw 'Read-only advertised-mode helper was not compiled.'
@@ -231,9 +233,24 @@ foreach($testCase in @(
     $selected=[FabDisplayNative]::GetHighestRefreshAtResolution(1920,1080,[int[]]$testCase.Widths,[int[]]$testCase.Heights,[int[]]$testCase.Rates)
     if($selected -ne $testCase.Expected){throw ('Highest refresh selection expected '+$testCase.Expected+'Hz but returned '+$selected+'Hz.')}
 }
+$gameRefresh=[FabDisplayNative]::GetHighestRefreshAtResolution(1280,960,[int[]]@(1920,1280,1280),[int[]]@(1080,960,960),[int[]]@(540,240,360))
+if($gameRefresh -ne 360){throw 'CS2 refresh selection must use the highest rate for the preset game resolution, independently of desktop resolution.'}
+$gameDisplay=[ordered]@{Width=1280;Height=960;RefreshHz=$gameRefresh;AspectRatioMode=0;Fullscreen=1}
+$gameEdit=Update-CS2VideoGraphicsText -Text $fixture -Settings $gameDisplay
+if($gameEdit.Text -notmatch '"setting.defaultres" "1280"' -or
+   $gameEdit.Text -notmatch '"setting.defaultresheight" "960"' -or
+   $gameEdit.Text -notmatch '"setting.refreshrate_numerator" "360"' -or
+   $gameEdit.Text -notmatch '"setting.refreshrate_denominator" "1"'){
+    throw 'A 1920x1080 desktop with FabMode 1280x960 CS2 must write the maximum game-resolution refresh.'
+}
+$applyGraphicsStart=$source.IndexOf('function Apply-CS2ModeGraphics {',[StringComparison]::Ordinal)
+if($applyGraphicsStart -lt 0 -or $source.Substring($applyGraphicsStart) -notmatch 'GetHighestRefreshForResolution\(\$w,\$h\)' -or
+   $source.Substring($applyGraphicsStart) -notmatch '\$settings\[''RefreshHz''\]=\$hz'){
+    throw 'Apply Graphics must select and save the maximum advertised rate for its own CS2 resolution.'
+}
 $displaySource=[IO.File]::ReadAllText($bat)
 if($displaySource -notmatch '(?s)function Apply-NvidiaGamingSettings.*?TrySetDisplayMode' -or
    $displaySource -notmatch 'highest advertised refresh at preferred resolution'){
     throw 'The profile display apply must choose the maximum refresh at the profile resolution.'
 }
-Write-Host 'PASS: Windows File.Replace backups, Steam account guard, 240/360/540Hz profile max selection, five graphics presets, and graphics ranges.'
+Write-Host 'PASS: Windows File.Replace backups, Steam account guard, desktop and CS2-resolution refresh selection, five graphics presets, and graphics ranges.'

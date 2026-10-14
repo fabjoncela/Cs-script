@@ -73,7 +73,7 @@ function Assert-CS2GraphicsDisplayPolicy {
 function Get-CS2ModeGraphicsPreset {
     param([string]$ModeName)
     if($ModeName -notin @('FabMode','ArliMode','BrileMode','ArmlMode','OliMode')){throw 'Invalid graphics mode name.'}
-    $url="https://raw.githubusercontent.com/fabjoncela/Cs-script/main/graphics/$ModeName.json"
+    $url="https://raw.githubusercontent.com/fabjoncela/Cs-script/codex/fabmode-bugfix/graphics/$ModeName.json"
     $cache=Join-Path $env:LOCALAPPDATA ("CafeLauncher\graphics-cache\"+$ModeName+'.json')
     $local=Join-Path (Split-Path -Parent $env:CAFE_SCRIPT) ("graphics\"+$ModeName+'.json')
     try{
@@ -138,7 +138,7 @@ function Update-CS2VideoGraphicsText {
     $skipped=New-Object 'System.Collections.Generic.List[string]'
     foreach($field in @($Settings.Keys)){
         if(-not $rules.Contains($field)){continue}
-        if($SkipDisplay -and $field -in @('Width','Height','RefreshHz')){
+        if($SkipDisplay -and $field -in @('Width','Height','RefreshHz','AspectRatioMode','Fullscreen')){
             $skipped.Add($field+' (unsupported display mode)');continue
         }
         $match=Find-CS2VideoSetting -Text $modified -Key $rules[$field].Key
@@ -259,10 +259,26 @@ function Apply-CS2ModeGraphics {
                 if(-not $m -or $m.Groups['value'].Value -notmatch '^\d+$'){throw 'Cannot verify existing resolution height.'}
                 $h=[int]$m.Groups['value'].Value
             }
-            $hz=if($settings.Contains('RefreshHz')){[int]$settings['RefreshHz']}else{0}
-            if(-not ('FabDisplayNative' -as [type]) -or -not [FabDisplayNative]::IsAdvertisedMode($w,$h,$hz)){
+            $refreshNumerator=Find-CS2VideoSetting $before 'setting.refreshrate_numerator'
+            $refreshDenominator=Find-CS2VideoSetting $before 'setting.refreshrate_denominator'
+            if($null -eq $refreshNumerator -or $null -eq $refreshDenominator){
                 $skipDisplay=$true
-                Write-Log ("DISPLAY1 does not advertise "+$w+'x'+$h+'@'+$hz+'Hz; preserving resolution and refresh.') 'WARN'
+                Write-Log 'CS2 video config lacks refresh numerator/denominator; preserving all existing display settings.' 'WARN'
+            }else{
+                $requestedHz=if($settings.Contains('RefreshHz')){[int]$settings['RefreshHz']}else{0}
+                $hz=0
+                if('FabDisplayNative' -as [type]){$hz=[FabDisplayNative]::GetHighestRefreshForResolution($w,$h)}
+                if($hz -ge 24){
+                    $settings['RefreshHz']=$hz
+                    if($requestedHz -gt 0 -and $requestedHz -ne $hz){
+                        Write-Log ("CS2 display mode "+$w+'x'+$h+": using highest advertised refresh "+$hz+'Hz instead of preset '+$requestedHz+'Hz.')
+                    }else{
+                        Write-Log ("CS2 display mode "+$w+'x'+$h+": using highest advertised refresh "+$hz+'Hz.')
+                    }
+                }else{
+                    $skipDisplay=$true
+                    Write-Log ("DISPLAY1 has no supported progressive refresh mode for CS2 resolution "+$w+'x'+$h+"; preserving the existing resolution and refresh.") 'WARN'
+                }
             }
         }
         if($settings.Contains('NvidiaReflex')){
