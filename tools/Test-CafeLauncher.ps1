@@ -407,8 +407,11 @@ if($psSource -match 'CAFE_PREVIEW_BRANCH|\$script:PreviewBranch|UI PREVIEW' -or
 }
 if($definitions['Check-CafeLauncherUpdates'] -notmatch '\$runningReleaseText=Get-CafeLauncherRelease' -or
    $definitions['Check-CafeLauncherUpdates'] -notmatch 'Newer Build Already Installed' -or
-   $definitions['Check-CafeLauncherUpdates'] -notmatch 'Close and reopen the BAT'){
-    throw 'Update checks must compare the running release and explain when a newer BAT is already installed on disk.'
+   $definitions['Check-CafeLauncherUpdates'] -notmatch 'Click OK to restart' -or
+   $definitions['Check-CafeLauncherUpdates'] -notmatch 'Restart-CafeLauncherAfterUpdate -Path \$source' -or
+   $definitions['Restart-CafeLauncherAfterUpdate'] -notmatch 'Start-Process -FilePath \$Path' -or
+   $definitions['Restart-CafeLauncherAfterUpdate'] -notmatch '\[System\.Windows\.Forms\.Application\]::Exit\(\)'){
+    throw 'Update confirmation must relaunch the installed BAT and close the old launcher.'
 }
 $startupSource=$psSource.Substring($psSource.IndexOf('$startupTimer.Add_Tick({'))
 $updateCheckAt=$startupSource.IndexOf('Check-CafeLauncherUpdates')

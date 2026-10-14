@@ -4,7 +4,7 @@ start "" powershell.exe -NoProfile -ExecutionPolicy Bypass -STA -WindowStyle Hid
 exit /b
 
 # POWERSHELL_GUI
-# CAFE_RELEASE=2026.10.14.29
+# CAFE_RELEASE=2026.10.14.30
 
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
@@ -2706,6 +2706,21 @@ function Get-CafeUpdateRateLimitMessage {
     return $null
 }
 
+function Restart-CafeLauncherAfterUpdate {
+    param([Parameter(Mandatory=$true)][string]$Path)
+    try{
+        if(-not (Test-Path -LiteralPath $Path -PathType Leaf)){throw 'Updated launcher file was not found.'}
+        Start-Process -FilePath $Path -ErrorAction Stop | Out-Null
+        Write-Log ('Relaunching updated CafeLauncher from '+$Path+'.')
+        [System.Windows.Forms.Application]::Exit()
+    }catch{
+        Write-Log ('Could not relaunch CafeLauncher: '+$_.Exception.Message) 'WARN'
+        [void][System.Windows.Forms.MessageBox]::Show(
+            "The update is installed, but CafeLauncher could not restart automatically.`n`nClose and open this file manually:`n$Path",
+            'Restart CafeLauncher','OK','Warning')
+    }
+}
+
 function Check-CafeLauncherUpdates {
     param([switch]$Manual)
     $source=$env:CAFE_SCRIPT
@@ -2745,15 +2760,17 @@ function Check-CafeLauncherUpdates {
         if (Test-LauncherIsCurrent -CurrentPath $source -RemoteBlobSha $remote.sha) {
             Write-Log "A newer release $remoteRelease is already installed at $source; this open launcher is still running $runningRelease."
             [System.Windows.Forms.MessageBox]::Show(
-                "CafeLauncher release $remoteRelease is already installed at:`n$source`n`nThis open window is still running release $runningRelease. Close and reopen the BAT to use the newer build.",
+                "CafeLauncher release $remoteRelease is already installed at:`n$source`n`nClick OK to restart into the newer build.",
                 'Newer Build Already Installed','OK','Information') | Out-Null
+            Restart-CafeLauncherAfterUpdate -Path $source
             return
         }
         if($diskRelease -gt $remoteRelease){
             Write-Log "A newer local file release $diskRelease is already installed than GitHub main $remoteRelease; this open launcher is still running $runningRelease."
             [System.Windows.Forms.MessageBox]::Show(
-                "A newer local CafeLauncher release ($diskRelease) is already installed at:`n$source`n`nThis open window is running release $runningRelease. Close and reopen the BAT to use the newer build.",
+                "A newer local CafeLauncher release ($diskRelease) is already installed at:`n$source`n`nClick OK to restart into the newer build.",
                 'Newer Build Already Installed','OK','Information') | Out-Null
+            Restart-CafeLauncherAfterUpdate -Path $source
             return
         }
         Write-Log 'A newer/different cafe.bat is available on GitHub main.' 'INFO'
@@ -2810,7 +2827,8 @@ function Check-CafeLauncherUpdates {
                     Remove-Item -LiteralPath $staged -Force -ErrorAction SilentlyContinue
                 }
                 Write-Log "Update downloaded, syntax-checked, CRLF-normalized and installed at $source; backup: $backup"
-                [System.Windows.Forms.MessageBox]::Show("CafeLauncher updated successfully at:`n$source`n`nClose and reopen the BAT to use the latest version.", 'Update Installed', 'OK', 'Information') | Out-Null
+                [System.Windows.Forms.MessageBox]::Show("CafeLauncher updated successfully at:`n$source`n`nClick OK to restart and use the latest version.", 'Update Installed', 'OK', 'Information') | Out-Null
+                Restart-CafeLauncherAfterUpdate -Path $source
             } catch {
                 $dest=Join-Path $env:USERPROFILE 'Downloads\CafeLauncher_latest.bat'
                 Copy-Item -LiteralPath $temp -Destination $dest -Force -ErrorAction Stop
