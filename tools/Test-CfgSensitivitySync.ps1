@@ -10,7 +10,7 @@ $code=[string]::Join([Environment]::NewLine,[string[]]$lines[($marker+1)..($line
 $tokens=$null;$errors=$null
 $ast=[Management.Automation.Language.Parser]::ParseInput($code,[ref]$tokens,[ref]$errors)
 if(@($errors).Count){throw ('Launcher syntax failed: '+$errors[0].Message)}
-foreach($name in @('Set-CS2CfgSensitivityText','Sync-ProfileToGitHub','Export-ProfileValues','Get-ProfileGraphicsPreset','Get-GitHubJsonFromContentsApi','ConvertTo-CafeGraphicsPreset','Refresh-ProfileFromGitHub','Get-LatestGitHubFileCommit','Import-ProfileValues')){
+foreach($name in @('Set-CS2CfgSensitivityText','Sync-ProfileToGitHub','Export-ProfileValues','Get-ProfileGraphicsPreset','Get-GitHubJsonFromContentsApi','ConvertTo-CafeGraphicsPreset','Refresh-ProfileFromGitHub','Get-LatestGitHubFileCommit','Compare-GitHubCommitOrder','Import-ProfileValues')){
     $funcs=@($ast.FindAll({param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst]},$true) |
         Where-Object {$_.Name -eq $name})
     if($funcs.Count -ne 1){throw ('Missing or duplicate sync function: '+$name)}
@@ -51,12 +51,14 @@ $script:GraphicsPresets=[ordered]@{}
 $script:FakeFiles=@{}
 $script:FakeWrites=New-Object System.Collections.ArrayList
 $script:FakeCalls=New-Object System.Collections.ArrayList
+$script:FakeLogs=New-Object System.Collections.ArrayList
 $script:FailJsonPut=$false
 $script:CorruptProfileReadback=$false
 $script:CorruptGraphicsReadback=$false
 $script:FakeCommitSha=('b'*40)
 $script:FakeLatestCommitSha=$script:FakeCommitSha
-function Write-Log {param([string]$Message,[string]$Level='INFO')}
+$script:FakeCompareStatus='ahead'
+function Write-Log {param([string]$Message,[string]$Level='INFO');[void]$script:FakeLogs.Add(($Level+'|'+$Message))}
 function Save-ProfileSettings {}
 function Get-FakeBlobSha {param([string]$Text);$hash=[Security.Cryptography.SHA1]::Create();try{return ([BitConverter]::ToString($hash.ComputeHash([Text.Encoding]::UTF8.GetBytes($Text)))).Replace('-','').ToLowerInvariant()}finally{$hash.Dispose()}}
 # Sync invalidates history after a successful write. Keep this test isolated
@@ -86,6 +88,10 @@ function Invoke-RestMethod {
         $commitPath=[regex]::Match($Uri,'path=(?<path>[^&]+)').Groups['path'].Value
         [void]$script:FakeCalls.Add(('CommitGet:'+ $commitPath))
         return ,@([pscustomobject]@{sha=$script:FakeLatestCommitSha})
+    }
+    if($Uri -match '/compare/'){
+        [void]$script:FakeCalls.Add('CommitCompare')
+        return [pscustomobject]@{status=$script:FakeCompareStatus}
     }
     $m=[regex]::Match($Uri,'/contents/(?<path>[^?]+)')
     if(-not $m.Success){throw ('Mock caught an unexpected GitHub URL: '+$Uri)}
@@ -153,17 +159,33 @@ $staleProfile=$script:FakeFiles['profiles/FabMode.json']|ConvertFrom-Json
 $staleProfile.PointerSpeed=2
 $script:FakeFiles['profiles/FabMode.json']=$staleProfile|ConvertTo-Json -Depth 5
 $script:FakeLatestCommitSha=$script:VerifiedProfileState['FabMode'].CommitSha
+$script:FakeLogs.Clear()
 Refresh-ProfileFromGitHub -ProfileName 'FabMode'
 Assert-True ($script:GamingProfiles['FabMode'].PointerSpeed -eq 16) 'Immediate post-sync refresh replaced the verified pointer speed with stale data.'
 Assert-True ($script:FakeCalls[-1] -like 'CommitGet:*') 'A differing profile blob was not checked against the latest path commit.'
+Assert-True (($script:FakeLogs -join "`n").Contains('latestCommit='+$script:FakeLatestCommitSha)) 'Verified-cache log must include the returned GitHub commit SHA.'
+# GitHub can briefly return the previous path commit after a successful push.
+# If that SHA is an ancestor of the verified sync commit, never apply it.
+$oldCommitProfile=$script:FakeFiles['profiles/FabMode.json']|ConvertFrom-Json
+$oldCommitProfile.PointerSpeed=6
+$script:FakeFiles['profiles/FabMode.json']=$oldCommitProfile|ConvertTo-Json -Depth 5
+$script:FakeLatestCommitSha=('a'*40)
+$script:FakeCompareStatus='behind'
+Refresh-ProfileFromGitHub -ProfileName 'FabMode'
+Assert-True ($script:GamingProfiles['FabMode'].PointerSpeed -eq 16) 'A stale ancestor commit rolled the profile back after a verified sync.'
+Assert-True ($script:VerifiedProfileState['FabMode'].CommitSha -eq $script:FakeCommitSha) 'Stale ancestor commit replaced the last verified GitHub commit metadata.'
+Assert-True ($script:FakeCalls[-1] -eq 'CommitCompare') 'A candidate older GitHub commit was not ancestry-checked.'
 # A genuine later profile edit is loaded from the exact immutable commit.
 $newerProfile=$script:FakeFiles['profiles/FabMode.json']|ConvertFrom-Json
 $newerProfile.PointerSpeed=12
 $script:FakeFiles['profiles/FabMode.json']=$newerProfile|ConvertTo-Json -Depth 5
 $script:FakeLatestCommitSha=('c'*40)
+$script:FakeCompareStatus='ahead'
+$script:FakeLogs.Clear()
 Refresh-ProfileFromGitHub -ProfileName 'FabMode'
 Assert-True ($script:GamingProfiles['FabMode'].PointerSpeed -eq 12) 'A confirmed newer GitHub profile commit was not applied.'
 Assert-True ($script:VerifiedProfileState['FabMode'].CommitSha -eq $script:FakeLatestCommitSha) 'The newer immutable commit was not recorded locally.'
+Assert-True (($script:FakeLogs -join "`n").Contains('latestCommit='+$script:FakeLatestCommitSha) -and ($script:FakeLogs -join "`n").Contains('pointerBefore=16; pointerLoaded=12')) 'Remote refresh log must include its commit SHA and the pointer value transition.'
 # Blank means "leave original CFG unchanged".
 $script:GamingProfiles['FabMode'].CS2Sensitivity=''
 $script:PendingSync['FabMode']=$true

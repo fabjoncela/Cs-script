@@ -162,7 +162,8 @@ $profileRefreshFunction=@($psAst.FindAll({
 },$true))
 if($profileRefreshFunction.Count -ne 1 -or
    $profileRefreshFunction[0].Extent.Text -notmatch 'Get-GitHubJsonFromContentsApi' -or
-   $profileRefreshFunction[0].Extent.Text -notmatch 'using cached/local values'){
+   $profileRefreshFunction[0].Extent.Text -notmatch 'decision=local-fallback' -or
+   $profileRefreshFunction[0].Extent.Text -notmatch 'pointerKept='){
     throw 'Profile refresh must use the validated API reader and retain local values when it fails.'
 }
 $graphicsPresetFunction=@($psAst.FindAll({
@@ -335,9 +336,14 @@ $page.Dispose()
 $dashboardSource=$psSource.Substring($psSource.IndexOf('# Modern CafeLauncher dashboard.'))
 if($dashboardSource -notmatch 'New-Object System.Windows.Forms.TabControl' -or
    $dashboardSource -notmatch 'Update-SelectedProfileCard' -or
+   $dashboardSource -notmatch 'Refresh-DashboardProfiles' -or
    $dashboardSource -notmatch 'Show Logs' -or
    $dashboardSource -notmatch 'Tools & Apps'){
     throw 'Main dashboard, profile summary, tools, or collapsible logs are missing.'
+}
+if($editorSource -notmatch 'Refresh-ProfileOnDashboard -Name \$ProfileName' -or
+   $editorSource -notmatch '\[void\]\$dialog\.ShowDialog\(\$form\)'){
+    throw 'Closing the profile editor must refresh that profile and update its dashboard card.'
 }
 if($dashboardSource -match "New-CafeLabel -Text 'v\d{4}\.\d{2}\.\d{2}\.\d+'" -or
    $dashboardSource -notmatch "New-CafeLabel -Text \('v'\+\(Get-CafeLauncherRelease\)\)" -or

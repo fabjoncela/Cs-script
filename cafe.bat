@@ -4,7 +4,7 @@ start "" powershell.exe -NoProfile -ExecutionPolicy Bypass -STA -WindowStyle Hid
 exit /b
 
 # POWERSHELL_GUI
-# CAFE_RELEASE=2026.10.14.23
+# CAFE_RELEASE=2026.10.14.26
 
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
@@ -3344,35 +3344,66 @@ function Get-LatestGitHubFileCommit {
     return [string]$commits[0].sha
 }
 
+function Compare-GitHubCommitOrder {
+    param([Parameter(Mandatory=$true)][string]$Repo,[Parameter(Mandatory=$true)][string]$BaseSha,
+        [Parameter(Mandatory=$true)][string]$HeadSha)
+    if($BaseSha -notmatch '^[a-fA-F0-9]{40}$' -or $HeadSha -notmatch '^[a-fA-F0-9]{40}$'){
+        throw 'GitHub commit comparison requires two full commit SHAs.'
+    }
+    $uri="https://api.github.com/repos/$Repo/compare/$BaseSha...$HeadSha"
+    $headers=@{Accept='application/vnd.github+json';'User-Agent'='CafeLauncher-ProfileRefresh';'X-GitHub-Api-Version'='2022-11-28';'Cache-Control'='no-cache';Pragma='no-cache'}
+    $comparison=Invoke-RestMethod -Uri $uri -Method Get -Headers $headers -TimeoutSec 12 -MaximumRedirection 0 -ErrorAction Stop
+    $status=[string]$comparison.status
+    if($status -notin @('ahead','behind','identical','diverged')){throw 'GitHub returned an invalid commit comparison status.'}
+    return $status
+}
+
 function Refresh-ProfileFromGitHub {
     param([Parameter(Mandatory=$true)][string]$ProfileName)
     if (-not $script:GamingProfiles.Contains($ProfileName)) { throw "Unknown profile: $ProfileName" }
     if ($script:PendingSync[$ProfileName]) {
-        Write-Log "$ProfileName has local edits not synced to GitHub; keeping local settings." 'INFO'
+        Write-Log "$ProfileName profile refresh: decision=local-pending; remote was not checked; keeping localPointer=$($script:GamingProfiles[$ProfileName].PointerSpeed)." 'INFO'
         return 'LocalPending'
     }
+    $path="profiles/$ProfileName.json"
+    $latestCommit=$null
+    $priorPointer=[string]$script:GamingProfiles[$ProfileName].PointerSpeed
+    $verifiedState=$script:VerifiedProfileState[$ProfileName]
     try {
-        $path="profiles/$ProfileName.json"
-        $verifiedState=$script:VerifiedProfileState[$ProfileName]
         # Every refresh checks the latest commit touching the profile, even on
         # a fresh install with no local verification metadata. Load by immutable
         # commit SHA so a stale mutable branch response cannot win over GitHub.
         $latestCommit=Get-LatestGitHubFileCommit -Repo $script:GithubRepo -Branch $script:GithubBranch -Path $path
         if($verifiedState -and $latestCommit -ceq $verifiedState.CommitSha){
-            Write-Log "$ProfileName latest GitHub profile commit matches the last verified sync; using those verified values."
+            Write-Log "$ProfileName profile refresh: decision=verified-cache; repo=$script:GithubRepo; branch=$script:GithubBranch; path=$path; latestCommit=$latestCommit; verifiedCommit=$($verifiedState.CommitSha); pointer=$priorPointer. Using values verified from this commit."
             return 'VerifiedGitHub'
+        }
+        if($verifiedState){
+            $commitOrder=Compare-GitHubCommitOrder -Repo $script:GithubRepo -BaseSha $verifiedState.CommitSha -HeadSha $latestCommit
+            if($commitOrder -eq 'behind'){
+                Write-Log "$ProfileName profile refresh: decision=ignore-stale-ancestor; repo=$script:GithubRepo; branch=$script:GithubBranch; path=$path; latestCommit=$latestCommit; verifiedCommit=$($verifiedState.CommitSha); comparison=$commitOrder; pointer=$priorPointer. Keeping verified settings." 'WARN'
+                return 'VerifiedGitHub'
+            }
+            if($commitOrder -eq 'diverged'){
+                Write-Log "$ProfileName profile refresh: decision=refuse-diverged-history; repo=$script:GithubRepo; branch=$script:GithubBranch; path=$path; latestCommit=$latestCommit; verifiedCommit=$($verifiedState.CommitSha); comparison=$commitOrder; pointer=$priorPointer. Keeping local settings." 'WARN'
+                return 'LocalFallback'
+            }
+            if($commitOrder -ne 'ahead'){throw 'GitHub commit order could not be verified.'}
         }
         $remoteRead=Get-GitHubJsonFromContentsApi -Repo $script:GithubRepo -Branch $latestCommit -Path $path -IncludeMetadata
         $remote=$remoteRead.Profile
         $script:VerifiedProfileState[$ProfileName]=@{BlobSha=[string]$remoteRead.BlobSha;CommitSha=$latestCommit}
-        if($verifiedState){Write-Log "$ProfileName changed on GitHub after the last verified sync; loaded the profile from its latest immutable commit."}
-        else{Write-Log "$ProfileName loaded from its latest immutable GitHub commit."}
+        $remotePointer=[string]$remote.PointerSpeed
+        $priorCommit=if($verifiedState){[string]$verifiedState.CommitSha}else{'none'}
+        Write-Log "$ProfileName profile refresh: decision=loaded-remote; repo=$script:GithubRepo; branch=$script:GithubBranch; path=$path; latestCommit=$latestCommit; priorVerifiedCommit=$priorCommit; blobSha=$($remoteRead.BlobSha); pointerBefore=$priorPointer; pointerLoaded=$remotePointer."
         Import-ProfileValues -ProfileName $ProfileName -SavedProfile $remote -SourceLabel 'GitHub'
         try { Save-ProfileSettings } catch { Write-Log "Unable to cache cloud settings: $($_.Exception.Message)" 'WARN' }
-        Write-Log "$ProfileName settings downloaded from GitHub (no login needed)."
+        Write-Log "$ProfileName settings loaded from GitHub commit $latestCommit (no login needed)."
         return 'GitHub'
     } catch {
-        Write-Log "Could not refresh $ProfileName settings from GitHub; using cached/local values. $($_.Exception.Message)" 'WARN'
+        $verifiedCommitForLog=if($verifiedState){[string]$verifiedState.CommitSha}else{'none'}
+        $candidateForLog=if($latestCommit){[string]$latestCommit}else{'unavailable'}
+        Write-Log "$ProfileName profile refresh: decision=local-fallback; repo=$script:GithubRepo; branch=$script:GithubBranch; path=$path; latestCommit=$candidateForLog; verifiedCommit=$verifiedCommitForLog; pointerKept=$priorPointer; error=$($_.Exception.Message)" 'WARN'
         return 'LocalFallback'
     }
 }
@@ -4124,7 +4155,6 @@ function Add-EditorTabWide {
 
 function Show-ProfileEditor {
     param([Parameter(Mandatory=$true)][string]$ProfileName)
-    $null=Refresh-ProfileFromGitHub -ProfileName $ProfileName
     $graphicsPreset=Get-ProfileGraphicsPreset -ProfileName $ProfileName
     $p = $script:GamingProfiles[$ProfileName]
     if (-not $p) { throw "Unknown profile: $ProfileName" }
@@ -4744,6 +4774,11 @@ function Show-ProfileEditor {
 
     [void]$dialog.ShowDialog($form)
     $dialog.Dispose()
+    # Recheck when returning to the dashboard (including when the user closes
+    # this editor with its X). Pending local edits are protected by the refresh.
+    try { Refresh-ProfileOnDashboard -Name $ProfileName } catch {
+        Write-Log "Dashboard refresh after editing $ProfileName failed: $($_.Exception.Message)" 'WARN'
+    }
 }
 
 
@@ -5273,6 +5308,21 @@ function Update-SelectedProfileCard {
         $script:SelectedProfileHint.Text='Selected for review. Click Apply on a profile row to run settings.'
     }
 }
+function Refresh-ProfileOnDashboard {
+    param([Parameter(Mandatory=$true)][string]$Name)
+    if(-not $script:GamingProfiles.Contains($Name)){return 'UnknownProfile'}
+    $result=Refresh-ProfileFromGitHub -ProfileName $Name
+    Update-SelectedProfileCard -Name $Name
+    return $result
+}
+function Refresh-DashboardProfiles {
+    $selectedName=[string]$script:SelectedProfile
+    foreach($name in @($script:GamingProfiles.Keys)){
+        try { $null=Refresh-ProfileFromGitHub -ProfileName ([string]$name) }
+        catch { Write-Log "Dashboard refresh failed for ${name}: $($_.Exception.Message)" 'WARN' }
+    }
+    if($selectedName){Update-SelectedProfileCard -Name $selectedName}
+}
 
 $root=New-Object System.Windows.Forms.TableLayoutPanel
 $root.Dock='Fill'
@@ -5611,6 +5661,9 @@ $startupTimer.Add_Tick({
     # inventory cannot delay the update prompt. The updater only prompts when
     # GitHub reports a newer release; failures remain in LIVE LOGS.
     Check-CafeLauncherUpdates
+    # Refresh all profiles after the dashboard appears, so Edit opens from the
+    # current remote values without performing a second check on button click.
+    Refresh-DashboardProfiles
     try {
         Write-Log 'Automatic startup inventory:'
         $summary = Get-PCDiagnostics
