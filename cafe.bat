@@ -366,8 +366,8 @@ function Open-NvidiaControlPanel {
 
 
 # Windows display-mode API and NVIDIA NVAPI first-stage settings helper.
-# Automatically chooses highest driver-advertised refresh at preferred resolution
-# if the requested Hz is unavailable; falls back to the CURRENT resolution only.
+# Profile applies select the highest advertised refresh at the profile resolution;
+# if that resolution is unavailable they keep the current resolution and maximize it.
 # The display mode helper uses a byte-array placeholder for DEVMODE's 16-byte union,
 # avoiding compiler/layout problems from the prior explicit union implementation.
 try {
@@ -443,6 +443,11 @@ public static class FabDisplayNative {
     public static bool IsAdvertisedMode(int w, int h, int hz) {
         const string device = @"\\.\DISPLAY1";
         if(w < 640 || h < 480 || hz < 0) return false;
+        DEVMODE current=NewMode();
+        if(EnumDisplaySettings(device,-1,ref current) &&
+           current.dmBitsPerPel >= 24 && (current.dmDisplayFlags & 2) == 0 &&
+           current.dmPelsWidth == w && current.dmPelsHeight == h &&
+           (hz == 0 || current.dmDisplayFrequency == hz)) return true;
         for(int i=0;i<4096;i++){
             DEVMODE dm=NewMode();
             if(!EnumDisplaySettings(device,i,ref dm)) break;
@@ -457,7 +462,8 @@ public static class FabDisplayNative {
     public static string GetDisplayModesReport() {
         const string device = @"\\.\DISPLAY1";
         DEVMODE current = NewMode();
-        string active = EnumDisplaySettings(device, -1, ref current)
+        bool hasCurrent = EnumDisplaySettings(device, -1, ref current);
+        string active = hasCurrent
             ? current.dmPelsWidth + "x" + current.dmPelsHeight + " @" + current.dmDisplayFrequency + "Hz"
             : "unknown";
         SortedSet<int> requested1080 = new SortedSet<int>();
@@ -474,11 +480,51 @@ public static class FabDisplayNative {
             if (dm.dmPelsWidth == current.dmPelsWidth && dm.dmPelsHeight == current.dmPelsHeight)
                 atCurrent.Add(dm.dmDisplayFrequency);
         }
-        return device + ": active " + active + "; 1080p Hz: " +
+        if (hasCurrent && current.dmDisplayFrequency >= 24 && current.dmBitsPerPel >= 24 &&
+            (current.dmDisplayFlags & 2) == 0) {
+            if (current.dmPelsWidth == 1920 && current.dmPelsHeight == 1080)
+                requested1080.Add(current.dmDisplayFrequency);
+            atCurrent.Add(current.dmDisplayFrequency);
+        }
+        return device + ": active " + active + "; 1080p Hz (available modes + active): " +
             (requested1080.Count > 0 ? String.Join(", ", requested1080) : "not advertised") +
-            "; current-resolution Hz: " +
+            "; current-resolution Hz (available modes + active): " +
             (atCurrent.Count > 0 ? String.Join(", ", atCurrent) : "not advertised") +
             "; modes checked=" + count + ".";
+    }
+
+    // Selects the maximum rate for one resolution from parallel mode arrays.
+    public static int GetHighestRefreshAtResolution(int width, int height, int[] widths, int[] heights, int[] rates) {
+        if (widths == null || heights == null || rates == null) return 0;
+        int count = Math.Min(widths.Length, Math.Min(heights.Length, rates.Length));
+        int highest = 0;
+        for (int i=0; i<count; i++)
+            if (widths[i] == width && heights[i] == height && rates[i] >= 24 && rates[i] > highest)
+                highest = rates[i];
+        return highest;
+    }
+
+    // Read-only: choose the highest progressive rate the active display advertises at a game resolution.
+    public static int GetHighestRefreshForResolution(int width, int height) {
+        const string device = @"\\.\DISPLAY1";
+        if (width < 640 || height < 480) return 0;
+        List<int> widths = new List<int>();
+        List<int> heights = new List<int>();
+        List<int> rates = new List<int>();
+        DEVMODE current = NewMode();
+        if (EnumDisplaySettings(device, -1, ref current) && current.dmBitsPerPel >= 24 &&
+            current.dmDisplayFrequency >= 24 && current.dmDisplayFrequency <= 600 &&
+            (current.dmDisplayFlags & 2) == 0) {
+            widths.Add(current.dmPelsWidth); heights.Add(current.dmPelsHeight); rates.Add(current.dmDisplayFrequency);
+        }
+        for (int i=0; i<4096; i++) {
+            DEVMODE dm = NewMode();
+            if (!EnumDisplaySettings(device, i, ref dm)) break;
+            if (dm.dmBitsPerPel < 24 || dm.dmDisplayFrequency < 24 || dm.dmDisplayFrequency > 600 ||
+                (dm.dmDisplayFlags & 2) != 0) continue;
+            widths.Add(dm.dmPelsWidth); heights.Add(dm.dmPelsHeight); rates.Add(dm.dmDisplayFrequency);
+        }
+        return GetHighestRefreshAtResolution(width, height, widths.ToArray(), heights.ToArray(), rates.ToArray());
     }
 
     public static bool TrySetDisplayMode(int desiredWidth, int desiredHeight, int desiredHz, out string report) {
@@ -488,8 +534,14 @@ public static class FabDisplayNative {
             report = "Cannot read current DISPLAY1 mode; no changes made.";
             return false;
         }
-        DEVMODE candidate = NewMode();
-        int tier = -1;  // 2 = preferred resolution/Hz; 1 = preferred resolution; 0 = current resolution
+        List<DEVMODE> modes = new List<DEVMODE>();
+        List<int> widths = new List<int>();
+        List<int> heights = new List<int>();
+        List<int> rates = new List<int>();
+        if (current.dmBitsPerPel >= 24 && current.dmDisplayFrequency >= 24 &&
+            (current.dmDisplayFlags & 2) == 0) {
+            modes.Add(current); widths.Add(current.dmPelsWidth); heights.Add(current.dmPelsHeight); rates.Add(current.dmDisplayFrequency);
+        }
         int count = 0;
         for (int i=0; i<4096; i++) {
             DEVMODE dm = NewMode();
@@ -497,30 +549,37 @@ public static class FabDisplayNative {
             count++;
             if (dm.dmBitsPerPel < 24 || dm.dmDisplayFrequency < 24 ||
                 (dm.dmDisplayFlags & 2) != 0) continue;
-            int thisTier = -1;
-            if (dm.dmPelsWidth == desiredWidth && dm.dmPelsHeight == desiredHeight)
-                thisTier = dm.dmDisplayFrequency == desiredHz ? 2 : 1;
-            else if (dm.dmPelsWidth == current.dmPelsWidth && dm.dmPelsHeight == current.dmPelsHeight)
-                thisTier = 0;
-            if (thisTier < 0) continue;
-            bool preferable = thisTier > tier ||
-                (thisTier == tier && dm.dmDisplayFrequency > candidate.dmDisplayFrequency) ||
-                (thisTier == tier && dm.dmDisplayFrequency == candidate.dmDisplayFrequency &&
-                    dm.dmBitsPerPel > candidate.dmBitsPerPel);
-            if (preferable) { candidate = dm; tier = thisTier; }
+            modes.Add(dm); widths.Add(dm.dmPelsWidth); heights.Add(dm.dmPelsHeight); rates.Add(dm.dmDisplayFrequency);
         }
-        if (tier < 0) {
+        int highest = GetHighestRefreshAtResolution(desiredWidth, desiredHeight, widths.ToArray(), heights.ToArray(), rates.ToArray());
+        int selectedWidth = desiredWidth, selectedHeight = desiredHeight;
+        bool preferredResolution = highest >= 24;
+        if (!preferredResolution) {
+            selectedWidth = current.dmPelsWidth; selectedHeight = current.dmPelsHeight;
+            highest = GetHighestRefreshAtResolution(selectedWidth, selectedHeight, widths.ToArray(), heights.ToArray(), rates.ToArray());
+        }
+        if (highest < 24) {
             report = device + " no suitable display mode advertised after checking " + count +
                 " modes. Keeping " + current.dmPelsWidth + "x" + current.dmPelsHeight +
                 " @" + current.dmDisplayFrequency + "Hz.";
             return false;
         }
+        DEVMODE candidate = NewMode();
+        bool candidateFound = false;
+        foreach (DEVMODE dm in modes) {
+            if (dm.dmPelsWidth != selectedWidth || dm.dmPelsHeight != selectedHeight || dm.dmDisplayFrequency != highest) continue;
+            if (!candidateFound || dm.dmBitsPerPel > candidate.dmBitsPerPel) { candidate = dm; candidateFound = true; }
+        }
+        if (!candidateFound) {
+            report = device + " could not resolve the selected " + selectedWidth + "x" + selectedHeight + " @" + highest + "Hz mode.";
+            return false;
+        }
         string choice = candidate.dmPelsWidth + "x" + candidate.dmPelsHeight +
             " @" + candidate.dmDisplayFrequency + "Hz";
-        string requested = desiredWidth + "x" + desiredHeight + " @" + desiredHz + "Hz";
-        string reason = tier == 2 ? "exact mode available" :
-            tier == 1 ? "requested Hz unavailable; highest advertised Hz at preferred resolution" :
-            "preferred resolution unavailable; using highest advertised Hz at current resolution";
+        string requested = desiredWidth + "x" + desiredHeight + " (profile refresh " + desiredHz + "Hz)";
+        string reason = preferredResolution
+            ? "highest advertised refresh at preferred resolution"
+            : "preferred resolution unavailable; highest advertised refresh at current resolution";
 
         // Avoid screen flicker and unnecessary registry writes if mode is already correct.
         if (current.dmPelsWidth == candidate.dmPelsWidth &&
@@ -1274,7 +1333,7 @@ function Get-NvidiaCompatibilityScan {
         try {
             $result.ExactMode=[FabDisplayNative]::IsAdvertisedMode($Width,$Height,$RefreshHz)
             $report.Add(('Requested '+$Width+'x'+$Height+' @'+$RefreshHz+'Hz: '+
-                $(if($result.ExactMode){'advertised'}else{'not advertised; existing safest available mode fallback will be used'})))
+                $(if($result.ExactMode){'available or already active'}else{'not available; trying the highest advertised Hz at the requested resolution, then the current resolution'})))
             $report.Add([FabDisplayNative]::GetDisplayModesReport())
         }catch{
             $report.Add('Monitor mode enumeration unavailable: '+$_.Exception.Message)
@@ -1316,18 +1375,22 @@ function Apply-NvidiaGamingSettings {
         [ValidateRange(30,600)][int]$RefreshHz = 360,
         [ValidateRange(0,100)][int]$Vibrance = 75
     )
-    Write-Log "NVIDIA gaming-settings apply started (requested: ${Width}x${Height} @${RefreshHz}Hz, vibrance ${Vibrance}%)."
+    Write-Log "NVIDIA gaming-settings apply started (profile resolution: ${Width}x${Height}; highest advertised refresh; configured refresh ${RefreshHz}Hz; vibrance ${Vibrance}%)."
     $compat=$null
     try{$compat=Write-NvidiaCompatibilityScan -Width $Width -Height $Height -RefreshHz $RefreshHz}
     catch{Write-Log ("NVIDIA preflight unavailable: "+$_.Exception.Message) "WARN"}
 
-    Write-Log "Attempting Windows display 1: ${Width}x${Height} at $RefreshHz Hz."
+    Write-Log "Profile display apply: selecting the highest advertised refresh at ${Width}x${Height}; if unavailable, keep current resolution and select its highest refresh."
     if (("FabDisplayNative" -as [type]) -and ($null -eq $compat -or $compat.DisplayHelper)) {
         try {
             $displayReport = ""
             $displayOk = [FabDisplayNative]::TrySetDisplayMode($Width, $Height, $RefreshHz, [ref]$displayReport)
             if ($displayOk) {
-                Write-Log $displayReport
+                if($displayReport -match 'preferred resolution unavailable'){
+                    Write-Log $displayReport "WARN"
+                }else{
+                    Write-Log $displayReport
+                }
             } else {
                 Write-Log $displayReport "WARN"
             }
@@ -2819,6 +2882,9 @@ $script:LogihubDownloadProcess=$null
 $script:LogihubDownloadTimer=$null
 $script:LogihubRequestedDPI=$null
 $script:LogihubDownloadStatus=$null
+$script:LogihubRequestGeneration=0
+$script:LiveDpiVerificationTimer=$null
+$script:LiveDpiVerificationContext=$null
 $script:LogihubExpectedSHA='dc30e45d4ba1df7d043c7c9a0aacda4257e09f5f23bb980466b985b77aa7dda4'
 $script:LogihubDirectory=Join-Path $env:LOCALAPPDATA 'CafeLauncher\logihub'
 $script:LogihubExe=Join-Path $script:LogihubDirectory 'logihub.exe'
@@ -2912,6 +2978,7 @@ function Request-LogitechLiveDPI {
     param([int]$DPI=800)
     Assert-LogitechDPI $DPI
     # Latest-click-wins: a later profile changes the target DPI, not the download.
+    $script:LogihubRequestGeneration++
     $script:LogihubRequestedDPI=$DPI
     $script:LogihubRequestedRun=if($script:StepScope){$script:StepScope.Run}else{'Manual DPI'}
     # A cached upstream/older executable must never run; download the pinned fork
@@ -2987,6 +3054,50 @@ function Get-SelectedSuperlight {
     return $selected
 }
 
+function Test-SameSuperlight {
+    param($Expected,$Actual)
+    return ($Expected -and $Actual -and [int]$Expected.Index -eq [int]$Actual.Index -and
+        [string]$Expected.Model -ceq [string]$Actual.Model)
+}
+function Get-LogitechDPIReadback {
+    param([int]$DeviceIndex)
+    $read=Invoke-Logihub -Arguments @('dpi','get','--device',([string]$DeviceIndex))
+    foreach($line in @($read -split '\r?\n' | Where-Object {$_ -match '\S'})){
+        if($line -match ('^\s*'+$DeviceIndex+'\s+.+?\s+(\d+)\s*$')){return [int]$Matches[1]}
+    }
+    throw ('Logitech DPI read-back cannot be parsed for device '+$DeviceIndex+': '+$read)
+}
+function Schedule-LogitechDpiVerification {
+    param($Target,[int]$DPI,[int]$Generation,[string]$Run)
+    if($script:LiveDpiVerificationTimer){$script:LiveDpiVerificationTimer.Stop();$script:LiveDpiVerificationTimer.Dispose()}
+    $script:LiveDpiVerificationContext=[pscustomobject]@{Target=$Target;DPI=$DPI;Generation=$Generation;Run=$Run}
+    $script:LiveDpiVerificationTimer=New-Object System.Windows.Forms.Timer
+    $script:LiveDpiVerificationTimer.Interval=1500
+    $script:LiveDpiVerificationTimer.Add_Tick({
+        $timer=$script:LiveDpiVerificationTimer
+        $timer.Stop()
+        $context=$script:LiveDpiVerificationContext
+        try {
+            if(-not $context -or $context.Generation -ne $script:LogihubRequestGeneration){return}
+            Start-StepScope -Run $context.Run -Step 'Delayed Logitech DPI verification'
+            $current=Get-SelectedSuperlight
+            if(-not (Test-SameSuperlight -Expected $context.Target -Actual $current)){
+                Write-Log 'The connected Superlight changed after DPI apply; delayed verification did not target a different mouse.' 'WARN'
+            }else{
+                $actual=Get-LogitechDPIReadback -DeviceIndex ([int]$context.Target.Index)
+                if($actual -ne $context.DPI){Write-Log ('DPI changed after apply: requested '+$context.DPI+', delayed read-back '+$actual+'. G HUB or onboard profile may have restored it.') 'WARN'}
+                else{Write-Log ('Delayed Logitech DPI verification passed: '+$actual+' DPI.')}
+            }
+            Complete-StepScope -Detail 'Delayed read-back checks whether another Logitech profile changed DPI after application.'
+            Write-RunSummary -Run $context.Run
+        }catch{
+            if($script:StepScope){Write-Log ('Delayed Logitech DPI verification failed: '+$_.Exception.Message) 'WARN';Complete-StepScope -Detail 'Delayed DPI could not be verified.';Write-RunSummary -Run $context.Run}
+            else{Write-Log ('Delayed Logitech DPI verification skipped: '+$_.Exception.Message) 'WARN'}
+        }finally{$timer.Dispose();$script:LiveDpiVerificationTimer=$null;$script:LiveDpiVerificationContext=$null}
+    })
+    $script:LiveDpiVerificationTimer.Start()
+}
+
 function Set-LogitechLiveDPI {
     param([int]$DPI=800)
     Assert-LogitechDPI $DPI
@@ -2994,19 +3105,23 @@ function Set-LogitechLiveDPI {
         Write-Log 'G HUB detected; leaving it running. It may override the DPI later.' 'WARN'
     }
     $target=Get-SelectedSuperlight
-    [void](Invoke-Logihub -Arguments @('dpi','set',([string]$DPI),'--device',([string]$target.Index)))
-    $read=Invoke-Logihub -Arguments @('dpi','get','--device',([string]$target.Index))
-    $deviceIndex=[int]$target.Index
-    $readValue=$null
-    foreach($line in @($read -split '\r?\n' | Where-Object {$_ -match '\S'})){
-        if($line -match ('^\s*'+$deviceIndex+'\s+.+?\s+(\d+)\s*$')){
-            $readValue=[int]$Matches[1]
-            break
-        }
+    # Device indexes are enumeration-scoped; revalidate directly before write.
+    $current=Get-SelectedSuperlight
+    if(-not (Test-SameSuperlight -Expected $target -Actual $current)){
+        throw 'The connected Superlight changed during DPI detection. No DPI write was attempted; retry.'
     }
-    if($null -eq $readValue){throw ('Logitech DPI read-back cannot be parsed for device '+$deviceIndex+': '+$read)}
+    $target=$current
+    [void](Invoke-Logihub -Arguments @('dpi','set',([string]$DPI),'--device',([string]$target.Index)))
+    $after=Get-SelectedSuperlight
+    if(-not (Test-SameSuperlight -Expected $target -Actual $after)){
+        throw 'The connected Superlight changed during DPI apply; read-back was not attributed to a different device.'
+    }
+    $deviceIndex=[int]$target.Index
+    $readValue=Get-LogitechDPIReadback -DeviceIndex $deviceIndex
     if($readValue -ne $DPI){throw ('Logitech DPI verification failed: requested '+$DPI+' but mouse reports '+$readValue)}
     Write-Log ('Logitech live DPI verified: requested '+$DPI+'; read-back '+$readValue+' (device '+$deviceIndex+').')
+    $run=if($script:StepScope){$script:StepScope.Run}elseif($script:LogihubRequestedRun){$script:LogihubRequestedRun}else{'Manual DPI'}
+    Schedule-LogitechDpiVerification -Target $target -DPI $DPI -Generation $script:LogihubRequestGeneration -Run $run
 }
 function Set-LogitechOnboardDPI {
     param([int]$DPI=800)
@@ -3166,7 +3281,7 @@ function Invoke-GraphicsOnly {
     param([Parameter(Mandatory=$true)][string]$ModeName)
     Start-StepScope -Run ('Graphics '+$ModeName) -Step 'Apply Graphics'
     try {
-    $expected='f6dbb6d21ceeecc32166c73a14e0d8d2e9066971'
+    $expected='c9383d974f94305e2077044718531180ea95270b'
     $source='https://raw.githubusercontent.com/fabjoncela/Cs-script/main/graphics/ApplyGraphics.ps1'
     $cache=Join-Path $env:LOCALAPPDATA 'CafeLauncher\graphics-module.ps1'
     $parent=Split-Path -Parent $cache
@@ -3573,6 +3688,7 @@ $root.Controls.Add($footer,0,3)
 
 $form.Add_FormClosed({
     if($script:LogihubDownloadTimer){$script:LogihubDownloadTimer.Stop();$script:LogihubDownloadTimer.Dispose();$script:LogihubDownloadTimer=$null}
+    if($script:LiveDpiVerificationTimer){$script:LiveDpiVerificationTimer.Stop();$script:LiveDpiVerificationTimer.Dispose();$script:LiveDpiVerificationTimer=$null}
     $script:LogihubRequestedDPI=$null
     if ($script:ColorWatchTimer) {
         try {$script:ColorWatchTimer.Stop();$script:ColorWatchTimer.Dispose()}catch{}

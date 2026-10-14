@@ -54,6 +54,22 @@ function ConvertTo-VideoGraphicsSettings {
     }
     return ,$settings
 }
+function Assert-CS2GraphicsDisplayPolicy {
+    param($Preset)
+    $policy=if($Preset.PSObject.Properties['DisplayPolicy']){[string]$Preset.DisplayPolicy}else{
+        if($Preset.ProfileName -ceq 'BrileMode'){'PreserveCurrent'}else{'ApplyPreset'}
+    }
+    if($policy -notin @('ApplyPreset','PreserveCurrent')){throw ('Unknown graphics display policy: '+$policy)}
+    if($policy -eq 'PreserveCurrent'){
+        foreach($field in @('Width','Height','RefreshHz','AspectRatioMode','Fullscreen')){
+            $property=$Preset.Settings.PSObject.Properties[$field]
+            if($property -and $null -ne $property.Value){
+                throw ('PreserveCurrent display policy cannot set '+$field+'.')
+            }
+        }
+    }
+    return $policy
+}
 function Get-CS2ModeGraphicsPreset {
     param([string]$ModeName)
     if($ModeName -notin @('FabMode','ArliMode','BrileMode','ArmlMode','OliMode')){throw 'Invalid graphics mode name.'}
@@ -64,6 +80,7 @@ function Get-CS2ModeGraphicsPreset {
         [Net.ServicePointManager]::SecurityProtocol=[Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
         $preset=Invoke-RestMethod -Uri $url -Method Get -TimeoutSec 10 -Headers @{'Cache-Control'='no-cache'} -ErrorAction Stop
         if($preset.ProfileName -cne $ModeName -or [int]$preset.SchemaVersion -ne 1){throw 'Preset profile/schema mismatch.'}
+        [void](Assert-CS2GraphicsDisplayPolicy -Preset $preset)
         [void](ConvertTo-VideoGraphicsSettings -Preset $preset)
         try{
             $dir=Split-Path -Parent $cache
@@ -78,6 +95,7 @@ function Get-CS2ModeGraphicsPreset {
         try{
             $preset=Get-Content -LiteralPath $file -Raw -ErrorAction Stop|ConvertFrom-Json -ErrorAction Stop
             if($preset.ProfileName -cne $ModeName -or [int]$preset.SchemaVersion -ne 1){throw 'Preset profile/schema mismatch.'}
+            [void](Assert-CS2GraphicsDisplayPolicy -Preset $preset)
             [void](ConvertTo-VideoGraphicsSettings -Preset $preset)
             Write-Log ("Using offline graphics preset: "+$file) 'WARN'
             return $preset
@@ -120,7 +138,7 @@ function Update-CS2VideoGraphicsText {
     $skipped=New-Object 'System.Collections.Generic.List[string]'
     foreach($field in @($Settings.Keys)){
         if(-not $rules.Contains($field)){continue}
-        if($SkipDisplay -and $field -in @('Width','Height','RefreshHz')){
+        if($SkipDisplay -and $field -in @('Width','Height','RefreshHz','AspectRatioMode','Fullscreen')){
             $skipped.Add($field+' (unsupported display mode)');continue
         }
         $match=Find-CS2VideoSetting -Text $modified -Key $rules[$field].Key
@@ -143,6 +161,7 @@ function Update-CS2VideoGraphicsText {
 # Never use null as File.Replace's third argument on Windows PowerShell 5.1.
 function Save-CS2VideoFileWithBackup {
     param([Parameter(Mandatory=$true)][string]$VideoPath,
+          [Parameter(Mandatory=$true)][string]$ExpectedAccountID,
           [Parameter(Mandatory=$true)][string]$UpdatedText,
           [Parameter(Mandatory=$true)][System.Text.Encoding]$Encoding,
           [Parameter(Mandatory=$true)][string]$BackupPath)
@@ -157,12 +176,24 @@ function Save-CS2VideoFileWithBackup {
     $swapBackup=Join-Path $parent ('cs2_video.cafe-'+$id+'.bak')
     $replaced=$false
     $safeToRemoveSwap=$false
+    # Steam can change accounts while the launcher remains open. Validate the
+    # destination again at the last write boundary, not only during discovery.
+    $active=Get-ActiveSteamCS2Video
+    if($active.AccountID -cne $ExpectedAccountID -or
+       -not [string]::Equals([IO.Path]::GetFullPath($active.Path),[IO.Path]::GetFullPath($VideoPath),[StringComparison]::OrdinalIgnoreCase)){
+        throw 'The active Steam account changed during graphics preparation. No video settings were written.'
+    }
     # The permanent backup is written before any replacement attempt.
     Copy-Item -LiteralPath $VideoPath -Destination $BackupPath -ErrorAction Stop
     try {
         [IO.File]::WriteAllText($temp,$UpdatedText,$Encoding)
         if (Get-Process -Name cs2 -ErrorAction SilentlyContinue) {
             throw 'CS2 started while preparing graphics. Original video file kept.'
+        }
+        $active=Get-ActiveSteamCS2Video
+        if($active.AccountID -cne $ExpectedAccountID -or
+           -not [string]::Equals([IO.Path]::GetFullPath($active.Path),[IO.Path]::GetFullPath($VideoPath),[StringComparison]::OrdinalIgnoreCase)){
+            throw 'The active Steam account changed immediately before graphics replacement. Original video file kept.'
         }
         # File.Replace requires a LEGAL, NON-NULL third path on Windows.
         # Keep it next to the target for same-volume atomic replacement.
@@ -198,8 +229,12 @@ function Apply-CS2ModeGraphics {
     try{
         if(Get-Process -Name cs2 -ErrorAction SilentlyContinue){throw 'CS2 is running. Close it before applying graphics.'}
         $preset=Get-CS2ModeGraphicsPreset -ModeName $ModeName
+        $displayPolicy=Assert-CS2GraphicsDisplayPolicy -Preset $preset
         $settings=ConvertTo-VideoGraphicsSettings -Preset $preset
         if($settings.Count -eq 0){throw 'Graphics preset has no values selected.'}
+        if($displayPolicy -eq 'PreserveCurrent'){
+            Write-Log ($ModeName+' display policy: preserving the current CS2 resolution, refresh and fullscreen/aspect settings; only graphics-quality fields will change.')
+        }
         $active=Get-ActiveSteamCS2Video
         $bytes=[IO.File]::ReadAllBytes($active.Path)
         if($bytes.Length -lt 16 -or $bytes.Length -gt 1048576){throw 'cs2_video.txt size is unexpected.'}
@@ -224,10 +259,26 @@ function Apply-CS2ModeGraphics {
                 if(-not $m -or $m.Groups['value'].Value -notmatch '^\d+$'){throw 'Cannot verify existing resolution height.'}
                 $h=[int]$m.Groups['value'].Value
             }
-            $hz=if($settings.Contains('RefreshHz')){[int]$settings['RefreshHz']}else{0}
-            if(-not ('FabDisplayNative' -as [type]) -or -not [FabDisplayNative]::IsAdvertisedMode($w,$h,$hz)){
+            $refreshNumerator=Find-CS2VideoSetting $before 'setting.refreshrate_numerator'
+            $refreshDenominator=Find-CS2VideoSetting $before 'setting.refreshrate_denominator'
+            if($null -eq $refreshNumerator -or $null -eq $refreshDenominator){
                 $skipDisplay=$true
-                Write-Log ("DISPLAY1 does not advertise "+$w+'x'+$h+'@'+$hz+'Hz; preserving resolution and refresh.') 'WARN'
+                Write-Log 'CS2 video config lacks refresh numerator/denominator; preserving all existing display settings.' 'WARN'
+            }else{
+                $requestedHz=if($settings.Contains('RefreshHz')){[int]$settings['RefreshHz']}else{0}
+                $hz=0
+                if('FabDisplayNative' -as [type]){$hz=[FabDisplayNative]::GetHighestRefreshForResolution($w,$h)}
+                if($hz -ge 24){
+                    $settings['RefreshHz']=$hz
+                    if($requestedHz -gt 0 -and $requestedHz -ne $hz){
+                        Write-Log ("CS2 display mode "+$w+'x'+$h+": using highest advertised refresh "+$hz+'Hz instead of preset '+$requestedHz+'Hz.')
+                    }else{
+                        Write-Log ("CS2 display mode "+$w+'x'+$h+": using highest advertised refresh "+$hz+'Hz.')
+                    }
+                }else{
+                    $skipDisplay=$true
+                    Write-Log ("DISPLAY1 has no supported progressive refresh mode for CS2 resolution "+$w+'x'+$h+"; preserving the existing resolution and refresh.") 'WARN'
+                }
             }
         }
         if($settings.Contains('NvidiaReflex')){
@@ -245,7 +296,7 @@ function Apply-CS2ModeGraphics {
         $backupFolder=Join-Path $env:LOCALAPPDATA ("CafeLauncher\graphics-backups\"+$active.AccountID)
         if(-not (Test-Path -LiteralPath $backupFolder)){[void](New-Item -ItemType Directory -Path $backupFolder -Force)}
         $backup=Join-Path $backupFolder ("cs2_video-"+$ModeName+'-'+(Get-Date -Format 'yyyyMMdd-HHmmss-fff')+'.txt')
-        Save-CS2VideoFileWithBackup -VideoPath $active.Path -UpdatedText $edit.Text -Encoding $encoding -BackupPath $backup
+        Save-CS2VideoFileWithBackup -VideoPath $active.Path -ExpectedAccountID $active.AccountID -UpdatedText $edit.Text -Encoding $encoding -BackupPath $backup
         Write-Log ("Applied "+$edit.Applied.Count+' graphics keys for '+$ModeName+' (Steam '+$active.AccountID+'). Backup: '+$backup)
         [void][System.Windows.Forms.MessageBox]::Show(
             ($ModeName+' graphics applied. Launch CS2 to use them.'+[Environment]::NewLine+
