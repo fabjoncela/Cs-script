@@ -163,6 +163,7 @@ function Update-CS2VideoGraphicsText {
     $modified=$Text
     $applied=New-Object 'System.Collections.Generic.List[string]'
     $skipped=New-Object 'System.Collections.Generic.List[string]'
+    $changedFields=New-Object 'System.Collections.Generic.List[string]'
     foreach($field in @($Settings.Keys)){
         if(-not $rules.Contains($field)){continue}
         if($SkipDisplay -and $field -in @('Width','Height','RefreshHz','AspectRatioMode','Fullscreen')){
@@ -171,16 +172,40 @@ function Update-CS2VideoGraphicsText {
         $match=Find-CS2VideoSetting -Text $modified -Key $rules[$field].Key
         if($null -eq $match){$skipped.Add($field+' (not present in this CS2 version)');continue}
         $v=$match.Groups['value']
-        $modified=$modified.Remove($v.Index,$v.Length).Insert($v.Index,[string]$Settings[$field])
+        $newValue=[string]$Settings[$field]
+        if($v.Value -cne $newValue){$changedFields.Add($field)}
+        $modified=$modified.Remove($v.Index,$v.Length).Insert($v.Index,$newValue)
         $applied.Add($field)
     }
     if($Settings.Contains('RefreshHz') -and -not $SkipDisplay -and $applied.Contains('RefreshHz')){
         $m=Find-CS2VideoSetting -Text $modified -Key 'setting.refreshrate_denominator'
         if($null -eq $m){throw 'Missing refresh denominator key; refusing a partial refresh update.'}
         $v=$m.Groups['value']
+        if($v.Value -cne '1' -and -not $changedFields.Contains('RefreshHz')){$changedFields.Add('RefreshHz')}
         $modified=$modified.Remove($v.Index,$v.Length).Insert($v.Index,'1')
     }
-    return [pscustomobject]@{Text=$modified;Applied=@($applied);Skipped=@($skipped);Changed=($modified -cne $Text)}
+    return [pscustomobject]@{Text=$modified;Applied=@($applied);Skipped=@($skipped);ChangedFields=@($changedFields);Changed=($modified -cne $Text)}
+}
+
+function Format-CS2GraphicsResultSummary {
+    param([string]$ProfileName,[string]$AccountID,[string[]]$Applied,[string[]]$Skipped,
+          [string[]]$ChangedFields,[string]$DisplaySummary,[string]$ScalingSummary,
+          [string]$BackupPath,[bool]$FileChanged,[bool]$ScalingVerified)
+    $lines=New-Object 'System.Collections.Generic.List[string]'
+    $appliedItems=@($Applied|Where-Object{-not [string]::IsNullOrWhiteSpace([string]$_)})
+    $skippedItems=@($Skipped|Where-Object{-not [string]::IsNullOrWhiteSpace([string]$_)})
+    $changedItems=@($ChangedFields|Where-Object{-not [string]::IsNullOrWhiteSpace([string]$_)})
+    $warning=($skippedItems.Count -gt 0 -or -not $ScalingVerified)
+    $lines.Add($(if($warning){'Completed with warnings.'}else{'Completed successfully.'}))
+    $lines.Add(('Profile: '+$ProfileName+' (Steam account '+$AccountID+')'))
+    $lines.Add($(if($FileChanged){'CS2 video file: updated and read-back verified.'}else{'CS2 video file: supported settings already matched; no write needed.'}))
+    $lines.Add(('Applied/confirmed ('+$appliedItems.Count+'): '+$(if($appliedItems.Count){$appliedItems -join ', '}else{'none'})))
+    $lines.Add(('Changed ('+$changedItems.Count+'): '+$(if($changedItems.Count){$changedItems -join ', '}else{'none'})))
+    $lines.Add(('Skipped ('+$skippedItems.Count+'): '+$(if($skippedItems.Count){$skippedItems -join '; '}else{'none'})))
+    $lines.Add(('Display: '+$DisplaySummary))
+    $lines.Add(('NVIDIA scaling: '+$ScalingSummary))
+    if($BackupPath){$lines.Add(('Backup: '+$BackupPath))}
+    return ($lines -join [Environment]::NewLine)
 }
 # Save a verified video update with two backups:
 # - permanent copy in CafeLauncher/graphics-backups for user recovery
@@ -261,6 +286,8 @@ function Apply-CS2ModeGraphics {
         $scalingMode=if($preset.PSObject.Properties['ScalingMode'] -and $null -ne $preset.ScalingMode){[int]$preset.ScalingMode}else{2}
         $settings=ConvertTo-VideoGraphicsSettings -Preset $preset
         if($settings.Count -eq 0){throw 'Graphics preset has no values selected.'}
+        $displaySummary=if($displayPolicy -eq 'PreserveCurrent'){'preserved by this profile policy.'}else{'not changed by this preset.'}
+        $hardwareSkipped=New-Object 'System.Collections.Generic.List[string]'
         if($displayPolicy -eq 'PreserveCurrent'){
             Write-Log ($ModeName+' display policy: preserving the current CS2 resolution, refresh and fullscreen/aspect settings; only graphics-quality fields will change.')
         }
@@ -292,7 +319,8 @@ function Apply-CS2ModeGraphics {
             $refreshDenominator=Find-CS2VideoSetting $before 'setting.refreshrate_denominator'
             if($null -eq $refreshNumerator -or $null -eq $refreshDenominator){
                 $skipDisplay=$true
-                Write-Log 'CS2 video config lacks refresh numerator/denominator; preserving all existing display settings.' 'WARN'
+                $displaySummary='fallback: CS2 video config lacks refresh numerator/denominator; existing resolution, refresh, and display mode were preserved.'
+                Write-Log $displaySummary 'WARN'
             }else{
                 $requestedHz=if($settings.Contains('RefreshHz')){[int]$settings['RefreshHz']}else{0}
                 $hz=0
@@ -308,6 +336,7 @@ function Apply-CS2ModeGraphics {
                 }
                 if($modeFound -and $hz -ge 24){
                     $settings['RefreshHz']=$hz
+                    $displaySummary=('applied '+$w+'x'+$h+' @ '+$hz+' Hz ('+$refreshPolicy+' refresh policy).')
                     if($refreshPolicy -eq 'Exact'){
                         Write-Log ("CS2 display mode "+$w+'x'+$h+": applying selected refresh "+$hz+'Hz (Exact).')
                     }elseif($requestedHz -gt 0 -and $requestedHz -ne $hz){
@@ -317,8 +346,25 @@ function Apply-CS2ModeGraphics {
                     }
                 }else{
                     $skipDisplay=$true
-                    $fallback=if($refreshPolicy -eq 'Exact'){"does not advertise the selected "+$requestedHz+'Hz at '}else{'has no supported progressive refresh mode at '}
-                    Write-Log ("DISPLAY1 "+$fallback+"CS2 resolution "+$w+'x'+$h+"; preserving all existing display settings.") 'WARN'
+                    if($refreshPolicy -eq 'Exact'){
+                        if('FabDisplayNative' -as [type]){
+                            $highestAtResolution=[FabDisplayNative]::GetHighestRefreshForResolution($w,$h)
+                            if($highestAtResolution -ge 24){
+                                $displaySummary=('fallback: DISPLAY1 supports '+$w+'x'+$h+' but not the requested exact '+$requestedHz+' Hz; highest advertised is '+$highestAtResolution+' Hz. Existing display settings were preserved.')
+                            }else{
+                                $displaySummary=('fallback: DISPLAY1 does not advertise CS2 resolution '+$w+'x'+$h+'; existing resolution, refresh, and display mode were preserved.')
+                            }
+                        }else{
+                            $displaySummary=('fallback: display modes could not be queried; existing resolution, refresh, and display mode were preserved.')
+                        }
+                    }else{
+                        if('FabDisplayNative' -as [type]){
+                            $displaySummary=('fallback: DISPLAY1 has no supported progressive refresh mode at CS2 resolution '+$w+'x'+$h+'; existing resolution, refresh, and display mode were preserved.')
+                        }else{
+                            $displaySummary=('fallback: display modes could not be queried; existing resolution, refresh, and display mode were preserved.')
+                        }
+                    }
+                    Write-Log $displaySummary 'WARN'
                 }
             }
         }
@@ -326,10 +372,15 @@ function Apply-CS2ModeGraphics {
             $gpu=@(Get-CimInstance Win32_VideoController -ErrorAction SilentlyContinue|Where-Object {$_.Name -match 'NVIDIA'}).Count -gt 0
             if(-not $gpu){
                 [void]$settings.Remove('NvidiaReflex')
+                $hardwareSkipped.Add('NvidiaReflex (no NVIDIA GPU detected; current value preserved)')
                 Write-Log 'No NVIDIA GPU detected; preserving NVIDIA Reflex.' 'WARN'
             }
         }
         $edit=Update-CS2VideoGraphicsText -Text $before -Settings $settings -SkipDisplay:$skipDisplay
+        $displayKeySkips=@($edit.Skipped|Where-Object{$_ -match '^(Width|Height|RefreshHz|AspectRatioMode|Fullscreen) '})
+        if(-not $skipDisplay -and $displayKeySkips.Count -gt 0){
+            $displaySummary+=(' CS2 video config did not contain: '+(($displayKeySkips|ForEach-Object{($_ -split ' ',2)[0]}) -join ', ')+'.')
+        }
         foreach($skipped in $edit.Skipped){Write-Log ("Skipped graphics key: "+$skipped) 'WARN'}
         if($edit.Applied.Count -eq 0){throw 'No compatible video setting keys found; nothing changed.'}
         $backup=$null
@@ -342,14 +393,24 @@ function Apply-CS2ModeGraphics {
         }else{Write-Log ($ModeName+' CS2 video settings already match; no file write.')}
         if('FabNvApi' -as [type]){
             $scalingReport=''
-            if([FabNvApi]::TrySetGpuScalingMode($scalingMode,[ref]$scalingReport)){Write-Log $scalingReport}
+            $scalingVerified=[FabNvApi]::TrySetGpuScalingMode($scalingMode,[ref]$scalingReport)
+            if($scalingVerified){Write-Log $scalingReport}
             else{Write-Log ('CS2 graphics saved, but NVIDIA scaling was not verified: '+$scalingReport) 'WARN'}
-        }else{Write-Log 'CS2 graphics saved; NVIDIA scaling could not be changed because NVAPI is unavailable.' 'WARN'}
+        }else{
+            $scalingVerified=$false
+            $scalingReport='could not be changed because NVAPI is unavailable.'
+            Write-Log ('CS2 graphics saved; NVIDIA scaling '+$scalingReport) 'WARN'
+        }
         if($edit.Changed){Write-Log ("Applied "+$edit.Applied.Count+' graphics keys for '+$ModeName+' (Steam '+$active.AccountID+'). Backup: '+$backup)}
         else{Write-Log ("Verified/applied NVIDIA scaling mode for "+$ModeName+' (Steam '+$active.AccountID+').')}
+        $allSkipped=@($edit.Skipped)+@($hardwareSkipped.ToArray())
+        $summary=Format-CS2GraphicsResultSummary -ProfileName $ModeName -AccountID $active.AccountID `
+            -Applied @($edit.Applied) -Skipped $allSkipped -ChangedFields @($edit.ChangedFields) `
+            -DisplaySummary $displaySummary -ScalingSummary $scalingReport -BackupPath $backup `
+            -FileChanged ([bool]$edit.Changed) -ScalingVerified ([bool]$scalingVerified)
         [void][System.Windows.Forms.MessageBox]::Show(
-            ($ModeName+' graphics preset processed. Launch CS2 to use video settings.'+[Environment]::NewLine+
-             $(if($backup){'Backup: '+$backup}else{'Video settings already matched; no backup needed.'})),'CS2 Graphics Applied','OK','Information')
+            ($summary+[Environment]::NewLine+[Environment]::NewLine+'Launch CS2 to use the video settings.'),
+            'CS2 Graphics Result','OK',$(if($allSkipped.Count -gt 0 -or -not $scalingVerified){'Warning'}else{'Information'}))
     }catch{
         Write-Log ("Apply Graphics failed for "+$ModeName+': '+$_.Exception.Message) 'ERROR'
         [void][System.Windows.Forms.MessageBox]::Show(

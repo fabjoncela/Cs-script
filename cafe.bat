@@ -4,7 +4,7 @@ start "" powershell.exe -NoProfile -ExecutionPolicy Bypass -STA -WindowStyle Hid
 exit /b
 
 # POWERSHELL_GUI
-# CAFE_RELEASE=2026.10.14.1
+# CAFE_RELEASE=2026.10.14.2
 
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
@@ -2255,8 +2255,8 @@ function ConvertTo-CafeGraphicsPreset {
 }
 
 function Get-ProfileGraphicsPreset {
-    param([Parameter(Mandatory=$true)][string]$ProfileName)
-    if($script:PendingSync[$ProfileName] -and $script:GraphicsPresets.Contains($ProfileName)){
+    param([Parameter(Mandatory=$true)][string]$ProfileName,[switch]$Canonical)
+    if(-not $Canonical -and $script:PendingSync[$ProfileName] -and $script:GraphicsPresets.Contains($ProfileName)){
         return $script:GraphicsPresets[$ProfileName]
     }
     $cache=Join-Path $env:LOCALAPPDATA ("CafeLauncher\graphics-cache\"+$ProfileName+'.json')
@@ -2265,8 +2265,10 @@ function Get-ProfileGraphicsPreset {
         $url="https://raw.githubusercontent.com/$($script:GithubRepo)/$($script:GithubBranch)/graphics/$ProfileName.json"
         $remote=Invoke-RestMethod -Uri $url -Method Get -TimeoutSec 10 -Headers @{'Cache-Control'='no-cache'} -ErrorAction Stop
         $preset=ConvertTo-CafeGraphicsPreset -ProfileName $ProfileName -Preset $remote
-        $script:GraphicsPresets[$ProfileName]=$preset
-        $script:GamingProfiles[$ProfileName].ScalingMode=[int]$preset.ScalingMode
+        if(-not $Canonical){
+            $script:GraphicsPresets[$ProfileName]=$preset
+            $script:GamingProfiles[$ProfileName].ScalingMode=[int]$preset.ScalingMode
+        }
         try{$dir=Split-Path -Parent $cache;if(-not(Test-Path -LiteralPath $dir)){[void](New-Item -ItemType Directory -Path $dir -Force)};[IO.File]::WriteAllText($cache,($preset|ConvertTo-Json -Depth 6),(New-Object Text.UTF8Encoding($false)))}catch{Write-Log ('Graphics preset cache warning: '+$_.Exception.Message) 'WARN'}
         return $preset
     }catch{Write-Log ('Graphics preset download unavailable: '+$_.Exception.Message) 'WARN'}
@@ -2275,12 +2277,14 @@ function Get-ProfileGraphicsPreset {
         try{
             $raw=Get-Content -LiteralPath $file -Raw -ErrorAction Stop|ConvertFrom-Json -ErrorAction Stop
             $preset=ConvertTo-CafeGraphicsPreset -ProfileName $ProfileName -Preset $raw
-            $script:GraphicsPresets[$ProfileName]=$preset
-            $script:GamingProfiles[$ProfileName].ScalingMode=[int]$preset.ScalingMode
+            if(-not $Canonical){
+                $script:GraphicsPresets[$ProfileName]=$preset
+                $script:GamingProfiles[$ProfileName].ScalingMode=[int]$preset.ScalingMode
+            }
             return $preset
         }catch{Write-Log ('Invalid graphics preset '+$file+': '+$_.Exception.Message) 'WARN'}
     }
-    if($script:GraphicsPresets.Contains($ProfileName)){return $script:GraphicsPresets[$ProfileName]}
+    if(-not $Canonical -and $script:GraphicsPresets.Contains($ProfileName)){return $script:GraphicsPresets[$ProfileName]}
     throw ('No graphics preset for '+$ProfileName+'. Connect once to download it, then local editing works offline.')
 }
 
@@ -2746,6 +2750,13 @@ function New-EditorTabChoice {
     [void](Add-EditorTabField -Grid $Grid -Title $Title -Control $choice -Column $Column -Row $Row)
     return $choice
 }
+function Set-EditorTabChoiceValue {
+    param([System.Windows.Forms.ComboBox]$Choice,[object]$Value)
+    for($i=0;$i -lt $Choice.Tag.Count;$i++){
+        if([string]$Choice.Tag[$i] -ceq [string]$Value){$Choice.SelectedIndex=$i;return}
+    }
+    throw ('The editor does not support choice value '+$Value+'.')
+}
 function Add-EditorTabWide {
     param($Grid,$Control,[int]$Row)
     $Control.Dock='Fill'
@@ -2854,7 +2865,7 @@ function Show-ProfileEditor {
     $nv.Checked=[bool]$p.ApplyNvidia
     Add-EditorTabWide -Grid $displayGrid -Control $nv -Row 2
 
-    $cs2Grid=New-EditorTabGrid -Page $cs2Page -Rows 15
+    $cs2Grid=New-EditorTabGrid -Page $cs2Page -Rows 17
     $cfgFile=New-Object System.Windows.Forms.TextBox
     $cfgFile.Text=[string]$p.ConfigFile
     $cfgFile.ReadOnly=$true
@@ -2880,30 +2891,44 @@ function Show-ProfileEditor {
     $graphicsHint.ForeColor=$MUTED
     Add-EditorTabWide -Grid $cs2Grid -Control $graphicsHint -Row 4
     $gs=$graphicsPreset.Settings
-    $gameWidth=New-EditorTabNumber -Grid $cs2Grid -Title 'CS2 resolution width' -Column 0 -Row 5 -Min 640 -Max 7680 -Value ([int]$gs.Width)
-    $gameHeight=New-EditorTabNumber -Grid $cs2Grid -Title 'CS2 resolution height' -Column 1 -Row 5 -Min 480 -Max 4320 -Value ([int]$gs.Height)
-    $aspectChoice=New-EditorTabChoice -Grid $cs2Grid -Title 'CS2 aspect ratio' -Column 0 -Row 6 -Labels @('4:3','16:9','16:10') -Values @('0','1','2') -SelectedValue ([string]$gs.AspectRatioMode)
-    $fullscreenChoice=New-EditorTabChoice -Grid $cs2Grid -Title 'Display mode' -Column 1 -Row 6 -Labels @('Fullscreen','Windowed') -Values @('1','0') -SelectedValue ([string]$gs.Fullscreen)
-    $refreshPolicyChoice=New-EditorTabChoice -Grid $cs2Grid -Title 'CS2 refresh selection' -Column 0 -Row 7 -Labels @('Highest supported (recommended)','Use specific Hz') -Values @('Highest','Exact') -SelectedValue ([string]$graphicsPreset.RefreshPolicy)
-    $gameRefresh=New-EditorTabNumber -Grid $cs2Grid -Title 'Specific CS2 refresh (Hz)' -Column 1 -Row 7 -Min 24 -Max 600 -Value ([int]$(if($gs.RefreshHz){$gs.RefreshHz}else{360}))
+    $copyOptions=@($script:GamingProfiles.Keys|Where-Object{$_ -cne $ProfileName})
+    $copyFromChoice=New-EditorTabChoice -Grid $cs2Grid -Title 'Copy CS2 graphics from profile' -Column 0 -Row 5 -Labels $copyOptions -Values $copyOptions -SelectedValue $copyOptions[0]
+    $copyGraphics=New-Object System.Windows.Forms.Button
+    $copyGraphics.Text='Copy graphics'
+    $copyGraphics.BackColor=[System.Drawing.Color]::FromArgb(58,67,83)
+    $copyGraphics.ForeColor=$WHITE
+    $copyGraphics.FlatStyle='Flat'
+    [void](Add-EditorTabField -Grid $cs2Grid -Title 'Copy selected profile settings' -Control $copyGraphics -Column 1 -Row 5)
+    $gameWidth=New-EditorTabNumber -Grid $cs2Grid -Title 'CS2 resolution width' -Column 0 -Row 6 -Min 640 -Max 7680 -Value ([int]$gs.Width)
+    $gameHeight=New-EditorTabNumber -Grid $cs2Grid -Title 'CS2 resolution height' -Column 1 -Row 6 -Min 480 -Max 4320 -Value ([int]$gs.Height)
+    $aspectChoice=New-EditorTabChoice -Grid $cs2Grid -Title 'CS2 aspect ratio' -Column 0 -Row 7 -Labels @('4:3','16:9','16:10') -Values @('0','1','2') -SelectedValue ([string]$gs.AspectRatioMode)
+    $fullscreenChoice=New-EditorTabChoice -Grid $cs2Grid -Title 'Display mode' -Column 1 -Row 7 -Labels @('Fullscreen','Windowed') -Values @('1','0') -SelectedValue ([string]$gs.Fullscreen)
+    $refreshPolicyChoice=New-EditorTabChoice -Grid $cs2Grid -Title 'CS2 refresh selection' -Column 0 -Row 8 -Labels @('Highest supported (recommended)','Use specific Hz') -Values @('Highest','Exact') -SelectedValue ([string]$graphicsPreset.RefreshPolicy)
+    $gameRefresh=New-EditorTabNumber -Grid $cs2Grid -Title 'Specific CS2 refresh (Hz)' -Column 1 -Row 8 -Min 24 -Max 600 -Value ([int]$(if($gs.RefreshHz){$gs.RefreshHz}else{360}))
     $gameRefresh.Enabled=([string]$graphicsPreset.RefreshPolicy -eq 'Exact')
     $refreshPolicyChoice.Add_SelectedIndexChanged({
         $gameRefresh.Enabled=([string]$refreshPolicyChoice.Tag[$refreshPolicyChoice.SelectedIndex] -eq 'Exact')
     }.GetNewClosure())
-    $scalingChoice=New-EditorTabChoice -Grid $cs2Grid -Title 'Stretch / scaling' -Column 0 -Row 8 -Labels @('Stretch to fill','Keep aspect ratio','Center without scaling') -Values @('2','5','3') -SelectedValue ([string]$graphicsPreset.ScalingMode)
-    $msaaChoice=New-EditorTabChoice -Grid $cs2Grid -Title 'Anti-aliasing (MSAA)' -Column 1 -Row 8 -Labels @('Off','2×','4×','8×','16×') -Values @('0','2','4','8','16') -SelectedValue ([string]$gs.MSAASamples)
-    $shadowChoice=New-EditorTabChoice -Grid $cs2Grid -Title 'Shadow quality' -Column 0 -Row 9 -Labels @('Low','Medium','High','Very high') -Values @('0','1','2','3') -SelectedValue ([string]$gs.ShadowQuality)
-    $dynamicShadowChoice=New-EditorTabChoice -Grid $cs2Grid -Title 'Dynamic shadows' -Column 1 -Row 9 -Labels @('Off','On') -Values @('0','1') -SelectedValue ([string]$gs.DynamicShadows)
-    $textureChoice=New-EditorTabChoice -Grid $cs2Grid -Title 'Texture detail' -Column 0 -Row 10 -Labels @('Low','Medium','High','Very high') -Values @('0','1','2','3') -SelectedValue ([string]$gs.TextureDetail)
-    $shaderChoice=New-EditorTabChoice -Grid $cs2Grid -Title 'Shader quality' -Column 1 -Row 10 -Labels @('Low','Medium','High') -Values @('0','1','2') -SelectedValue ([string]$gs.ShaderQuality)
-    $particleChoice=New-EditorTabChoice -Grid $cs2Grid -Title 'Particle detail' -Column 0 -Row 11 -Labels @('Low','Medium','High','Very high') -Values @('0','1','2','3') -SelectedValue ([string]$gs.ParticleDetail)
-    $aoChoice=New-EditorTabChoice -Grid $cs2Grid -Title 'Ambient occlusion' -Column 1 -Row 11 -Labels @('Off','Low','Medium','High') -Values @('0','1','2','3') -SelectedValue ([string]$gs.AmbientOcclusion)
-    $hdrChoice=New-EditorTabChoice -Grid $cs2Grid -Title 'HDR detail' -Column 0 -Row 12 -Labels @('Game default','Level 0','Level 1','Level 2','Level 3') -Values @('-1','0','1','2','3') -SelectedValue ([string]$gs.HDRDetail)
-    $reflexChoice=New-EditorTabChoice -Grid $cs2Grid -Title 'NVIDIA Reflex' -Column 1 -Row 12 -Labels @('Off','On','On + Boost') -Values @('0','1','2') -SelectedValue ([string]$gs.NvidiaReflex)
-    $filterChoice=New-EditorTabChoice -Grid $cs2Grid -Title 'Texture filtering level' -Column 0 -Row 13 -Labels @('Level 0','Level 1','Level 2','Level 3','Level 4','Level 5') -Values @('0','1','2','3','4','5') -SelectedValue ([string]$gs.TextureFiltering)
-    $fsrChoice=New-EditorTabChoice -Grid $cs2Grid -Title 'FSR level' -Column 1 -Row 13 -Labels @('Off','Level 1','Level 2','Level 3','Level 4') -Values @('0','1','2','3','4') -SelectedValue ([string]$gs.FSRDetail)
-    $vsyncChoice=New-EditorTabChoice -Grid $cs2Grid -Title 'Vertical sync' -Column 0 -Row 14 -Labels @('Off','On') -Values @('0','1') -SelectedValue ([string]$gs.VSync)
-    $cmaaChoice=New-EditorTabChoice -Grid $cs2Grid -Title 'CMAA' -Column 1 -Row 14 -Labels @('Off','On') -Values @('0','1') -SelectedValue ([string]$gs.CMAA)
+    $scalingChoice=New-EditorTabChoice -Grid $cs2Grid -Title 'Stretch / scaling' -Column 0 -Row 9 -Labels @('Stretch to fill','Keep aspect ratio','Center without scaling') -Values @('2','5','3') -SelectedValue ([string]$graphicsPreset.ScalingMode)
+    $msaaChoice=New-EditorTabChoice -Grid $cs2Grid -Title 'Anti-aliasing (MSAA)' -Column 1 -Row 9 -Labels @('Off','2×','4×','8×','16×') -Values @('0','2','4','8','16') -SelectedValue ([string]$gs.MSAASamples)
+    $shadowChoice=New-EditorTabChoice -Grid $cs2Grid -Title 'Shadow quality' -Column 0 -Row 10 -Labels @('Low','Medium','High','Very high') -Values @('0','1','2','3') -SelectedValue ([string]$gs.ShadowQuality)
+    $dynamicShadowChoice=New-EditorTabChoice -Grid $cs2Grid -Title 'Dynamic shadows' -Column 1 -Row 10 -Labels @('Off','On') -Values @('0','1') -SelectedValue ([string]$gs.DynamicShadows)
+    $textureChoice=New-EditorTabChoice -Grid $cs2Grid -Title 'Texture detail' -Column 0 -Row 11 -Labels @('Low','Medium','High','Very high') -Values @('0','1','2','3') -SelectedValue ([string]$gs.TextureDetail)
+    $shaderChoice=New-EditorTabChoice -Grid $cs2Grid -Title 'Shader quality' -Column 1 -Row 11 -Labels @('Low','Medium','High') -Values @('0','1','2') -SelectedValue ([string]$gs.ShaderQuality)
+    $particleChoice=New-EditorTabChoice -Grid $cs2Grid -Title 'Particle detail' -Column 0 -Row 12 -Labels @('Low','Medium','High','Very high') -Values @('0','1','2','3') -SelectedValue ([string]$gs.ParticleDetail)
+    $aoChoice=New-EditorTabChoice -Grid $cs2Grid -Title 'Ambient occlusion' -Column 1 -Row 12 -Labels @('Off','Low','Medium','High') -Values @('0','1','2','3') -SelectedValue ([string]$gs.AmbientOcclusion)
+    $hdrChoice=New-EditorTabChoice -Grid $cs2Grid -Title 'HDR detail' -Column 0 -Row 13 -Labels @('Game default','Level 0','Level 1','Level 2','Level 3') -Values @('-1','0','1','2','3') -SelectedValue ([string]$gs.HDRDetail)
+    $reflexChoice=New-EditorTabChoice -Grid $cs2Grid -Title 'NVIDIA Reflex' -Column 1 -Row 13 -Labels @('Off','On','On + Boost') -Values @('0','1','2') -SelectedValue ([string]$gs.NvidiaReflex)
+    $filterChoice=New-EditorTabChoice -Grid $cs2Grid -Title 'Texture filtering level' -Column 0 -Row 14 -Labels @('Level 0','Level 1','Level 2','Level 3','Level 4','Level 5') -Values @('0','1','2','3','4','5') -SelectedValue ([string]$gs.TextureFiltering)
+    $fsrChoice=New-EditorTabChoice -Grid $cs2Grid -Title 'FSR level' -Column 1 -Row 14 -Labels @('Off','Level 1','Level 2','Level 3','Level 4') -Values @('0','1','2','3','4') -SelectedValue ([string]$gs.FSRDetail)
+    $vsyncChoice=New-EditorTabChoice -Grid $cs2Grid -Title 'Vertical sync' -Column 0 -Row 15 -Labels @('Off','On') -Values @('0','1') -SelectedValue ([string]$gs.VSync)
+    $cmaaChoice=New-EditorTabChoice -Grid $cs2Grid -Title 'CMAA' -Column 1 -Row 15 -Labels @('Off','On') -Values @('0','1') -SelectedValue ([string]$gs.CMAA)
+    $resetGraphics=New-Object System.Windows.Forms.Button
+    $resetGraphics.Text='Reset CS2 graphics to profile defaults'
+    $resetGraphics.BackColor=[System.Drawing.Color]::FromArgb(70,75,88)
+    $resetGraphics.ForeColor=$WHITE
+    $resetGraphics.FlatStyle='Flat'
+    Add-EditorTabWide -Grid $cs2Grid -Control $resetGraphics -Row 16
 
     $editorFooter=New-Object System.Windows.Forms.TableLayoutPanel
     $editorFooter.Dock='Fill'
@@ -2939,6 +2964,72 @@ function Show-ProfileEditor {
     }
     $editorFooter.Controls.Add($status,0,1)
     $editorFooter.SetColumnSpan($status,3)
+
+    $applyGraphicsPresetToEditor={
+        param($Preset)
+        $validated=ConvertTo-CafeGraphicsPreset -ProfileName $ProfileName -Preset $Preset
+        $values=$validated.Settings
+        $gameWidth.Value=[decimal]$values.Width
+        $gameHeight.Value=[decimal]$values.Height
+        Set-EditorTabChoiceValue $aspectChoice ([string]$values.AspectRatioMode)
+        Set-EditorTabChoiceValue $fullscreenChoice ([string]$values.Fullscreen)
+        Set-EditorTabChoiceValue $refreshPolicyChoice ([string]$validated.RefreshPolicy)
+        $gameRefresh.Value=[decimal]$(if($values.RefreshHz){$values.RefreshHz}else{360})
+        $gameRefresh.Enabled=($validated.RefreshPolicy -eq 'Exact')
+        Set-EditorTabChoiceValue $scalingChoice ([string]$validated.ScalingMode)
+        Set-EditorTabChoiceValue $msaaChoice ([string]$values.MSAASamples)
+        Set-EditorTabChoiceValue $shadowChoice ([string]$values.ShadowQuality)
+        Set-EditorTabChoiceValue $dynamicShadowChoice ([string]$values.DynamicShadows)
+        Set-EditorTabChoiceValue $textureChoice ([string]$values.TextureDetail)
+        Set-EditorTabChoiceValue $shaderChoice ([string]$values.ShaderQuality)
+        Set-EditorTabChoiceValue $particleChoice ([string]$values.ParticleDetail)
+        Set-EditorTabChoiceValue $aoChoice ([string]$values.AmbientOcclusion)
+        Set-EditorTabChoiceValue $hdrChoice ([string]$values.HDRDetail)
+        Set-EditorTabChoiceValue $reflexChoice ([string]$values.NvidiaReflex)
+        Set-EditorTabChoiceValue $filterChoice ([string]$values.TextureFiltering)
+        Set-EditorTabChoiceValue $fsrChoice ([string]$values.FSRDetail)
+        Set-EditorTabChoiceValue $vsyncChoice ([string]$values.VSync)
+        Set-EditorTabChoiceValue $cmaaChoice ([string]$values.CMAA)
+        return $validated
+    }.GetNewClosure()
+
+    $copyGraphics.Add_Click({
+        $sourceName=[string]$copyFromChoice.Tag[$copyFromChoice.SelectedIndex]
+        try{
+            $dialog.Cursor=[System.Windows.Forms.Cursors]::WaitCursor
+            $sourcePreset=Get-ProfileGraphicsPreset -ProfileName $sourceName
+            $copyPreset=[pscustomobject]@{
+                SchemaVersion=1;ProfileName=$ProfileName;DisplayPolicy='ApplyPreset'
+                RefreshPolicy=[string]$sourcePreset.RefreshPolicy;ScalingMode=[int]$sourcePreset.ScalingMode
+                Settings=$sourcePreset.Settings
+            }
+            [void](& $applyGraphicsPresetToEditor $copyPreset)
+            $status.Text=('Copied '+$sourceName+' CS2 graphics into this editor. Save to keep the changes.')
+            $status.ForeColor=[System.Drawing.Color]::FromArgb(255,190,105)
+            Write-Log ("Copied CS2 graphics from "+$sourceName+" to "+$ProfileName+" in the editor; changes are not saved yet.")
+        }catch{
+            Write-Log ("Copy graphics to "+$ProfileName+" failed: "+$_.Exception.Message) 'WARN'
+            [void][System.Windows.Forms.MessageBox]::Show(
+                ("Could not copy "+$sourceName+" graphics:`n"+$_.Exception.Message),
+                'Copy CS2 Graphics','OK','Warning')|Out-Null
+        }finally{$dialog.Cursor=[System.Windows.Forms.Cursors]::Default}
+    }.GetNewClosure())
+
+    $resetGraphics.Add_Click({
+        try{
+            $dialog.Cursor=[System.Windows.Forms.Cursors]::WaitCursor
+            $defaults=Get-ProfileGraphicsPreset -ProfileName $ProfileName -Canonical
+            [void](& $applyGraphicsPresetToEditor $defaults)
+            $status.Text=('Reset '+$ProfileName+' CS2 graphics to its canonical profile defaults. Save to keep the changes.')
+            $status.ForeColor=[System.Drawing.Color]::FromArgb(255,190,105)
+            Write-Log ("Reset "+$ProfileName+" CS2 graphics in the editor to canonical profile defaults; changes are not saved yet.")
+        }catch{
+            Write-Log ("Reset graphics for "+$ProfileName+" failed: "+$_.Exception.Message) 'WARN'
+            [void][System.Windows.Forms.MessageBox]::Show(
+                ("Could not load "+$ProfileName+" profile defaults:`n"+$_.Exception.Message),
+                'Reset CS2 Graphics','OK','Warning')|Out-Null
+        }finally{$dialog.Cursor=[System.Windows.Forms.Cursors]::Default}
+    }.GetNewClosure())
 
     $saveLocal=New-Object System.Windows.Forms.Button
     $saveLocal.Text='Save Locally'
@@ -3502,7 +3593,7 @@ function Invoke-GraphicsOnly {
     param([Parameter(Mandatory=$true)][string]$ModeName)
     Start-StepScope -Run ('Graphics '+$ModeName) -Step 'Apply Graphics'
     try {
-    $expected='d0e532bb054ba035d4f2e6b92a060a406d0a34fe'
+    $expected='914b6aabaf3d97d3f99eba82660b685ffb61a608'
     $source='https://raw.githubusercontent.com/fabjoncela/Cs-script/main/graphics/ApplyGraphics.ps1'
     $cache=Join-Path $env:LOCALAPPDATA 'CafeLauncher\graphics-module.ps1'
     $parent=Split-Path -Parent $cache
