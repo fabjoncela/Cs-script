@@ -4,7 +4,7 @@ start "" powershell.exe -NoProfile -ExecutionPolicy Bypass -STA -WindowStyle Hid
 exit /b
 
 # POWERSHELL_GUI
-# CAFE_RELEASE=2026.10.14.26
+# CAFE_RELEASE=2026.10.14.27
 
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
@@ -2647,6 +2647,18 @@ function Get-CafeLauncherRelease {
     return 'unknown'
 }
 
+function Get-CafeUpdateRateLimitMessage {
+    param([int]$StatusCode,[string]$ResponseBody,[string]$RateLimitRemaining)
+    if($StatusCode -notin @(403,429)){return $null}
+    if($RateLimitRemaining -eq '0' -or $ResponseBody -match '(?i)(API rate limit exceeded|rate limit exceeded)'){
+        return 'GitHub API quota limit reached. Wait for the quota to reset, then check again. The launcher was not changed.'
+    }
+    if($ResponseBody -match '(?i)(secondary rate limit|abuse detection|temporarily rate limited)'){
+        return 'GitHub is temporarily rate-limiting requests. Wait a few minutes, then check again. The launcher was not changed.'
+    }
+    return $null
+}
+
 function Check-CafeLauncherUpdates {
     param([switch]$Manual)
     $source=$env:CAFE_SCRIPT
@@ -2760,8 +2772,27 @@ function Check-CafeLauncherUpdates {
             }
         } finally { Remove-Item -LiteralPath $temp -Force -ErrorAction SilentlyContinue }
     } catch {
-        Write-Log "Update check/download failed; the existing launcher is unchanged where possible: $($_.Exception.Message)" 'WARN'
-        if ($Manual) { [System.Windows.Forms.MessageBox]::Show("Update check failed: $($_.Exception.Message)", 'Update Check', 'OK', 'Warning') | Out-Null }
+        $failure=$_.Exception.Message
+        $statusCode=0
+        $responseBody=''
+        $rateLimitRemaining=''
+        $responseProperty=$_.Exception.PSObject.Properties['Response']
+        if($responseProperty -and $responseProperty.Value){
+            $httpResponse=$responseProperty.Value
+            try{$statusCode=[int]$httpResponse.StatusCode}catch{}
+            try{$rateLimitRemaining=[string]$httpResponse.Headers['X-RateLimit-Remaining']}catch{}
+            try{
+                $responseStream=$httpResponse.GetResponseStream()
+                if($responseStream){
+                    $responseReader=New-Object System.IO.StreamReader($responseStream)
+                    try{$responseBody=$responseReader.ReadToEnd()}finally{$responseReader.Dispose()}
+                }
+            }catch{}
+        }
+        $quotaMessage=Get-CafeUpdateRateLimitMessage -StatusCode $statusCode -ResponseBody $responseBody -RateLimitRemaining $rateLimitRemaining
+        if($quotaMessage){$failure=$quotaMessage;Write-Log "Update check blocked by GitHub API rate limiting (HTTP $statusCode; remaining=$rateLimitRemaining)." 'WARN'}
+        else{Write-Log "Update check/download failed; the existing launcher is unchanged where possible: $failure" 'WARN'}
+        if ($Manual) { [System.Windows.Forms.MessageBox]::Show("Update check failed: $failure", 'Update Check', 'OK', 'Warning') | Out-Null }
     }
 }
 

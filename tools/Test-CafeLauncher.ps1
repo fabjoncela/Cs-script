@@ -131,6 +131,20 @@ $freshUrlTwo=Add-CafeCacheBust -Uri 'https://raw.githubusercontent.com/owner/rep
 if($freshUrlOne -notmatch '\?fresh=[a-f0-9]{32}$' -or $freshUrlTwo -notmatch '\?fresh=[a-f0-9]{32}$' -or $freshUrlOne -ceq $freshUrlTwo){
     throw 'Cache-busting URLs must include a unique per-request token.'
 }
+$rateLimitHelper=@($psAst.FindAll({
+    param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+        $node.Name -eq 'Get-CafeUpdateRateLimitMessage'
+},$true))
+if($rateLimitHelper.Count -ne 1){throw 'Expected a specific updater API rate-limit classifier.'}
+Invoke-Expression $rateLimitHelper[0].Extent.Text
+$quotaMessage=Get-CafeUpdateRateLimitMessage -StatusCode 403 -ResponseBody '{"message":"API rate limit exceeded"}' -RateLimitRemaining '0'
+$secondaryMessage=Get-CafeUpdateRateLimitMessage -StatusCode 403 -ResponseBody '{"message":"You have exceeded a secondary rate limit"}' -RateLimitRemaining ''
+$forbiddenMessage=Get-CafeUpdateRateLimitMessage -StatusCode 403 -ResponseBody '{"message":"Resource not accessible by integration"}' -RateLimitRemaining '12'
+if($quotaMessage -notmatch 'API quota limit reached' -or
+   $secondaryMessage -notmatch 'temporarily rate-limiting' -or
+   $null -ne $forbiddenMessage){
+    throw 'Updater must identify confirmed API rate limits without mislabeling other 403 failures.'
+}
 foreach($freshReadFunctionName in @(
     'Install-AtCfg',
     'Check-CafeLauncherUpdates','Invoke-GraphicsOnly'
