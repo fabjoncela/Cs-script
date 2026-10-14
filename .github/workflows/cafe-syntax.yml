@@ -39,6 +39,7 @@ on:
       - 'tools/Test-NvidiaDvcFallback.ps1'
       - 'tools/Test-SuperlightDevice.ps1'
       - 'tools/Test-StepResults.ps1'
+      - 'tools/Test-LogitechDPI.ps1'
       - 'tools/Update-Context.ps1'
       - 'tools/Test-ContextFreshness.ps1'
       - 'context.md'
