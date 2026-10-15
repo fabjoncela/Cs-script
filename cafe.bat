@@ -2901,27 +2901,27 @@ $script:GamingProfiles = [ordered]@{
     FabMode = @{
         PointerSpeed=10; LogitechDPI=800; DisableAcceleration=$true; ApplyNvidia=$true; ScalingMode=2
         Width=1920; Height=1080; RefreshHz=360; Vibrance=75; Hue=-1
-        CS2Sensitivity=''; ConfigFile='fab.cfg'; CfgDownloadUrl=$script:FabCfgCloudUrl; LaunchApps=$true
+        CS2Sensitivity=''; VoicePushToTalkKey=''; ConfigFile='fab.cfg'; CfgDownloadUrl=$script:FabCfgCloudUrl; LaunchApps=$true
     }
     ArliMode = @{
         PointerSpeed=10; LogitechDPI=800; DisableAcceleration=$true; ApplyNvidia=$true; ScalingMode=2
         Width=1920; Height=1080; RefreshHz=360; Vibrance=75; Hue=-1
-        CS2Sensitivity=''; ConfigFile='arli.cfg'; CfgDownloadUrl='https://raw.githubusercontent.com/fabjoncela/Cs-script/main/arli.cfg'; LaunchApps=$true
+        CS2Sensitivity=''; VoicePushToTalkKey=''; ConfigFile='arli.cfg'; CfgDownloadUrl='https://raw.githubusercontent.com/fabjoncela/Cs-script/main/arli.cfg'; LaunchApps=$true
     }
     BrileMode = @{
         PointerSpeed=10; LogitechDPI=800; DisableAcceleration=$true; ApplyNvidia=$true; ScalingMode=2
         Width=1920; Height=1080; RefreshHz=360; Vibrance=75; Hue=-1
-        CS2Sensitivity=''; ConfigFile='brile.cfg'; CfgDownloadUrl='https://raw.githubusercontent.com/fabjoncela/Cs-script/main/brile.cfg'; LaunchApps=$true
+        CS2Sensitivity=''; VoicePushToTalkKey=''; ConfigFile='brile.cfg'; CfgDownloadUrl='https://raw.githubusercontent.com/fabjoncela/Cs-script/main/brile.cfg'; LaunchApps=$true
     }
     ArmlMode = @{
         PointerSpeed=10; LogitechDPI=800; DisableAcceleration=$true; ApplyNvidia=$true; ScalingMode=2
         Width=1920; Height=1080; RefreshHz=360; Vibrance=75; Hue=-1
-        CS2Sensitivity=''; ConfigFile='arml.cfg'; CfgDownloadUrl='https://raw.githubusercontent.com/fabjoncela/Cs-script/main/arml.cfg'; LaunchApps=$true
+        CS2Sensitivity=''; VoicePushToTalkKey=''; ConfigFile='arml.cfg'; CfgDownloadUrl='https://raw.githubusercontent.com/fabjoncela/Cs-script/main/arml.cfg'; LaunchApps=$true
     }
     OliMode = @{
         PointerSpeed=10; LogitechDPI=800; DisableAcceleration=$true; ApplyNvidia=$true; ScalingMode=2
         Width=1920; Height=1080; RefreshHz=360; Vibrance=75; Hue=-1
-        CS2Sensitivity=''; ConfigFile='oli.cfg'; CfgDownloadUrl='https://raw.githubusercontent.com/fabjoncela/Cs-script/main/oli.cfg'; LaunchApps=$true
+        CS2Sensitivity=''; VoicePushToTalkKey=''; ConfigFile='oli.cfg'; CfgDownloadUrl='https://raw.githubusercontent.com/fabjoncela/Cs-script/main/oli.cfg'; LaunchApps=$true
     }
 }
 $script:ProfileSettingsPath = Join-Path $env:LOCALAPPDATA 'CafeLauncher\profiles.json'
@@ -3335,7 +3335,7 @@ function Get-ProfileGraphicsVersion {
 function Import-ProfileValues {
     param([string]$ProfileName, $SavedProfile, [string]$SourceLabel = 'local')
     if (-not $script:GamingProfiles.Contains($ProfileName) -or -not $SavedProfile) { return }
-    foreach ($setting in @('PointerSpeed','LogitechDPI','DisableAcceleration','ApplyNvidia','Width','Height','RefreshHz','Vibrance','Hue','ScalingMode','CS2Sensitivity','CfgDownloadUrl','LaunchApps')) {
+    foreach ($setting in @('PointerSpeed','LogitechDPI','DisableAcceleration','ApplyNvidia','Width','Height','RefreshHz','Vibrance','Hue','ScalingMode','CS2Sensitivity','VoicePushToTalkKey','CfgDownloadUrl','LaunchApps')) {
         $saved = $SavedProfile.PSObject.Properties[$setting]
         if (-not $saved) { continue }
         $value = $saved.Value
@@ -3349,6 +3349,10 @@ function Import-ProfileValues {
                 'ScalingMode'  { $value=[int]$value; if ($value -notin @(2,3,5)) { throw 'unsupported NVIDIA scaling mode' } }
                 'Vibrance'     { $value=[int]$value; if ($value -lt 0 -or $value -gt 100) { throw 'range' } }
                 'Hue'           { $value=[int]$value; if ($value -lt -1 -or $value -gt 359) { throw 'range' } }
+                'VoicePushToTalkKey' {
+                    $value=[string]$value
+                    if($value -and $value -notmatch '^(?:[A-Z]|[0-9]|F(?:[1-9]|1[0-2])|MOUSE[1-5]|CAPSLOCK|ALT|SHIFT|CTRL|SPACE|TAB)$'){throw 'invalid voice key'}
+                }
                 'CS2Sensitivity' {
                     $value=[string]$value
                     if ($value -and $value -notmatch '^(?:[0-9]+(?:\.[0-9]+)?)$') { throw 'invalid sensitivity' }
@@ -3414,7 +3418,7 @@ function Export-ProfileValues {
         PointerSpeed=[int]$p.PointerSpeed; LogitechDPI=[int]$p.LogitechDPI; DisableAcceleration=[bool]$p.DisableAcceleration
         ApplyNvidia=[bool]$p.ApplyNvidia; Width=[int]$p.Width; Height=[int]$p.Height
         RefreshHz=[int]$p.RefreshHz; Vibrance=[int]$p.Vibrance; Hue=[int]$p.Hue; ScalingMode=[int]$p.ScalingMode
-        CS2Sensitivity=[string]$p.CS2Sensitivity; CfgDownloadUrl=[string]$p.CfgDownloadUrl
+        CS2Sensitivity=[string]$p.CS2Sensitivity; VoicePushToTalkKey=[string]$p.VoicePushToTalkKey; CfgDownloadUrl=[string]$p.CfgDownloadUrl
         LaunchApps=[bool]$p.LaunchApps
     }
     # Preserve the dictionary as ONE pipeline object on Windows PowerShell 5.1.
@@ -4062,6 +4066,35 @@ function Get-GitHubSyncAuthorization {
     }finally{$chooser.Dispose()}
 }
 
+function Get-CafeVoiceBindingFromCfg {
+    param([string]$Content)
+    $matches=[regex]::Matches($Content,'(?im)^[ \t]*bind[ \t]+"?(?<key>[A-Z0-9_]+)"?[ \t]+"?\+voicerecord"?[ \t]*(?://[^\r\n]*)?$')
+    if($matches.Count -gt 1){throw 'Multiple voice binds in CFG. Resolve manually.'}
+    if($matches.Count -eq 0){return ''}
+    return [string]$matches[0].Groups['key'].Value.ToUpperInvariant()
+}
+function Set-CafeVoiceBindingInCfg {
+    param([string]$Content,[string]$Key)
+    $key=$Key.Trim().ToUpperInvariant()
+    if($key -notmatch '^(?:[A-Z]|[0-9]|F(?:[1-9]|1[0-2])|MOUSE[1-5]|CAPSLOCK|ALT|SHIFT|CTRL|SPACE|TAB)$'){throw 'Unsupported voice key.'}
+    $old=Get-CafeVoiceBindingFromCfg -Content $Content
+    if($old -ceq $key){return $Content}
+    $collision=[regex]::Matches($Content,'(?im)^[ \t]*bind[ \t]+"?'+[regex]::Escape($key)+'"?[ \t]+(?:"[^"\r\n]*"|[^\r\n]+)$')
+    if($collision.Count){throw ('New voice key '+$key+' is already bound in CFG. Choose another key.')}
+    $rx='(?im)^[ \t]*bind[ \t]+"?[A-Z0-9_]+"?[ \t]+"?\+voicerecord"?[ \t]*(?://[^\r\n]*)?$'
+    $line='bind "'+$key+'" "+voicerecord"'
+    if($old){$m=[regex]::Match($Content,$rx);return $Content.Substring(0,$m.Index)+$line+$Content.Substring($m.Index+$m.Length)}
+    $nl=if($Content.Contains(([string][char]13+[string][char]10))){[string][char]13+[string][char]10}else{[string][char]10}
+    return $Content+$(if($Content.EndsWith([string][char]10)){''}else{$nl})+$line+$nl
+}
+function Get-CafeGitHubVoiceBinding {
+    param([string]$CfgName)
+    $url="https://api.github.com/repos/$($script:GithubRepo)/contents/$CfgName"+'?ref='+[Uri]::EscapeDataString([string]$script:GithubBranch)
+    $remote=Invoke-CafeGitHubRestMethod -Uri $url -Method Get -Headers @{'Accept'='application/vnd.github+json';'User-Agent'='CafeLauncher-VoiceBinding'} -TimeoutSec 12 -MaximumRedirection 0
+    if($remote.type -ne 'file' -or $remote.path -cne $CfgName -or $remote.encoding -ne 'base64' -or [int64]$remote.size -gt 2097152){throw 'Invalid CFG metadata.'}
+    $text=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String(([string]$remote.content -replace '\s','')))
+    return Get-CafeVoiceBindingFromCfg -Content $text
+}
 # Replace the active CS2 sensitivity command without changing binds or comments.
 function Set-CS2CfgSensitivityText {
     param([Parameter(Mandatory=$true)][string]$Content,
@@ -4190,7 +4223,8 @@ function Sync-ProfileToGitHub {
     # Stage a matching CFG update after validating its path, blob metadata, and SHA.
     # Empty sensitivity means "use the CFG's value" and does not edit the CFG.
     $sensValue=[string]$values['CS2Sensitivity']
-    if(-not [string]::IsNullOrWhiteSpace($sensValue) -or ($capturedConvars -and $capturedConvars.Count -gt 0)){
+    $voiceKey=[string]$values['VoicePushToTalkKey']
+    if(-not [string]::IsNullOrWhiteSpace($sensValue) -or $voiceKey -or ($capturedConvars -and $capturedConvars.Count -gt 0)){
         $cfgUri="https://api.github.com/repos/$($script:GithubRepo)/contents/$cfgName"
         $cfgRemote=Invoke-CafeGitHubRestMethod -Uri ($cfgUri+'?ref='+$script:GithubBranch) -Method Get -Headers $headers -TimeoutSec 20 -MaximumRedirection 0
         if($cfgRemote.type -ne 'file' -or $cfgRemote.path -ne $cfgName -or
@@ -4204,6 +4238,7 @@ function Sync-ProfileToGitHub {
         $newCfgText=$cfgText
         if($capturedConvars -and $capturedConvars.Count -gt 0){$newCfgText=Set-CafeCapturedConvarsInCfg -Content $newCfgText -Values $capturedConvars}
         if(-not [string]::IsNullOrWhiteSpace($sensValue)){$newCfgText=Set-CS2CfgSensitivityText -Content $newCfgText -Sensitivity $sensValue}
+        if($voiceKey){$newCfgText=Set-CafeVoiceBindingInCfg -Content $newCfgText -Key $voiceKey}
         if($newCfgText -cne $cfgText){
             $cfgBody=@{
                 message="Sync $cfgName CS2 sensitivity and crosshair from CafeLauncher"
@@ -4604,6 +4639,15 @@ function Show-ProfileEditor {
     $sens=New-Object System.Windows.Forms.TextBox
     $sens.Text=[string]$p.CS2Sensitivity
     Add-EditorTabField -Grid $cs2Grid -Title 'CS2 sensitivity (sync updates .cfg)' -Control $sens -Column 1 -Row 0
+    $voiceBox=New-Object System.Windows.Forms.ComboBox
+    $voiceBox.DropDownStyle='DropDownList'
+    $voiceOptions=@('V','MOUSE4','MOUSE5','CAPSLOCK','ALT','K','F1','F2','F3','F4','SPACE','SHIFT','CTRL','TAB')
+    [void]$voiceBox.Items.Add('(Keep existing bind)')
+    foreach($key in $voiceOptions){[void]$voiceBox.Items.Add($key)}
+    $voiceSelected=[string]$p.VoicePushToTalkKey
+    if(-not $voiceSelected){try{$voiceSelected=Get-CafeGitHubVoiceBinding -CfgName ([string]$p.ConfigFile)}catch{Write-Log ('Voice key lookup unavailable: '+$_.Exception.Message) 'WARN'}}
+    if($voiceSelected -and $voiceBox.Items.Contains($voiceSelected)){$voiceBox.SelectedItem=$voiceSelected}else{$voiceBox.SelectedIndex=0}
+    Add-EditorTabField -Grid $cs2Grid -Title 'Push-to-talk key (CFG)' -Control $voiceBox -Column 1 -Row 1
     $url=New-Object System.Windows.Forms.TextBox
     $url.Text=[string]$p.CfgDownloadUrl
     $urlCell=Add-EditorTabField -Grid $cs2Grid -Title 'GitHub .cfg URL (FabMode default: fab.cfg)' -Control $url -Column 0 -Row 1
@@ -5027,6 +5071,7 @@ function Show-ProfileEditor {
         $p.ApplyNvidia=[bool]$nv.Checked
         $p.LaunchApps=[bool]$apps.Checked
         $p.CS2Sensitivity=$sensValue
+        $p.VoicePushToTalkKey=if($voiceBox.SelectedIndex -gt 0){[string]$voiceBox.SelectedItem}else{''}
         $p.CfgDownloadUrl=$cfgUrl
         # Use the captured shared dictionary, not script: scope in this closure.
         $pendingSyncState[$ProfileName] = $true
@@ -5050,7 +5095,9 @@ function Show-ProfileEditor {
     $saveSync.Add_Click({
         try {
             & $saveEditorValues
-            $changes=if($script:CapturedCS2Convars.ContainsKey($ProfileName)){
+            $changes=if($p.VoicePushToTalkKey){
+                "profiles/$ProfileName.json, graphics/$ProfileName.json AND $($p.ConfigFile) (voice key and selected settings)"
+            }elseif($script:CapturedCS2Convars.ContainsKey($ProfileName)){
                 "profiles/$ProfileName.json, graphics/$ProfileName.json AND $($p.ConfigFile) (captured CS2 crosshair/sensitivity)"
             }elseif($sens.Text.Trim()){
                 "profiles/$ProfileName.json, graphics/$ProfileName.json AND $($p.ConfigFile) (sensitivity only)"
