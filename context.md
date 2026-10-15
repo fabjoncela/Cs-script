@@ -171,3 +171,10 @@ These checks cover parser/formatting, profile Apply's GitHub-authoritative graph
 - Dashboard profile rows have distinct outline accents (FabMode blue, ArliMode green, BrileMode purple, ArmlMode orange, OliMode cyan), more identifiable `Edit <Profile>` buttons, and `EDITING: <Profile>` window titles.
 - Keep the shortcut and editor wired to the **same** capture action to avoid diverging behavior. GitHub credentials must not be persisted; preserve Deep Freeze portability and non-admin assumptions.
 - **Validation required:** Windows PowerShell 5.1 parser and Windows/CS2 smoke test (including local account detection, saved user convars format, and GitHub read-back) before relying on this build in internet cafés. This environment cannot run the Windows GUI.
+
+## 2026-10-15 — Profile identity refinement (review branch)
+
+- `feature/profile-identity-ui` centralizes the FabMode/ArliMode/BrileMode/ArmlMode/OliMode accent palette in `$script:ProfileAccentColors`; dashboard borders and editor heading use consistent colors.
+- Editor headings display `EDITING: <PROFILE>` and dashboard Edit buttons identify their own profile (`⚙ Edit <Profile>`).
+- Dashboard row hover brightens the slim container outline while preserving dark button backgrounds, including when the cursor is over a child button. Button handlers remain bound to their row's captured profile.
+- Testing required: WinForms layout at Windows DPI scaling and PowerShell 5.1 smoke test before merge.
