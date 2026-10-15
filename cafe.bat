@@ -4454,13 +4454,6 @@ function Add-EditorTabWide {
     $Grid.SetColumnSpan($Control,2)
 }
 
-$script:ProfileAccentColors=@{
-    FabMode=[System.Drawing.Color]::FromArgb(56,137,240)
-    ArliMode=[System.Drawing.Color]::FromArgb(54,181,117)
-    BrileMode=[System.Drawing.Color]::FromArgb(167,111,226)
-    ArmlMode=[System.Drawing.Color]::FromArgb(232,151,65)
-    OliMode=[System.Drawing.Color]::FromArgb(71,193,207)
-}
 function Show-ProfileEditor {
     param([Parameter(Mandatory=$true)][string]$ProfileName,[switch]$CaptureOnOpen)
     if(-not $script:GamingProfiles.Contains($ProfileName)){throw "Unknown profile: $ProfileName"}
@@ -5688,6 +5681,13 @@ function Invoke-GraphicsOnly {
 # Backward-compatible entry point.
 function Invoke-FabModeFull { Invoke-GamingProfile -ProfileName 'FabMode' }
 
+$script:ProfileAccentColors=@{
+    FabMode=[System.Drawing.Color]::FromArgb(56,137,240)
+    ArliMode=[System.Drawing.Color]::FromArgb(54,181,117)
+    BrileMode=[System.Drawing.Color]::FromArgb(167,111,226)
+    ArmlMode=[System.Drawing.Color]::FromArgb(232,151,65)
+    OliMode=[System.Drawing.Color]::FromArgb(71,193,207)
+}
 # Modern CafeLauncher dashboard. Profile actions remain separate and independently callable.
 $form=New-Object System.Windows.Forms.Form
 $form.Text='CafeLauncher | CS2 Setup Center'
