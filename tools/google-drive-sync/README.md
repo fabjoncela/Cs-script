@@ -1,6 +1,6 @@
 # Google Drive launcher mirror
 
-The `publish-drive` job in `cafe-syntax.yml` updates the existing `cafe.bat` in the linked Drive folder after all five validation jobs pass on `main`. It updates the file in place, preserving its Drive file ID and link; the folder URL and any Bitly redirect to it stay unchanged. It refuses missing or duplicate files, invalid release markers, version downgrades, and changed content without a release bump.
+The `publish-drive` job in `cafe-syntax.yml` updates the existing `cafe.bat` in the linked Drive folder after all five validation jobs pass on `main`. It updates the file in place, preserving its Drive file ID and link; the folder URL and any Bitly redirect to it stay unchanged. It refuses missing or duplicate files, invalid release markers, and version downgrades. For an equal release number, GitHub `main` is the source of truth: differing file contents are replaced in place.
 
 ## One-time Google setup
 

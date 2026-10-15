@@ -25,7 +25,21 @@ $release=$versionMatch.Groups[1].Value
 $payload=@{token=$env:DRIVE_SYNC_TOKEN;release=$release;content=$content} | ConvertTo-Json -Compress -Depth 3
 
 $response=Invoke-RestMethod -Uri $env:DRIVE_SYNC_URL -Method Post -ContentType 'application/json; charset=utf-8' -Body $payload -TimeoutSec 60
-if(-not $response.ok -or [string]$response.release -ne $release){
-    throw "Google Drive updater returned an unexpected response for release $release."
+$okProperty=$response.PSObject.Properties['ok']
+$releaseProperty=$response.PSObject.Properties['release']
+if($null -eq $okProperty -or $null -eq $releaseProperty){
+    throw "Google Drive updater did not return its expected JSON response for release $release. Check the Apps Script execution log."
+}
+if(-not [bool]$okProperty.Value){
+    $errorProperty=$response.PSObject.Properties['error']
+    $detail=if($null -ne $errorProperty -and -not [string]::IsNullOrWhiteSpace([string]$errorProperty.Value)){
+        [string]$errorProperty.Value
+    } else {
+        'The Apps Script endpoint rejected the upload without an error message.'
+    }
+    throw "Google Drive updater rejected release $release`: $detail"
+}
+if([string]$releaseProperty.Value -ne $release){
+    throw "Google Drive updater returned a different release than $release."
 }
 Write-Host "Google Drive cafe.bat updated in place to release $release."
