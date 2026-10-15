@@ -4455,7 +4455,7 @@ function Add-EditorTabWide {
 }
 
 function Show-ProfileEditor {
-    param([Parameter(Mandatory=$true)][string]$ProfileName)
+    param([Parameter(Mandatory=$true)][string]$ProfileName,[switch]$CaptureOnOpen)
     if(-not $script:GamingProfiles.Contains($ProfileName)){throw "Unknown profile: $ProfileName"}
     if(-not (Resolve-PendingProfileChanges -ProfileName $ProfileName)){return}
     $profileSource=Refresh-ProfileFromGitHub -ProfileName $ProfileName
@@ -4897,7 +4897,8 @@ function Show-ProfileEditor {
                 'Restore Graphics Version','OK','Warning')
         }finally{$dialog.Cursor=[System.Windows.Forms.Cursors]::Default}
     }.GetNewClosure())
-    $captureGraphics.Add_Click({
+    # One shared action powers the editor button and the dashboard shortcut.
+    $invokeCS2Capture={
         try{
             $captureGraphics.Enabled=$false
             $dialog.Cursor=[System.Windows.Forms.Cursors]::WaitCursor
@@ -4936,7 +4937,12 @@ function Show-ProfileEditor {
             $captureGraphics.Enabled=$true
             if(-not $dialog.IsDisposed){$dialog.Cursor=[System.Windows.Forms.Cursors]::Default}
         }
-    }.GetNewClosure())
+    }.GetNewClosure()
+    $captureGraphics.Add_Click($invokeCS2Capture)
+    if($CaptureOnOpen){
+        $editorTabs.SelectedTab=$cs2Page
+        $dialog.Add_Shown({ & $invokeCS2Capture }.GetNewClosure())
+    }
     $saveLocal=New-Object System.Windows.Forms.Button
     $saveLocal.Text='Save Locally'
     $saveLocal.BackColor=$BLUE
@@ -5799,7 +5805,7 @@ $profilesGrid.RowCount=6
 $profilesGrid.ColumnCount=1
 [void]$profilesGrid.RowStyles.Add((New-Object System.Windows.Forms.RowStyle('Absolute',45)))
 for($i=1;$i -le 5;$i++){[void]$profilesGrid.RowStyles.Add((New-Object System.Windows.Forms.RowStyle('Percent',20)))}
-$profilesGrid.Controls.Add((New-CafeLabel -Text 'PLAYER PROFILES  |  Apply, Play, Graphics, Edit' -Strong),0,0)
+$profilesGrid.Controls.Add((New-CafeLabel -Text 'NEW? Capture CS2 settings into a profile  |  Apply, Play, Graphics, Edit' -Strong),0,0)
 $dashGrid.Controls.Add($profilesGrid,0,0)
 
 $rightGrid=New-Object System.Windows.Forms.TableLayoutPanel
@@ -5849,12 +5855,12 @@ function New-Tile {
         $selectedProfile=$EditProfile
         $card=New-Object System.Windows.Forms.TableLayoutPanel
         $card.Dock='Fill'
-        $card.ColumnCount=4
+        $card.ColumnCount=5
         $card.RowCount=1
         $card.BackColor=$PANEL
         $card.Padding=New-Object System.Windows.Forms.Padding(3)
         $card.Margin=New-Object System.Windows.Forms.Padding(3)
-        foreach($pct in @(28,23,26,23)){[void]$card.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle('Percent',$pct)))}
+        foreach($pct in @(24,20,20,14,22)){[void]$card.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle('Percent',$pct)))}
         $button.Dock='Fill'
         $button.Add_Click({
             Update-SelectedProfileCard -Name $selectedProfile
@@ -5898,6 +5904,18 @@ function New-Tile {
             }catch{Write-Log ('Editor failed: '+$_.Exception.Message) 'ERROR'}
         }.GetNewClosure())
         $card.Controls.Add($edit,3,0)
+        $capture=New-Object System.Windows.Forms.Button
+        $capture.Text='Capture CS2'
+        Style-CafeButton -Button $capture
+        $capture.BackColor=[System.Drawing.Color]::FromArgb(44,90,112)
+        $capture.Dock='Fill'
+        $capture.Add_Click({
+            try{
+                Show-ProfileEditor -ProfileName $selectedProfile -CaptureOnOpen
+                Update-SelectedProfileCard -Name $selectedProfile
+            }catch{Write-Log ('Capture shortcut failed for '+$selectedProfile+': '+$_.Exception.Message) 'ERROR'}
+        }.GetNewClosure())
+        $card.Controls.Add($capture,4,0)
         $profilesGrid.Controls.Add($card,0,($Index-5))
     }else{
         $button.Add_Click({
