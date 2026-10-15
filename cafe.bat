@@ -3418,7 +3418,7 @@ function Export-ProfileValues {
         PointerSpeed=[int]$p.PointerSpeed; LogitechDPI=[int]$p.LogitechDPI; DisableAcceleration=[bool]$p.DisableAcceleration
         ApplyNvidia=[bool]$p.ApplyNvidia; Width=[int]$p.Width; Height=[int]$p.Height
         RefreshHz=[int]$p.RefreshHz; Vibrance=[int]$p.Vibrance; Hue=[int]$p.Hue; ScalingMode=[int]$p.ScalingMode
-        CS2Sensitivity=[string]$p.CS2Sensitivity; VoicePushToTalkKey=[string]$p.VoicePushToTalkKey; CfgDownloadUrl=[string]$p.CfgDownloadUrl
+        CS2Sensitivity=[string]$p.CS2Sensitivity; VoicePushToTalkKey=$(if($p.Contains('VoicePushToTalkKey')){[string]$p['VoicePushToTalkKey']}else{''}); CfgDownloadUrl=[string]$p.CfgDownloadUrl
         LaunchApps=[bool]$p.LaunchApps
     }
     # Preserve the dictionary as ONE pipeline object on Windows PowerShell 5.1.
