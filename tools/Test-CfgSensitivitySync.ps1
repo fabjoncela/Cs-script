@@ -212,6 +212,8 @@ Refresh-ProfileFromGitHub -ProfileName 'FabMode'
 Assert-True ($script:GamingProfiles['FabMode'].PointerSpeed -eq 16) 'A stale ancestor commit rolled the profile back after a verified sync.'
 Assert-True ($script:VerifiedProfileState['FabMode'].CommitSha -eq $script:FakeCommitSha) 'Stale ancestor commit replaced the last verified GitHub commit metadata.'
 Assert-True ($script:FakeCalls[-1] -eq 'CommitCompare') 'A candidate older GitHub commit was not ancestry-checked.'
+$staleAncestorLog=[string]$script:FakeLogs[-1]
+Assert-True ($staleAncestorLog.StartsWith('INFO|') -and $staleAncestorLog.Contains('No action needed') -and $staleAncestorLog.Contains('decision=ignore-stale-ancestor')) 'An expected stale ancestor should be logged as informational with a clear no-action message.'
 # A genuine later profile edit is loaded from the exact immutable commit.
 $newerProfile=$script:FakeFiles['profiles/FabMode.json']|ConvertFrom-Json
 $newerProfile.PointerSpeed=12

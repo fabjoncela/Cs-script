@@ -3566,7 +3566,7 @@ function Refresh-ProfileFromGitHub {
         if($verifiedState -and $latestCommit -cne $verifiedState.CommitSha){
             $commitOrder=Compare-GitHubCommitOrder -Repo $script:GithubRepo -BaseSha $verifiedState.CommitSha -HeadSha $latestCommit
             if($commitOrder -eq 'behind'){
-                Write-Log "$ProfileName profile refresh: decision=ignore-stale-ancestor; repo=$script:GithubRepo; branch=$script:GithubBranch; path=$path; latestCommit=$latestCommit; verifiedCommit=$($verifiedState.CommitSha); comparison=$commitOrder; pointer=$priorPointer. Keeping verified settings." 'WARN'
+                Write-Log "$ProfileName profile refresh: settings are already verified. GitHub returned an older file-history commit, so they were kept unchanged (pointer=$priorPointer). No action needed. decision=ignore-stale-ancestor; repo=$script:GithubRepo; branch=$script:GithubBranch; path=$path; latestCommit=$latestCommit; verifiedCommit=$($verifiedState.CommitSha); comparison=$commitOrder." 'INFO'
                 return 'VerifiedGitHub'
             }
             if($commitOrder -eq 'diverged'){
