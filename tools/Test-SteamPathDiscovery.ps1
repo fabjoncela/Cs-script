@@ -118,7 +118,10 @@ try{
     $activeExe=Get-SteamExecutable
     if($activeExe -cne $script:TestSteamExe){throw 'Steam executable discovery chose a stale default before the running client.'}
     $detected=Get-CS2InstallFromManifest -LibraryRoot $library
-    if(-not $detected -or $detected.ConfigPath -cne $cfg){throw 'Validated app 730 install did not resolve its CFG path.'}
+    if(-not $detected){throw ('Validated app 730 install was rejected. Logs: '+($script:TestLogs -join ' | '))}
+    if(-not [string]::Equals([string]$detected.ConfigPath,[string]$cfg,[StringComparison]::OrdinalIgnoreCase)){
+        throw ('Validated app 730 install resolved unexpected CFG path. Actual: '+$detected.ConfigPath+'; expected: '+$cfg)
+    }
     if(Get-CS2InstallFromManifest -LibraryRoot $invalidLibrary){throw 'A stale manifest with the wrong appid was accepted.'}
 
     # The bounded fallback may locate a relocated matching folder only inside
