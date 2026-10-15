@@ -44,6 +44,8 @@ foreach($bad in @('0','20.1','-1','a','2; quit','1e3')){
 
 $script:GithubRepo='fabjoncela/Cs-script'
 $script:GithubBranch='main'
+# Mirror the launcher's capture-state initialization in this isolated test.
+$script:CapturedCS2Convars=@{}
 $script:GamingProfiles=[ordered]@{}
 $script:PendingSync=@{}
 $script:VerifiedProfileState=@{}
