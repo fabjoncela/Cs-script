@@ -3077,6 +3077,62 @@ function Get-CafeCS2GraphicsCapture {
     return ConvertFrom-CafeCS2VideoText -ProfileName $ProfileName -Text $text -BasePreset $BasePreset -Path $source.Path -AccountID $source.AccountID
 }
 
+# CS2 user settings captured only on demand; keyed by target profile.
+$script:CapturedCS2Convars=@{}
+function Get-CafeCS2UserConvarsCapture {
+    param($Source)
+    if(@(Get-Process -Name 'cs2' -ErrorAction SilentlyContinue).Count){throw 'Close CS2 before capture.'}
+    $path=Join-Path (Split-Path -Parent $Source.Path) 'cs2_user_convars_0_slot0.vcfg'
+    if(-not (Test-Path -LiteralPath $path -PathType Leaf)){throw ('No saved CS2 user convars for Steam account '+$Source.AccountID)}
+    $file=Get-Item -LiteralPath $path -ErrorAction Stop
+    if($file.Length -lt 10 -or $file.Length -gt 1048576){throw 'Invalid user convars file size.'}
+    $reader=New-Object IO.StreamReader($path,$true)
+    try{$content=$reader.ReadToEnd()}finally{$reader.Dispose()}
+    if($content -notmatch '(?m)^\s*\{\s*$' -or $content -notmatch '(?m)^\s*\}\s*$'){throw 'Unrecognized user convars KeyValues format.'}
+    $allowed=@('sensitivity','cl_crosshair_drawoutline','cl_crosshair_outlinethickness','cl_crosshair_recoil',
+        'cl_crosshair_sniper_width','cl_crosshair_t','cl_crosshairalpha','cl_crosshaircolor',
+        'cl_crosshaircolor_b','cl_crosshaircolor_g','cl_crosshaircolor_r','cl_crosshairdot',
+        'cl_crosshairgap','cl_crosshairgap_useweaponvalue','cl_crosshairsize','cl_crosshairstyle',
+        'cl_crosshairthickness','cl_crosshairusealpha','cl_crosshair_friendly_warning',
+        'cl_crosshair_dynamic_maxdist_splitratio','cl_crosshair_dynamic_splitalpha_innermod',
+        'cl_crosshair_dynamic_splitalpha_outermod','cl_crosshair_dynamic_splitdist')
+    $values=@{}
+    foreach($name in $allowed){
+        $rx='(?im)^\s*"'+[regex]::Escape($name)+'"\s+"(?<v>[^"\r\n]{1,40})"\s*$'
+        $matches=[regex]::Matches($content,$rx)
+        if($matches.Count -gt 1){throw ('Duplicate CS2 saved '+$name+' values.')}
+        if($matches.Count -eq 1){
+            $value=[string]$matches[0].Groups['v'].Value
+            if($value -notmatch '^(true|false|-?[0-9]+(\.[0-9]+)?)$'){throw ('Unexpected '+$name+' in convars.')}
+            $values[$name]=$value
+        }
+    }
+    $active=Get-CafeActiveSteamVideoFile
+    if($active.AccountID -cne $Source.AccountID -or $active.Path -ine $Source.Path){throw 'Steam account changed during capture.'}
+    return [pscustomobject]@{Values=$values;Path=$path}
+}
+function Set-CafeCapturedConvarsInCfg {
+    param([string]$Content,$Values)
+    $text=$Content
+    $newline=if($text.Contains(([string][char]13+[string][char]10))){[string][char]13+[string][char]10}else{[string][char]10}
+    foreach($name in @($Values.Keys|Sort-Object)){
+        if($name -ne 'sensitivity' -and $name -notmatch '^cl_crosshair[a-z0-9_]*$'){continue}
+        $value=[string]$Values[$name]
+        if($value -notmatch '^(true|false|-?[0-9]+(\.[0-9]+)?)$'){throw ('Invalid CFG value for '+$name)}
+        $rx='(?im)^[ \t]*'+[regex]::Escape($name)+'[ \t]+(?:"[^"\r\n]*"|[^\s\r\n/;]+)[ \t]*(?://[^\r\n]*)?[ \t]*(?=\r?$)'
+        $matches=[regex]::Matches($text,$rx)
+        if($matches.Count -gt 1){throw ('Duplicate active '+$name+' in destination CFG.')}
+        $line=$name+' "'+$value+'"'
+        if($matches.Count){
+            $m=$matches[0]
+            $text=$text.Substring(0,$m.Index)+$line+$text.Substring($m.Index+$m.Length)
+        }else{
+            if($text.Length -and -not $text.EndsWith([string][char]10)){$text+=$newline}
+            $text+=$line+$newline
+        }
+    }
+    return $text
+}
 function Get-ProfileGraphicsPreset {
     param([Parameter(Mandatory=$true)][string]$ProfileName,[switch]$Canonical,[switch]$RequireGitHub)
     if(-not $script:GamingProfiles.Contains($ProfileName)){throw ('Unknown graphics profile: '+$ProfileName)}
@@ -4060,7 +4116,9 @@ function Sync-ProfileToGitHub {
     $cfgBody=$null
     $cfgUploaded=$false
     $readbackFailed=$false
-    $cfgStatus='left unchanged because sensitivity is blank'
+    $cfgStatus='left unchanged (no sensitivity or captured crosshair)'
+    $capturedConvars=$null
+    if($script:CapturedCS2Convars.ContainsKey($ProfileName)){$capturedConvars=$script:CapturedCS2Convars[$ProfileName]}
     [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
     try {
         $current = Invoke-CafeGitHubRestMethod -Uri ($uri + '?ref=' + $script:GithubBranch) -Method Get -Headers $headers -TimeoutSec 20 -MaximumRedirection 0
@@ -4132,7 +4190,7 @@ function Sync-ProfileToGitHub {
     # Stage a matching CFG update after validating its path, blob metadata, and SHA.
     # Empty sensitivity means "use the CFG's value" and does not edit the CFG.
     $sensValue=[string]$values['CS2Sensitivity']
-    if(-not [string]::IsNullOrWhiteSpace($sensValue)){
+    if(-not [string]::IsNullOrWhiteSpace($sensValue) -or ($capturedConvars -and $capturedConvars.Count -gt 0)){
         $cfgUri="https://api.github.com/repos/$($script:GithubRepo)/contents/$cfgName"
         $cfgRemote=Invoke-CafeGitHubRestMethod -Uri ($cfgUri+'?ref='+$script:GithubBranch) -Method Get -Headers $headers -TimeoutSec 20 -MaximumRedirection 0
         if($cfgRemote.type -ne 'file' -or $cfgRemote.path -ne $cfgName -or
@@ -4143,10 +4201,12 @@ function Sync-ProfileToGitHub {
             throw ('Invalid GitHub CFG metadata, cannot safely sync '+$cfgName)
         }
         $cfgText=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String(([string]$cfgRemote.content -replace '\s','')))
-        $newCfgText=Set-CS2CfgSensitivityText -Content $cfgText -Sensitivity $sensValue
+        $newCfgText=$cfgText
+        if($capturedConvars -and $capturedConvars.Count -gt 0){$newCfgText=Set-CafeCapturedConvarsInCfg -Content $newCfgText -Values $capturedConvars}
+        if(-not [string]::IsNullOrWhiteSpace($sensValue)){$newCfgText=Set-CS2CfgSensitivityText -Content $newCfgText -Sensitivity $sensValue}
         if($newCfgText -cne $cfgText){
             $cfgBody=@{
-                message="Update $cfgName sensitivity from CafeLauncher"
+                message="Sync $cfgName CS2 sensitivity and crosshair from CafeLauncher"
                 content=[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($newCfgText))
                 branch=$script:GithubBranch
                 sha=[string]$cfgRemote.sha
@@ -4158,7 +4218,7 @@ function Sync-ProfileToGitHub {
             $cfgResponse=Invoke-CafeGitHubRestMethod -Uri $cfgUri -Method Put -Headers $headers -ContentType 'application/json' -Body ($cfgBody | ConvertTo-Json -Depth 5 -Compress) -TimeoutSec 25 -MaximumRedirection 0
             if(-not $cfgResponse.commit.sha){throw ('CFG write was not confirmed for '+$cfgName)}
             $cfgUploaded=$true
-            $cfgStatus="updated sensitivity to $sensValue"
+            $cfgStatus="updated CS2 sensitivity/crosshair"
             Write-Log ("GitHub CFG sensitivity saved to "+$cfgName+"; commit="+$cfgResponse.commit.sha)
         }
         $result = Invoke-CafeGitHubRestMethod -Uri $uri -Method Put -Headers $headers -ContentType 'application/json' -Body ($body | ConvertTo-Json -Depth 5 -Compress) -TimeoutSec 25 -MaximumRedirection 0
@@ -4222,6 +4282,7 @@ function Sync-ProfileToGitHub {
         }
         $script:GraphicsPresets[$ProfileName]=$verifiedGraphics
         $script:GamingProfiles[$ProfileName].ScalingMode=[int]$verifiedGraphics.ScalingMode
+        if($script:CapturedCS2Convars.ContainsKey($ProfileName)){[void]$script:CapturedCS2Convars.Remove($ProfileName)}
         $script:VerifiedProfileState[$ProfileName]=@{BlobSha=[string]$remoteProfile.sha;CommitSha=[string]$result.commit.sha}
         $readbackFailed=$false
         if($graphicsChanged){
@@ -4853,6 +4914,18 @@ function Show-ProfileEditor {
             $answer=[System.Windows.Forms.MessageBox]::Show($preview,'Capture CS2 Graphics','YesNo','Question')
             if($answer -ne [System.Windows.Forms.DialogResult]::Yes){return}
             [void](& $applyGraphicsPresetToEditor $capture.Preset)
+            try{
+                $source=[pscustomobject]@{Path=$capture.Path;AccountID=$capture.AccountID}
+                $convars=Get-CafeCS2UserConvarsCapture -Source $source
+                if($convars.Values.Count -eq 0){throw 'No relevant sensitivity or crosshair keys in saved convars.'}
+                $script:CapturedCS2Convars[$ProfileName]=$convars.Values
+                if($convars.Values.ContainsKey('sensitivity')){$sens.Text=[string]$convars.Values['sensitivity']}
+                Write-Log ('Staged '+$convars.Values.Count+' CS2 sensitivity/crosshair values for '+$ProfileName)
+            }catch{
+                [void]$script:CapturedCS2Convars.Remove($ProfileName)
+                Write-Log ('CS2 user convars capture skipped: '+$_.Exception.Message) 'WARN'
+                [void][System.Windows.Forms.MessageBox]::Show(('Graphics captured but crosshair/sensitivity unavailable: '+$_.Exception.Message),'Partial CS2 capture','OK','Warning')
+            }
             $status.Text=('Captured CS2 settings from Steam account '+$capture.AccountID+'. Review them, then Save & Sync to publish; nothing has been saved or applied yet.')
             $status.ForeColor=[System.Drawing.Color]::FromArgb(255,190,105)
             Write-Log ('Captured '+$capture.CapturedFields.Count+' CS2 graphics values from '+$capture.Path+' for '+$ProfileName+'; missing values kept the current preset. No game, local profile, or GitHub data was changed.')
@@ -4971,7 +5044,9 @@ function Show-ProfileEditor {
     $saveSync.Add_Click({
         try {
             & $saveEditorValues
-            $changes=if($sens.Text.Trim()){
+            $changes=if($script:CapturedCS2Convars.ContainsKey($ProfileName)){
+                "profiles/$ProfileName.json, graphics/$ProfileName.json AND $($p.ConfigFile) (captured CS2 crosshair/sensitivity)"
+            }elseif($sens.Text.Trim()){
                 "profiles/$ProfileName.json, graphics/$ProfileName.json AND $($p.ConfigFile) (sensitivity only)"
             }else{
                 "profiles/$ProfileName.json and graphics/$ProfileName.json (CFG unchanged: sensitivity blank)"
