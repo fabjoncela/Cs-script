@@ -4454,6 +4454,13 @@ function Add-EditorTabWide {
     $Grid.SetColumnSpan($Control,2)
 }
 
+$script:ProfileAccentColors=@{
+    FabMode=[System.Drawing.Color]::FromArgb(56,137,240)
+    ArliMode=[System.Drawing.Color]::FromArgb(54,181,117)
+    BrileMode=[System.Drawing.Color]::FromArgb(167,111,226)
+    ArmlMode=[System.Drawing.Color]::FromArgb(232,151,65)
+    OliMode=[System.Drawing.Color]::FromArgb(71,193,207)
+}
 function Show-ProfileEditor {
     param([Parameter(Mandatory=$true)][string]$ProfileName,[switch]$CaptureOnOpen)
     if(-not $script:GamingProfiles.Contains($ProfileName)){throw "Unknown profile: $ProfileName"}
@@ -4516,11 +4523,11 @@ function Show-ProfileEditor {
     $intro.Padding=New-Object System.Windows.Forms.Padding(20,12,20,0)
     $editorRoot.Controls.Add($intro,0,0)
     $introTitle=New-Object System.Windows.Forms.Label
-    $introTitle.Text="Edit $ProfileName"
+    $introTitle.Text="EDITING: $($ProfileName.ToUpperInvariant())"
     $introTitle.Dock='Top'
     $introTitle.Height=32
     $introTitle.Font=New-Object System.Drawing.Font('Segoe UI',17,[System.Drawing.FontStyle]::Bold)
-    $introTitle.ForeColor=$WHITE
+    $introTitle.ForeColor=$script:ProfileAccentColors[$ProfileName]
     $intro.Controls.Add($introTitle)
     $introSubtitle=New-Object System.Windows.Forms.Label
     $introSubtitle.Text='Mouse, NVIDIA/display, CS2 and app preferences'
@@ -5857,10 +5864,10 @@ function New-Tile {
         $card.Dock='Fill'
         $card.ColumnCount=5
         $card.RowCount=1
-        $profileColors=@{FabMode=[System.Drawing.Color]::FromArgb(56,137,240);ArliMode=[System.Drawing.Color]::FromArgb(54,181,117);BrileMode=[System.Drawing.Color]::FromArgb(167,111,226);ArmlMode=[System.Drawing.Color]::FromArgb(232,151,65);OliMode=[System.Drawing.Color]::FromArgb(71,193,207)}
-        $profileColor=$profileColors[$selectedProfile]
+        $profileColor=$script:ProfileAccentColors[$selectedProfile]
         $card.BackColor=$profileColor
         $card.Padding=New-Object System.Windows.Forms.Padding(2)
+        $card.Tag=$selectedProfile
         $card.Margin=New-Object System.Windows.Forms.Padding(3)
         foreach($pct in @(24,20,20,14,22)){[void]$card.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle('Percent',$pct)))}
         $button.Dock='Fill'
@@ -5894,7 +5901,7 @@ function New-Tile {
         }.GetNewClosure())
         $card.Controls.Add($graphics,2,0)
         $edit=New-Object System.Windows.Forms.Button
-        $edit.Text='Edit '+$selectedProfile
+        $edit.Text=[string]([char]0x2699)+' Edit '+$selectedProfile
         Style-CafeButton -Button $edit
         $edit.BackColor=[System.Drawing.Color]::FromArgb(47,56,72)
         $edit.Dock='Fill'
@@ -5918,8 +5925,18 @@ function New-Tile {
             }catch{Write-Log ('Capture shortcut failed for '+$selectedProfile+': '+$_.Exception.Message) 'ERROR'}
         }.GetNewClosure())
         $card.Controls.Add($capture,4,0)
-        $card.Add_MouseEnter({$card.BackColor=[System.Drawing.Color]::ControlLightLight}.GetNewClosure())
-        $card.Add_MouseLeave({$card.BackColor=$profileColor}.GetNewClosure())
+        # Track pointer position over the entire row, including its child buttons.
+        # Avoid a white hover border against the dark dashboard.
+        $rowHover=New-Object System.Windows.Forms.Timer
+        $rowHover.Interval=80
+        $rowHover.Add_Tick({
+            if($card.IsDisposed){$rowHover.Stop();$rowHover.Dispose();return}
+            $pointer=$card.PointToClient([System.Windows.Forms.Cursor]::Position)
+            $inside=$card.ClientRectangle.Contains($pointer)
+            $desired=if($inside){[System.Drawing.Color]::FromArgb(238,238,245)}else{$profileColor}
+            if($card.BackColor.ToArgb() -ne $desired.ToArgb()){$card.BackColor=$desired}
+        }.GetNewClosure())
+        $rowHover.Start()
         $profilesGrid.Controls.Add($card,0,($Index-5))
     }else{
         $button.Add_Click({
