@@ -24,6 +24,8 @@ on:
       - 'tools/Test-EditorComboWheel.ps1'
       - 'tools/Update-Context.ps1'
       - 'tools/Test-ContextFreshness.ps1'
+      - 'tools/Publish-CafeBatToDrive.ps1'
+      - 'tools/google-drive-sync/**'
       - 'context.md'
       - 'AGENTS.md'
       - '.githooks/**'
@@ -54,6 +56,8 @@ on:
       - 'tools/Test-EditorComboWheel.ps1'
       - 'tools/Update-Context.ps1'
       - 'tools/Test-ContextFreshness.ps1'
+      - 'tools/Publish-CafeBatToDrive.ps1'
+      - 'tools/google-drive-sync/**'
       - 'context.md'
       - 'AGENTS.md'
       - '.githooks/**'
@@ -173,3 +177,19 @@ jobs:
         shell: powershell
         run: |
           & "$env:GITHUB_WORKSPACE\tools\Test-StepResults.ps1"
+  publish-drive:
+    name: Publish cafe.bat to Google Drive
+    runs-on: ubuntu-latest
+    needs: [core, profiles, cs2, hardware, ui]
+    if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    steps:
+      - name: Checkout full history for change detection
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Replace the existing Drive file
+        shell: pwsh
+        env:
+          DRIVE_SYNC_URL: ${{ secrets.DRIVE_SYNC_URL }}
+          DRIVE_SYNC_TOKEN: ${{ secrets.DRIVE_SYNC_TOKEN }}
+        run: ./tools/Publish-CafeBatToDrive.ps1

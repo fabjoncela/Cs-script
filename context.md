@@ -163,6 +163,8 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tools\Update-Context.p
 
 GitHub Actions runs the GitHub sync authentication, CS2 graphics capture, graphics history (including its async worker), and Steam/CS2 path-discovery tests in the existing Profiles and CS2 Windows PowerShell 5.1 jobs. Changes to those test scripts trigger CI on pull requests and pushes to `main`.
 
+The `publish-drive` job runs after all five validation jobs for pushes to `main` and manual dispatches from `main`. It skips pushes that did not change `cafe.bat`; when configured, it posts the validated release to the Apps Script endpoint in `tools/google-drive-sync/Code.gs`, which updates the single existing `cafe.bat` in the configured Drive folder in place. This preserves the Drive file ID and folder link. The mirror stays inactive until the GitHub Actions secrets `DRIVE_SYNC_URL` and `DRIVE_SYNC_TOKEN` are configured; setup is documented in `tools/google-drive-sync/README.md`.
+
 These checks cover parser/formatting, profile Apply's GitHub-authoritative graphics scaling and fail-closed behavior, mocked persistence and GitHub sync, device-flow worker compilation and in-memory token clearing without network or GUI, graphics fixtures, legacy DVC range mapping without hardware writes, read-only NVIDIA capability inventory, mocked Steam launch arguments, and status reporting. A real CS2/Steam account and monitor smoke test is still separate.
 
 ## 2026-10-15 — CS2 capture and dashboard usability
