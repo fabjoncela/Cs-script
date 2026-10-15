@@ -4253,6 +4253,13 @@ function Sync-ProfileToGitHub {
             $cfgResponse=Invoke-CafeGitHubRestMethod -Uri $cfgUri -Method Put -Headers $headers -ContentType 'application/json' -Body ($cfgBody | ConvertTo-Json -Depth 5 -Compress) -TimeoutSec 25 -MaximumRedirection 0
             if(-not $cfgResponse.commit.sha){throw ('CFG write was not confirmed for '+$cfgName)}
             $cfgUploaded=$true
+            if($voiceKey){
+                $voiceReadUrl=$cfgUri+'?ref='+[Uri]::EscapeDataString([string]$script:GithubBranch)+'&fresh='+[guid]::NewGuid().ToString('N')
+                $voiceRead=Invoke-CafeGitHubRestMethod -Uri $voiceReadUrl -Method Get -Headers $headers -TimeoutSec 20 -MaximumRedirection 0
+                if($voiceRead.type -ne 'file' -or $voiceRead.path -cne $cfgName -or $voiceRead.encoding -ne 'base64' -or [int64]$voiceRead.size -gt 2097152){throw 'GitHub voice binding read-back metadata was invalid.'}
+                $voiceText=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String(([string]$voiceRead.content -replace '\s','')))
+                if((Get-CafeVoiceBindingFromCfg -Content $voiceText) -cne $voiceKey){throw 'GitHub did not confirm the requested push-to-talk binding.'}
+            }
             $cfgStatus="updated CS2 sensitivity/crosshair"
             Write-Log ("GitHub CFG sensitivity saved to "+$cfgName+"; commit="+$cfgResponse.commit.sha)
         }
@@ -4644,8 +4651,11 @@ function Show-ProfileEditor {
     $voiceOptions=@('V','MOUSE4','MOUSE5','CAPSLOCK','ALT','K','F1','F2','F3','F4','SPACE','SHIFT','CTRL','TAB')
     [void]$voiceBox.Items.Add('(Keep existing bind)')
     foreach($key in $voiceOptions){[void]$voiceBox.Items.Add($key)}
+    # CFG remains authoritative unless this profile has unsynced local edits.
     $voiceSelected=[string]$p.VoicePushToTalkKey
-    if(-not $voiceSelected){try{$voiceSelected=Get-CafeGitHubVoiceBinding -CfgName ([string]$p.ConfigFile)}catch{Write-Log ('Voice key lookup unavailable: '+$_.Exception.Message) 'WARN'}}
+    if(-not $pendingSyncState[$ProfileName]){
+        try{$voiceSelected=Get-CafeGitHubVoiceBinding -CfgName ([string]$p.ConfigFile)}catch{Write-Log ('Voice key lookup unavailable: '+$_.Exception.Message) 'WARN'}
+    }
     if($voiceSelected -and $voiceBox.Items.Contains($voiceSelected)){$voiceBox.SelectedItem=$voiceSelected}else{$voiceBox.SelectedIndex=0}
     Add-EditorTabField -Grid $cs2Grid -Title 'Push-to-talk key (CFG)' -Control $voiceBox -Column 1 -Row 1
     $url=New-Object System.Windows.Forms.TextBox
