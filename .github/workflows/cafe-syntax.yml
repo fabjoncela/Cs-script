@@ -8,8 +8,13 @@ on:
       - 'tools/Test-GitHubRateLimit.ps1'
       - 'tools/Test-ProfileSave.ps1'
       - 'tools/Test-CfgSensitivitySync.ps1'
+      - 'tools/Test-GitHubSyncAuth.ps1'
       - 'tools/Test-SteamLaunchOptions.ps1'
+      - 'tools/Test-CS2GraphicsCapture.ps1'
       - 'tools/Test-Graphics.ps1'
+      - 'tools/Test-GraphicsHistory.ps1'
+      - 'tools/Test-GraphicsHistoryAsync.ps1'
+      - 'tools/Test-SteamPathDiscovery.ps1'
       - 'tools/fixtures/**'
       - 'tools/Test-NvidiaCompatibility.ps1'
       - 'tools/Test-NvidiaDvcFallback.ps1'
@@ -33,8 +38,13 @@ on:
       - 'tools/Test-GitHubRateLimit.ps1'
       - 'tools/Test-ProfileSave.ps1'
       - 'tools/Test-CfgSensitivitySync.ps1'
+      - 'tools/Test-GitHubSyncAuth.ps1'
       - 'tools/Test-SteamLaunchOptions.ps1'
+      - 'tools/Test-CS2GraphicsCapture.ps1'
       - 'tools/Test-Graphics.ps1'
+      - 'tools/Test-GraphicsHistory.ps1'
+      - 'tools/Test-GraphicsHistoryAsync.ps1'
+      - 'tools/Test-SteamPathDiscovery.ps1'
       - 'tools/fixtures/**'
       - 'tools/Test-NvidiaCompatibility.ps1'
       - 'tools/Test-NvidiaDvcFallback.ps1'
@@ -90,6 +100,10 @@ jobs:
         shell: powershell
         run: |
           & "$env:GITHUB_WORKSPACE\tools\Test-CfgSensitivitySync.ps1"
+      - name: Test GitHub sync authentication worker and contract
+        shell: powershell
+        run: |
+          & "$env:GITHUB_WORKSPACE\tools\Test-GitHubSyncAuth.ps1"
   cs2:
     name: Cs2 validation (PowerShell 5.1)
     runs-on: windows-latest
@@ -105,6 +119,22 @@ jobs:
         shell: powershell
         run: |
           & "$env:GITHUB_WORKSPACE\tools\Test-Graphics.ps1"
+      - name: Test CS2 graphics capture
+        shell: powershell
+        run: |
+          & "$env:GITHUB_WORKSPACE\tools\Test-CS2GraphicsCapture.ps1"
+      - name: Test graphics history
+        shell: powershell
+        run: |
+          & "$env:GITHUB_WORKSPACE\tools\Test-GraphicsHistory.ps1"
+      - name: Test asynchronous graphics history worker
+        shell: powershell
+        run: |
+          & "$env:GITHUB_WORKSPACE\tools\Test-GraphicsHistoryAsync.ps1"
+      - name: Test Steam and CS2 path discovery
+        shell: powershell
+        run: |
+          & "$env:GITHUB_WORKSPACE\tools\Test-SteamPathDiscovery.ps1"
   hardware:
     name: Hardware validation (PowerShell 5.1)
     runs-on: windows-latest
