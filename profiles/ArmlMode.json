@@ -2,7 +2,7 @@
     "SchemaVersion":  1,
     "ProfileName":  "ArmlMode",
     "PointerSpeed":  8,
-    "LogitechDPI":  400,
+    "LogitechDPI":  800,
     "DisableAcceleration":  true,
     "ApplyNvidia":  true,
     "Width":  1920,

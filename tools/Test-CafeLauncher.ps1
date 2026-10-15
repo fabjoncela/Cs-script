@@ -93,7 +93,7 @@ foreach($requiredEditorFeature in @(
     '$pointerSpeedSelectionState.UserChanged',
     '$p.PointerSpeed=$pointerSpeedOriginalValue',
     '$cs2Page.Text=''CS2 / Apps''',
-    '$cs2Grid=New-EditorTabGrid -Page $cs2Page -Rows 19',
+    '$cs2Grid=New-EditorTabGrid -Page $cs2Page -Rows 20',
     '$captureGraphics.Text=''Capture from CS2''',
     'Get-CafeCS2GraphicsCapture -ProfileName $ProfileName -BasePreset $graphicsPreset',
     'New-EditorTabNumber -Grid $cs2Grid -Title ''CS2 resolution width''',
@@ -454,6 +454,11 @@ foreach($name in @('FabMode','ArliMode','BrileMode','ArmlMode','OliMode')){
 $script:LogPath=Join-Path $env:TEMP ('CafeLauncher-dashboard-CI-'+[Guid]::NewGuid().ToString('N')+'.log')
 $script:GitHubRateLimitSnapshot=$null
 $script:GitHubRateLimitLabel=$null
+# Load the production palette explicitly: this CI test evaluates the dashboard
+# separately from the editor, where ProfileAccentColors is normally initialized.
+$paletteMatch=[regex]::Match($psSource,'(?ms)^\$script:ProfileAccentColors\s*=\s*@\{.*?^\}')
+if(-not $paletteMatch.Success){throw 'Production profile color palette missing.'}
+Invoke-Expression $paletteMatch.Value
 try {
     Invoke-Expression $psSource.Substring($dashboardStart,$dashboardEnd-$dashboardStart)
     if($tabs.TabPages.Count -ne 2 -or $profilesGrid.Controls.Count -ne 6){

@@ -162,3 +162,31 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tools\Update-Context.p
 ```
 
 These checks cover parser/formatting, profile Apply's GitHub-authoritative graphics scaling and fail-closed behavior, mocked persistence and GitHub sync, device-flow worker compilation and in-memory token clearing without network or GUI, graphics fixtures, legacy DVC range mapping without hardware writes, read-only NVIDIA capability inventory, mocked Steam launch arguments, and status reporting. A real CS2/Steam account and monitor smoke test is still separate.
+
+## 2026-10-15 — CS2 capture and dashboard usability
+
+- Added **Capture CS2** beside each of FabMode, ArliMode, BrileMode, ArmlMode and OliMode. The shortcut opens that profile's editor directly on **CS2 / Apps**, triggering the same extracted capture action as the editor button; GitHub authentication, Save Locally, and Save & Sync are unchanged.
+- Capture reads video values from the active Steam account's `cs2_video.txt` and attempts to read sensitivity and supported crosshair commands from `cs2_user_convars_0_slot0.vcfg`. Missing user convars produce a warning and do not overwrite an existing CFG with invented values. Captured values are staged per profile until GitHub sync.
+- Save & Sync updates only recognized sensitivity/crosshair commands in that profile's matching `.cfg` (alongside existing graphics/profile JSON sync); unrelated binds and CFG commands remain untouched. Profile-to-profile **Copy graphics** remains graphics-only.
+- Dashboard profile rows have distinct outline accents (FabMode blue, ArliMode green, BrileMode purple, ArmlMode orange, OliMode cyan), more identifiable `Edit <Profile>` buttons, and `EDITING: <Profile>` window titles.
+- Keep the shortcut and editor wired to the **same** capture action to avoid diverging behavior. GitHub credentials must not be persisted; preserve Deep Freeze portability and non-admin assumptions.
+- **Validation required:** Windows PowerShell 5.1 parser and Windows/CS2 smoke test (including local account detection, saved user convars format, and GitHub read-back) before relying on this build in internet cafés. This environment cannot run the Windows GUI.
+
+## 2026-10-15 — Profile identity refinement (merged via PR #22)
+
+- `feature/profile-identity-ui` centralizes the FabMode/ArliMode/BrileMode/ArmlMode/OliMode accent palette in `$script:ProfileAccentColors`; dashboard borders and editor heading use consistent colors.
+- Editor headings display `EDITING: <PROFILE>` and dashboard Edit buttons identify their own profile (`⚙ Edit <Profile>`).
+- Dashboard row hover brightens the slim container outline while preserving dark button backgrounds, including when the cursor is over a child button. Button handlers remain bound to their row's captured profile.
+- CI validation was performed before merge; real Windows WinForms layout testing at different DPI scaling remains recommended.
+
+## 2026-10-15 — Per-profile CS2 push-to-talk binding (merged via PR #23)
+
+- Each profile editor's **CS2 / Apps** tab has a push-to-talk selector. The launcher looks up the current `bind "<key>" "+voicerecord"` from the matching GitHub CFG when no unsynced local profile changes exist; if the network is unavailable, the locally saved key can be shown.
+- The selected key is locally persisted as `VoicePushToTalkKey` in profile settings; blank means do not modify the remote CFG. `Save & Sync to GitHub` stages an update to the matching `fab.cfg`, `arli.cfg`, `brile.cfg`, `arml.cfg` or `oli.cfg`.
+- The CFG rewrite replaces the unique active `+voicerecord` bind, rejects duplicated voice bindings and an already-occupied target key, preserves unrelated bind commands, and skips rewriting unchanged binds. A changed voice binding is read back from GitHub for verification.
+- No admin privileges, permanent token storage, Steam restart, profile-to-profile copying, or changes to Apply Graphics were introduced.
+- PR #23 merged into `main` as commit `61112a43de74e85071611aa69499702060555b8e`. All five Windows PowerShell 5.1 CI jobs passed on head commit `0ea8b11c066e35f54fba568f397a04a794be74de` (Core, Profiles, UI, CS2, Hardware). The CFG voice-bind matcher was corrected to preserve Windows CRLF line endings. Real Windows mouse-button capture and in-game CS2 confirmation are still outstanding.
+
+## Next UI improvement (not yet implemented)
+
+- Move the editable CFG download URL out of the everyday CS2/Apps fields into an **Advanced Settings** section with a **Restore Default URL** control. Keep the URL functional and editable for troubleshooting, but harder to change accidentally. This is a proposal, not shipped behavior.

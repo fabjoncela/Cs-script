@@ -2901,27 +2901,27 @@ $script:GamingProfiles = [ordered]@{
     FabMode = @{
         PointerSpeed=10; LogitechDPI=800; DisableAcceleration=$true; ApplyNvidia=$true; ScalingMode=2
         Width=1920; Height=1080; RefreshHz=360; Vibrance=75; Hue=-1
-        CS2Sensitivity=''; ConfigFile='fab.cfg'; CfgDownloadUrl=$script:FabCfgCloudUrl; LaunchApps=$true
+        CS2Sensitivity=''; VoicePushToTalkKey=''; ConfigFile='fab.cfg'; CfgDownloadUrl=$script:FabCfgCloudUrl; LaunchApps=$true
     }
     ArliMode = @{
         PointerSpeed=10; LogitechDPI=800; DisableAcceleration=$true; ApplyNvidia=$true; ScalingMode=2
         Width=1920; Height=1080; RefreshHz=360; Vibrance=75; Hue=-1
-        CS2Sensitivity=''; ConfigFile='arli.cfg'; CfgDownloadUrl='https://raw.githubusercontent.com/fabjoncela/Cs-script/main/arli.cfg'; LaunchApps=$true
+        CS2Sensitivity=''; VoicePushToTalkKey=''; ConfigFile='arli.cfg'; CfgDownloadUrl='https://raw.githubusercontent.com/fabjoncela/Cs-script/main/arli.cfg'; LaunchApps=$true
     }
     BrileMode = @{
         PointerSpeed=10; LogitechDPI=800; DisableAcceleration=$true; ApplyNvidia=$true; ScalingMode=2
         Width=1920; Height=1080; RefreshHz=360; Vibrance=75; Hue=-1
-        CS2Sensitivity=''; ConfigFile='brile.cfg'; CfgDownloadUrl='https://raw.githubusercontent.com/fabjoncela/Cs-script/main/brile.cfg'; LaunchApps=$true
+        CS2Sensitivity=''; VoicePushToTalkKey=''; ConfigFile='brile.cfg'; CfgDownloadUrl='https://raw.githubusercontent.com/fabjoncela/Cs-script/main/brile.cfg'; LaunchApps=$true
     }
     ArmlMode = @{
         PointerSpeed=10; LogitechDPI=800; DisableAcceleration=$true; ApplyNvidia=$true; ScalingMode=2
         Width=1920; Height=1080; RefreshHz=360; Vibrance=75; Hue=-1
-        CS2Sensitivity=''; ConfigFile='arml.cfg'; CfgDownloadUrl='https://raw.githubusercontent.com/fabjoncela/Cs-script/main/arml.cfg'; LaunchApps=$true
+        CS2Sensitivity=''; VoicePushToTalkKey=''; ConfigFile='arml.cfg'; CfgDownloadUrl='https://raw.githubusercontent.com/fabjoncela/Cs-script/main/arml.cfg'; LaunchApps=$true
     }
     OliMode = @{
         PointerSpeed=10; LogitechDPI=800; DisableAcceleration=$true; ApplyNvidia=$true; ScalingMode=2
         Width=1920; Height=1080; RefreshHz=360; Vibrance=75; Hue=-1
-        CS2Sensitivity=''; ConfigFile='oli.cfg'; CfgDownloadUrl='https://raw.githubusercontent.com/fabjoncela/Cs-script/main/oli.cfg'; LaunchApps=$true
+        CS2Sensitivity=''; VoicePushToTalkKey=''; ConfigFile='oli.cfg'; CfgDownloadUrl='https://raw.githubusercontent.com/fabjoncela/Cs-script/main/oli.cfg'; LaunchApps=$true
     }
 }
 $script:ProfileSettingsPath = Join-Path $env:LOCALAPPDATA 'CafeLauncher\profiles.json'
@@ -3077,6 +3077,62 @@ function Get-CafeCS2GraphicsCapture {
     return ConvertFrom-CafeCS2VideoText -ProfileName $ProfileName -Text $text -BasePreset $BasePreset -Path $source.Path -AccountID $source.AccountID
 }
 
+# CS2 user settings captured only on demand; keyed by target profile.
+$script:CapturedCS2Convars=@{}
+function Get-CafeCS2UserConvarsCapture {
+    param($Source)
+    if(@(Get-Process -Name 'cs2' -ErrorAction SilentlyContinue).Count){throw 'Close CS2 before capture.'}
+    $path=Join-Path (Split-Path -Parent $Source.Path) 'cs2_user_convars_0_slot0.vcfg'
+    if(-not (Test-Path -LiteralPath $path -PathType Leaf)){throw ('No saved CS2 user convars for Steam account '+$Source.AccountID)}
+    $file=Get-Item -LiteralPath $path -ErrorAction Stop
+    if($file.Length -lt 10 -or $file.Length -gt 1048576){throw 'Invalid user convars file size.'}
+    $reader=New-Object IO.StreamReader($path,$true)
+    try{$content=$reader.ReadToEnd()}finally{$reader.Dispose()}
+    if($content -notmatch '(?m)^\s*\{\s*$' -or $content -notmatch '(?m)^\s*\}\s*$'){throw 'Unrecognized user convars KeyValues format.'}
+    $allowed=@('sensitivity','cl_crosshair_drawoutline','cl_crosshair_outlinethickness','cl_crosshair_recoil',
+        'cl_crosshair_sniper_width','cl_crosshair_t','cl_crosshairalpha','cl_crosshaircolor',
+        'cl_crosshaircolor_b','cl_crosshaircolor_g','cl_crosshaircolor_r','cl_crosshairdot',
+        'cl_crosshairgap','cl_crosshairgap_useweaponvalue','cl_crosshairsize','cl_crosshairstyle',
+        'cl_crosshairthickness','cl_crosshairusealpha','cl_crosshair_friendly_warning',
+        'cl_crosshair_dynamic_maxdist_splitratio','cl_crosshair_dynamic_splitalpha_innermod',
+        'cl_crosshair_dynamic_splitalpha_outermod','cl_crosshair_dynamic_splitdist')
+    $values=@{}
+    foreach($name in $allowed){
+        $rx='(?im)^\s*"'+[regex]::Escape($name)+'"\s+"(?<v>[^"\r\n]{1,40})"\s*$'
+        $matches=[regex]::Matches($content,$rx)
+        if($matches.Count -gt 1){throw ('Duplicate CS2 saved '+$name+' values.')}
+        if($matches.Count -eq 1){
+            $value=[string]$matches[0].Groups['v'].Value
+            if($value -notmatch '^(true|false|-?[0-9]+(\.[0-9]+)?)$'){throw ('Unexpected '+$name+' in convars.')}
+            $values[$name]=$value
+        }
+    }
+    $active=Get-CafeActiveSteamVideoFile
+    if($active.AccountID -cne $Source.AccountID -or $active.Path -ine $Source.Path){throw 'Steam account changed during capture.'}
+    return [pscustomobject]@{Values=$values;Path=$path}
+}
+function Set-CafeCapturedConvarsInCfg {
+    param([string]$Content,$Values)
+    $text=$Content
+    $newline=if($text.Contains(([string][char]13+[string][char]10))){[string][char]13+[string][char]10}else{[string][char]10}
+    foreach($name in @($Values.Keys|Sort-Object)){
+        if($name -ne 'sensitivity' -and $name -notmatch '^cl_crosshair[a-z0-9_]*$'){continue}
+        $value=[string]$Values[$name]
+        if($value -notmatch '^(true|false|-?[0-9]+(\.[0-9]+)?)$'){throw ('Invalid CFG value for '+$name)}
+        $rx='(?im)^[ \t]*'+[regex]::Escape($name)+'[ \t]+(?:"[^"\r\n]*"|[^\s\r\n/;]+)[ \t]*(?://[^\r\n]*)?[ \t]*(?=\r?$)'
+        $matches=[regex]::Matches($text,$rx)
+        if($matches.Count -gt 1){throw ('Duplicate active '+$name+' in destination CFG.')}
+        $line=$name+' "'+$value+'"'
+        if($matches.Count){
+            $m=$matches[0]
+            $text=$text.Substring(0,$m.Index)+$line+$text.Substring($m.Index+$m.Length)
+        }else{
+            if($text.Length -and -not $text.EndsWith([string][char]10)){$text+=$newline}
+            $text+=$line+$newline
+        }
+    }
+    return $text
+}
 function Get-ProfileGraphicsPreset {
     param([Parameter(Mandatory=$true)][string]$ProfileName,[switch]$Canonical,[switch]$RequireGitHub)
     if(-not $script:GamingProfiles.Contains($ProfileName)){throw ('Unknown graphics profile: '+$ProfileName)}
@@ -3279,7 +3335,7 @@ function Get-ProfileGraphicsVersion {
 function Import-ProfileValues {
     param([string]$ProfileName, $SavedProfile, [string]$SourceLabel = 'local')
     if (-not $script:GamingProfiles.Contains($ProfileName) -or -not $SavedProfile) { return }
-    foreach ($setting in @('PointerSpeed','LogitechDPI','DisableAcceleration','ApplyNvidia','Width','Height','RefreshHz','Vibrance','Hue','ScalingMode','CS2Sensitivity','CfgDownloadUrl','LaunchApps')) {
+    foreach ($setting in @('PointerSpeed','LogitechDPI','DisableAcceleration','ApplyNvidia','Width','Height','RefreshHz','Vibrance','Hue','ScalingMode','CS2Sensitivity','VoicePushToTalkKey','CfgDownloadUrl','LaunchApps')) {
         $saved = $SavedProfile.PSObject.Properties[$setting]
         if (-not $saved) { continue }
         $value = $saved.Value
@@ -3293,6 +3349,10 @@ function Import-ProfileValues {
                 'ScalingMode'  { $value=[int]$value; if ($value -notin @(2,3,5)) { throw 'unsupported NVIDIA scaling mode' } }
                 'Vibrance'     { $value=[int]$value; if ($value -lt 0 -or $value -gt 100) { throw 'range' } }
                 'Hue'           { $value=[int]$value; if ($value -lt -1 -or $value -gt 359) { throw 'range' } }
+                'VoicePushToTalkKey' {
+                    $value=[string]$value
+                    if($value -and $value -notmatch '^(?:[A-Z]|[0-9]|F(?:[1-9]|1[0-2])|MOUSE[1-5]|CAPSLOCK|ALT|SHIFT|CTRL|SPACE|TAB)$'){throw 'invalid voice key'}
+                }
                 'CS2Sensitivity' {
                     $value=[string]$value
                     if ($value -and $value -notmatch '^(?:[0-9]+(?:\.[0-9]+)?)$') { throw 'invalid sensitivity' }
@@ -3358,7 +3418,7 @@ function Export-ProfileValues {
         PointerSpeed=[int]$p.PointerSpeed; LogitechDPI=[int]$p.LogitechDPI; DisableAcceleration=[bool]$p.DisableAcceleration
         ApplyNvidia=[bool]$p.ApplyNvidia; Width=[int]$p.Width; Height=[int]$p.Height
         RefreshHz=[int]$p.RefreshHz; Vibrance=[int]$p.Vibrance; Hue=[int]$p.Hue; ScalingMode=[int]$p.ScalingMode
-        CS2Sensitivity=[string]$p.CS2Sensitivity; CfgDownloadUrl=[string]$p.CfgDownloadUrl
+        CS2Sensitivity=[string]$p.CS2Sensitivity; VoicePushToTalkKey=$(if($p.Contains('VoicePushToTalkKey')){[string]$p['VoicePushToTalkKey']}else{''}); CfgDownloadUrl=[string]$p.CfgDownloadUrl
         LaunchApps=[bool]$p.LaunchApps
     }
     # Preserve the dictionary as ONE pipeline object on Windows PowerShell 5.1.
@@ -4006,6 +4066,35 @@ function Get-GitHubSyncAuthorization {
     }finally{$chooser.Dispose()}
 }
 
+function Get-CafeVoiceBindingFromCfg {
+    param([string]$Content)
+    $matches=[regex]::Matches($Content,'(?im)^[ \t]*bind[ \t]+"?(?<key>[A-Z0-9_]+)"?[ \t]+"?\+voicerecord"?[ \t]*(?://[^\r\n]*)?(?=\r?$)')
+    if($matches.Count -gt 1){throw 'Multiple voice binds in CFG. Resolve manually.'}
+    if($matches.Count -eq 0){return ''}
+    return [string]$matches[0].Groups['key'].Value.ToUpperInvariant()
+}
+function Set-CafeVoiceBindingInCfg {
+    param([string]$Content,[string]$Key)
+    $key=$Key.Trim().ToUpperInvariant()
+    if($key -notmatch '^(?:[A-Z]|[0-9]|F(?:[1-9]|1[0-2])|MOUSE[1-5]|CAPSLOCK|ALT|SHIFT|CTRL|SPACE|TAB)$'){throw 'Unsupported voice key.'}
+    $old=Get-CafeVoiceBindingFromCfg -Content $Content
+    if($old -ceq $key){return $Content}
+    $collision=[regex]::Matches($Content,'(?im)^[ \t]*bind[ \t]+"?'+[regex]::Escape($key)+'"?[ \t]+(?:"[^"\r\n]*"|[^\r\n]+)(?=\r?$)')
+    if($collision.Count){throw ('New voice key '+$key+' is already bound in CFG. Choose another key.')}
+    $rx='(?im)^[ \t]*bind[ \t]+"?[A-Z0-9_]+"?[ \t]+"?\+voicerecord"?[ \t]*(?://[^\r\n]*)?(?=\r?$)'
+    $line='bind "'+$key+'" "+voicerecord"'
+    if($old){$m=[regex]::Match($Content,$rx);return $Content.Substring(0,$m.Index)+$line+$Content.Substring($m.Index+$m.Length)}
+    $nl=if($Content.Contains(([string][char]13+[string][char]10))){[string][char]13+[string][char]10}else{[string][char]10}
+    return $Content+$(if($Content.EndsWith([string][char]10)){''}else{$nl})+$line+$nl
+}
+function Get-CafeGitHubVoiceBinding {
+    param([string]$CfgName)
+    $url="https://api.github.com/repos/$($script:GithubRepo)/contents/$CfgName"+'?ref='+[Uri]::EscapeDataString([string]$script:GithubBranch)
+    $remote=Invoke-CafeGitHubRestMethod -Uri $url -Method Get -Headers @{'Accept'='application/vnd.github+json';'User-Agent'='CafeLauncher-VoiceBinding'} -TimeoutSec 12 -MaximumRedirection 0
+    if($remote.type -ne 'file' -or $remote.path -cne $CfgName -or $remote.encoding -ne 'base64' -or [int64]$remote.size -gt 2097152){throw 'Invalid CFG metadata.'}
+    $text=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String(([string]$remote.content -replace '\s','')))
+    return Get-CafeVoiceBindingFromCfg -Content $text
+}
 # Replace the active CS2 sensitivity command without changing binds or comments.
 function Set-CS2CfgSensitivityText {
     param([Parameter(Mandatory=$true)][string]$Content,
@@ -4060,7 +4149,9 @@ function Sync-ProfileToGitHub {
     $cfgBody=$null
     $cfgUploaded=$false
     $readbackFailed=$false
-    $cfgStatus='left unchanged because sensitivity is blank'
+    $cfgStatus='left unchanged (no sensitivity or captured crosshair)'
+    $capturedConvars=$null
+    if($script:CapturedCS2Convars.ContainsKey($ProfileName)){$capturedConvars=$script:CapturedCS2Convars[$ProfileName]}
     [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
     try {
         $current = Invoke-CafeGitHubRestMethod -Uri ($uri + '?ref=' + $script:GithubBranch) -Method Get -Headers $headers -TimeoutSec 20 -MaximumRedirection 0
@@ -4132,7 +4223,8 @@ function Sync-ProfileToGitHub {
     # Stage a matching CFG update after validating its path, blob metadata, and SHA.
     # Empty sensitivity means "use the CFG's value" and does not edit the CFG.
     $sensValue=[string]$values['CS2Sensitivity']
-    if(-not [string]::IsNullOrWhiteSpace($sensValue)){
+    $voiceKey=[string]$values['VoicePushToTalkKey']
+    if(-not [string]::IsNullOrWhiteSpace($sensValue) -or $voiceKey -or ($capturedConvars -and $capturedConvars.Count -gt 0)){
         $cfgUri="https://api.github.com/repos/$($script:GithubRepo)/contents/$cfgName"
         $cfgRemote=Invoke-CafeGitHubRestMethod -Uri ($cfgUri+'?ref='+$script:GithubBranch) -Method Get -Headers $headers -TimeoutSec 20 -MaximumRedirection 0
         if($cfgRemote.type -ne 'file' -or $cfgRemote.path -ne $cfgName -or
@@ -4143,10 +4235,13 @@ function Sync-ProfileToGitHub {
             throw ('Invalid GitHub CFG metadata, cannot safely sync '+$cfgName)
         }
         $cfgText=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String(([string]$cfgRemote.content -replace '\s','')))
-        $newCfgText=Set-CS2CfgSensitivityText -Content $cfgText -Sensitivity $sensValue
+        $newCfgText=$cfgText
+        if($capturedConvars -and $capturedConvars.Count -gt 0){$newCfgText=Set-CafeCapturedConvarsInCfg -Content $newCfgText -Values $capturedConvars}
+        if(-not [string]::IsNullOrWhiteSpace($sensValue)){$newCfgText=Set-CS2CfgSensitivityText -Content $newCfgText -Sensitivity $sensValue}
+        if($voiceKey){$newCfgText=Set-CafeVoiceBindingInCfg -Content $newCfgText -Key $voiceKey}
         if($newCfgText -cne $cfgText){
             $cfgBody=@{
-                message="Update $cfgName sensitivity from CafeLauncher"
+                message="Sync $cfgName voice, sensitivity and crosshair from CafeLauncher"
                 content=[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($newCfgText))
                 branch=$script:GithubBranch
                 sha=[string]$cfgRemote.sha
@@ -4158,8 +4253,15 @@ function Sync-ProfileToGitHub {
             $cfgResponse=Invoke-CafeGitHubRestMethod -Uri $cfgUri -Method Put -Headers $headers -ContentType 'application/json' -Body ($cfgBody | ConvertTo-Json -Depth 5 -Compress) -TimeoutSec 25 -MaximumRedirection 0
             if(-not $cfgResponse.commit.sha){throw ('CFG write was not confirmed for '+$cfgName)}
             $cfgUploaded=$true
-            $cfgStatus="updated sensitivity to $sensValue"
-            Write-Log ("GitHub CFG sensitivity saved to "+$cfgName+"; commit="+$cfgResponse.commit.sha)
+            if($voiceKey){
+                $voiceReadUrl=$cfgUri+'?ref='+[Uri]::EscapeDataString([string]$script:GithubBranch)+'&fresh='+[guid]::NewGuid().ToString('N')
+                $voiceRead=Invoke-CafeGitHubRestMethod -Uri $voiceReadUrl -Method Get -Headers $headers -TimeoutSec 20 -MaximumRedirection 0
+                if($voiceRead.type -ne 'file' -or $voiceRead.path -cne $cfgName -or $voiceRead.encoding -ne 'base64' -or [int64]$voiceRead.size -gt 2097152){throw 'GitHub voice binding read-back metadata was invalid.'}
+                $voiceText=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String(([string]$voiceRead.content -replace '\s','')))
+                if((Get-CafeVoiceBindingFromCfg -Content $voiceText) -cne $voiceKey){throw 'GitHub did not confirm the requested push-to-talk binding.'}
+            }
+            $cfgStatus="updated selected CS2 voice/sensitivity/crosshair"
+            Write-Log ("GitHub CFG settings saved to "+$cfgName+"; commit="+$cfgResponse.commit.sha)
         }
         $result = Invoke-CafeGitHubRestMethod -Uri $uri -Method Put -Headers $headers -ContentType 'application/json' -Body ($body | ConvertTo-Json -Depth 5 -Compress) -TimeoutSec 25 -MaximumRedirection 0
         if (-not $result.commit.sha) { throw 'GitHub did not return a successful commit.' }
@@ -4222,6 +4324,7 @@ function Sync-ProfileToGitHub {
         }
         $script:GraphicsPresets[$ProfileName]=$verifiedGraphics
         $script:GamingProfiles[$ProfileName].ScalingMode=[int]$verifiedGraphics.ScalingMode
+        if($script:CapturedCS2Convars.ContainsKey($ProfileName)){[void]$script:CapturedCS2Convars.Remove($ProfileName)}
         $script:VerifiedProfileState[$ProfileName]=@{BlobSha=[string]$remoteProfile.sha;CommitSha=[string]$result.commit.sha}
         $readbackFailed=$false
         if($graphicsChanged){
@@ -4281,6 +4384,39 @@ function New-EditorNumber {
     return $n
 }
 
+# A closed dropdown must never steal mouse-wheel scrolling from the editor tab.
+# Implement this in WinForms rather than relying on PowerShell MouseWheel handlers:
+# by the time those handlers run, ComboBox may already have changed selection.
+if (-not ('CafeEditorScrollComboBox' -as [type])) {
+    Add-Type -ReferencedAssemblies @('System.Windows.Forms','System.Drawing') -TypeDefinition @'
+using System;
+using System.Drawing;
+using System.Windows.Forms;
+
+public sealed class CafeEditorScrollComboBox : ComboBox {
+    protected override void OnMouseWheel(MouseEventArgs e) {
+        if (this.DroppedDown) {
+            base.OnMouseWheel(e);
+            return;
+        }
+        for (Control control = this.Parent; control != null; control = control.Parent) {
+            ScrollableControl container = control as ScrollableControl;
+            if (container == null || !container.AutoScroll || !container.VerticalScroll.Visible) continue;
+            int lines = SystemInformation.MouseWheelScrollLines;
+            int amount = lines < 0 ? container.VerticalScroll.LargeChange :
+                Math.Max(1, lines) * Math.Max(16, container.VerticalScroll.SmallChange);
+            int current = -container.AutoScrollPosition.Y;
+            int upper = Math.Max(0, container.VerticalScroll.Maximum - container.VerticalScroll.LargeChange + 1);
+            int next = Math.Max(0, Math.Min(upper, current - (e.Delta * amount / 120)));
+            container.AutoScrollPosition = new Point(-container.AutoScrollPosition.X, next);
+            return;
+        }
+        // Intentionally ignore wheel on a closed combo if no scrollable parent exists.
+    }
+}
+'@
+}
+
 # Field controls live in isolated table cells: labels can never cover adjacent inputs.
 function New-EditorTabGrid {
     param($Page,[int]$Rows)
@@ -4333,7 +4469,7 @@ function New-EditorTabNumber {
 function New-EditorTabChoice {
     param($Grid,[string]$Title,[int]$Column,[int]$Row,[string[]]$Labels,[object[]]$Values,[object]$SelectedValue)
     if($Labels.Count -ne $Values.Count -or $Labels.Count -lt 1){throw 'Choice control options are invalid.'}
-    $choice=New-Object System.Windows.Forms.ComboBox
+    $choice=New-Object CafeEditorScrollComboBox
     $choice.DropDownStyle='DropDownList'
     [void]$choice.Items.AddRange([object[]]$Labels)
     $choice.Tag=$Values
@@ -4361,7 +4497,7 @@ function Add-EditorTabWide {
 }
 
 function Show-ProfileEditor {
-    param([Parameter(Mandatory=$true)][string]$ProfileName)
+    param([Parameter(Mandatory=$true)][string]$ProfileName,[switch]$CaptureOnOpen)
     if(-not $script:GamingProfiles.Contains($ProfileName)){throw "Unknown profile: $ProfileName"}
     if(-not (Resolve-PendingProfileChanges -ProfileName $ProfileName)){return}
     $profileSource=Refresh-ProfileFromGitHub -ProfileName $ProfileName
@@ -4393,7 +4529,7 @@ function Show-ProfileEditor {
     }
 
     $dialog = New-Object System.Windows.Forms.Form
-    $dialog.Text = "Edit $ProfileName - CafeLauncher"
+    $dialog.Text = "EDITING: $ProfileName - CafeLauncher"
     $dialog.ClientSize = New-Object System.Drawing.Size(740,600)
     $dialog.MinimumSize = New-Object System.Drawing.Size(740,620)
     $dialog.StartPosition = 'CenterParent'
@@ -4422,11 +4558,11 @@ function Show-ProfileEditor {
     $intro.Padding=New-Object System.Windows.Forms.Padding(20,12,20,0)
     $editorRoot.Controls.Add($intro,0,0)
     $introTitle=New-Object System.Windows.Forms.Label
-    $introTitle.Text="Edit $ProfileName"
+    $introTitle.Text="EDITING: $($ProfileName.ToUpperInvariant())"
     $introTitle.Dock='Top'
     $introTitle.Height=32
     $introTitle.Font=New-Object System.Drawing.Font('Segoe UI',17,[System.Drawing.FontStyle]::Bold)
-    $introTitle.ForeColor=$WHITE
+    $introTitle.ForeColor=$script:ProfileAccentColors[$ProfileName]
     $intro.Controls.Add($introTitle)
     $introSubtitle=New-Object System.Windows.Forms.Label
     $introSubtitle.Text='Mouse, NVIDIA/display, CS2 and app preferences'
@@ -4502,7 +4638,7 @@ function Show-ProfileEditor {
     $nv.Checked=[bool]$p.ApplyNvidia
     Add-EditorTabWide -Grid $displayGrid -Control $nv -Row 4
 
-    $cs2Grid=New-EditorTabGrid -Page $cs2Page -Rows 19
+    $cs2Grid=New-EditorTabGrid -Page $cs2Page -Rows 20
     $cfgFile=New-Object System.Windows.Forms.TextBox
     $cfgFile.Text=[string]$p.ConfigFile
     $cfgFile.ReadOnly=$true
@@ -4510,83 +4646,135 @@ function Show-ProfileEditor {
     $sens=New-Object System.Windows.Forms.TextBox
     $sens.Text=[string]$p.CS2Sensitivity
     Add-EditorTabField -Grid $cs2Grid -Title 'CS2 sensitivity (sync updates .cfg)' -Control $sens -Column 1 -Row 0
+    # CFG remains authoritative unless this profile has unsynced local edits.
+    $voiceSelected=[string]$p.VoicePushToTalkKey
+    if(-not $pendingSyncState[$ProfileName]){
+        try{$voiceSelected=Get-CafeGitHubVoiceBinding -CfgName ([string]$p.ConfigFile)}catch{Write-Log ('Voice key lookup unavailable: '+$_.Exception.Message) 'WARN'}
+    }
+    $voiceOptions=@('','V','MOUSE4','MOUSE5','CAPSLOCK','ALT','K','SPACE','SHIFT','CTRL','TAB')+
+        @('A','B','C','D','E','F','G','H','I','J','L','M','N','O','P','Q','R','S','T','U','W','X','Y','Z')+
+        @('0','1','2','3','4','5','6','7','8','9')+
+        @('F1','F2','F3','F4','F5','F6','F7','F8','F9','F10','F11','F12')+
+        @('MOUSE1','MOUSE2','MOUSE3')
+    $voiceLabels=@('(Keep existing CFG binding)')+@($voiceOptions|Select-Object -Skip 1)
+    $voiceBox=New-EditorTabChoice -Grid $cs2Grid -Title 'Push-to-talk key (CFG)' -Column 1 -Row 1 -Labels $voiceLabels -Values $voiceOptions -SelectedValue $voiceSelected
+    $voiceCapture=New-Object System.Windows.Forms.Button
+    $voiceCapture.Text='Press a key to bind voice'
+    $voiceCapture.BackColor=[System.Drawing.Color]::FromArgb(58,67,83)
+    $voiceCapture.ForeColor=$WHITE
+    $voiceCapture.FlatStyle='Flat'
+    [void](Add-EditorTabField -Grid $cs2Grid -Title 'Optional: keyboard / side mouse buttons' -Control $voiceCapture -Column 1 -Row 2)
+    $voiceCapture.Add_Click({
+        $voiceCapture.Text='Press a key (Esc cancels)'
+        [void]$voiceCapture.Focus()
+    }.GetNewClosure())
+    $voiceCapture.Add_KeyDown({
+        param($sender,$eventArgs)
+        $raw=$eventArgs.KeyCode.ToString().ToUpperInvariant()
+        if($raw -eq 'ESCAPE'){$voiceCapture.Text='Press a key to bind voice';return}
+        $candidate=switch -Regex ($raw){
+            '^D([0-9])$' {$Matches[1];break}
+            '^NUMPAD([0-9])$' {$Matches[1];break}
+            '^CAPITAL$' {'CAPSLOCK';break}
+            '^CONTROLKEY$' {'CTRL';break}
+            '^SHIFTKEY$' {'SHIFT';break}
+            '^MENU$' {'ALT';break}
+            default {$raw}
+        }
+        if($voiceOptions -contains $candidate){
+            Set-EditorTabChoiceValue -Choice $voiceBox -Value $candidate
+            $voiceCapture.Text=('Selected '+$candidate)
+            $eventArgs.SuppressKeyPress=$true
+        }else{
+            $voiceCapture.Text='Unsupported key; choose from dropdown'
+        }
+    }.GetNewClosure())
+    $voiceCapture.Add_MouseDown({
+        param($sender,$eventArgs)
+        $candidate=if($eventArgs.Button -eq [System.Windows.Forms.MouseButtons]::XButton1){'MOUSE4'}elseif($eventArgs.Button -eq [System.Windows.Forms.MouseButtons]::XButton2){'MOUSE5'}else{''}
+        if($candidate){
+            Set-EditorTabChoiceValue -Choice $voiceBox -Value $candidate
+            $voiceCapture.Text=('Selected '+$candidate)
+        }
+    }.GetNewClosure())
+
     $apps=New-Object System.Windows.Forms.CheckBox
     $apps.Text='Launch Steam, FACEIT, Spotify, Mouse Options (no G HUB)'
     $apps.Checked=[bool]$p.LaunchApps
-    Add-EditorTabWide -Grid $cs2Grid -Control $apps -Row 2
+    Add-EditorTabWide -Grid $cs2Grid -Control $apps -Row 3
     $cs2Hint=New-Object System.Windows.Forms.Label
     $cs2Hint.Text='Apply Graphics and Play + Exec remain separate actions on the dashboard.'
     $cs2Hint.ForeColor=$MUTED
-    Add-EditorTabWide -Grid $cs2Grid -Control $cs2Hint -Row 3
+    Add-EditorTabWide -Grid $cs2Grid -Control $cs2Hint -Row 4
 
     $graphicsHint=New-Object System.Windows.Forms.Label
     $graphicsHint.Text='CS2 video settings: highest supported refresh is recommended; stretch mode uses NVIDIA scaling.'
     $graphicsHint.ForeColor=$MUTED
-    Add-EditorTabWide -Grid $cs2Grid -Control $graphicsHint -Row 4
+    Add-EditorTabWide -Grid $cs2Grid -Control $graphicsHint -Row 5
     $gs=$graphicsPreset.Settings
     $copyOptions=@($script:GamingProfiles.Keys|Where-Object{$_ -cne $ProfileName})
-    $copyFromChoice=New-EditorTabChoice -Grid $cs2Grid -Title 'Copy CS2 graphics from profile' -Column 0 -Row 5 -Labels $copyOptions -Values $copyOptions -SelectedValue $copyOptions[0]
+    $copyFromChoice=New-EditorTabChoice -Grid $cs2Grid -Title 'Copy CS2 graphics from profile' -Column 0 -Row 6 -Labels $copyOptions -Values $copyOptions -SelectedValue $copyOptions[0]
     $copyGraphics=New-Object System.Windows.Forms.Button
     $copyGraphics.Text='Copy graphics'
     $copyGraphics.BackColor=[System.Drawing.Color]::FromArgb(58,67,83)
     $copyGraphics.ForeColor=$WHITE
     $copyGraphics.FlatStyle='Flat'
-    [void](Add-EditorTabField -Grid $cs2Grid -Title 'Copy selected profile settings' -Control $copyGraphics -Column 1 -Row 5)
-    $gameWidth=New-EditorTabNumber -Grid $cs2Grid -Title 'CS2 resolution width' -Column 0 -Row 6 -Min 640 -Max 7680 -Value ([int]$gs.Width)
-    $gameHeight=New-EditorTabNumber -Grid $cs2Grid -Title 'CS2 resolution height' -Column 1 -Row 6 -Min 480 -Max 4320 -Value ([int]$gs.Height)
-    $aspectChoice=New-EditorTabChoice -Grid $cs2Grid -Title 'CS2 aspect ratio' -Column 0 -Row 7 -Labels @('4:3','16:9','16:10') -Values @('0','1','2') -SelectedValue ([string]$gs.AspectRatioMode)
-    $fullscreenChoice=New-EditorTabChoice -Grid $cs2Grid -Title 'Display mode' -Column 1 -Row 7 -Labels @('Fullscreen','Windowed') -Values @('1','0') -SelectedValue ([string]$gs.Fullscreen)
-    $refreshPolicyChoice=New-EditorTabChoice -Grid $cs2Grid -Title 'CS2 refresh selection' -Column 0 -Row 8 -Labels @('Highest supported (recommended)','Use specific Hz') -Values @('Highest','Exact') -SelectedValue ([string]$graphicsPreset.RefreshPolicy)
-    $gameRefresh=New-EditorTabNumber -Grid $cs2Grid -Title 'Specific CS2 refresh (Hz)' -Column 1 -Row 8 -Min 24 -Max 600 -Value ([int]$(if($gs.RefreshHz){$gs.RefreshHz}else{360}))
+    [void](Add-EditorTabField -Grid $cs2Grid -Title 'Copy selected profile settings' -Control $copyGraphics -Column 1 -Row 6)
+    $gameWidth=New-EditorTabNumber -Grid $cs2Grid -Title 'CS2 resolution width' -Column 0 -Row 7 -Min 640 -Max 7680 -Value ([int]$gs.Width)
+    $gameHeight=New-EditorTabNumber -Grid $cs2Grid -Title 'CS2 resolution height' -Column 1 -Row 7 -Min 480 -Max 4320 -Value ([int]$gs.Height)
+    $aspectChoice=New-EditorTabChoice -Grid $cs2Grid -Title 'CS2 aspect ratio' -Column 0 -Row 8 -Labels @('4:3','16:9','16:10') -Values @('0','1','2') -SelectedValue ([string]$gs.AspectRatioMode)
+    $fullscreenChoice=New-EditorTabChoice -Grid $cs2Grid -Title 'Display mode' -Column 1 -Row 8 -Labels @('Fullscreen','Windowed') -Values @('1','0') -SelectedValue ([string]$gs.Fullscreen)
+    $refreshPolicyChoice=New-EditorTabChoice -Grid $cs2Grid -Title 'CS2 refresh selection' -Column 0 -Row 9 -Labels @('Highest supported (recommended)','Use specific Hz') -Values @('Highest','Exact') -SelectedValue ([string]$graphicsPreset.RefreshPolicy)
+    $gameRefresh=New-EditorTabNumber -Grid $cs2Grid -Title 'Specific CS2 refresh (Hz)' -Column 1 -Row 9 -Min 24 -Max 600 -Value ([int]$(if($gs.RefreshHz){$gs.RefreshHz}else{360}))
     $gameRefresh.Enabled=([string]$graphicsPreset.RefreshPolicy -eq 'Exact')
     $refreshPolicyChoice.Add_SelectedIndexChanged({
         $gameRefresh.Enabled=([string]$refreshPolicyChoice.Tag[$refreshPolicyChoice.SelectedIndex] -eq 'Exact')
     }.GetNewClosure())
-    $scalingChoice=New-EditorTabChoice -Grid $cs2Grid -Title 'Stretch / scaling' -Column 0 -Row 9 -Labels @('Stretch to fill','Keep aspect ratio','Center without scaling') -Values @('2','5','3') -SelectedValue ([string]$graphicsPreset.ScalingMode)
-    $msaaChoice=New-EditorTabChoice -Grid $cs2Grid -Title 'Anti-aliasing (MSAA)' -Column 1 -Row 9 -Labels @('Off','2×','4×','8×','16×') -Values @('0','2','4','8','16') -SelectedValue ([string]$gs.MSAASamples)
-    $shadowChoice=New-EditorTabChoice -Grid $cs2Grid -Title 'Shadow quality' -Column 0 -Row 10 -Labels @('Low','Medium','High','Very high') -Values @('0','1','2','3') -SelectedValue ([string]$gs.ShadowQuality)
-    $dynamicShadowChoice=New-EditorTabChoice -Grid $cs2Grid -Title 'Dynamic shadows' -Column 1 -Row 10 -Labels @('Off','On') -Values @('0','1') -SelectedValue ([string]$gs.DynamicShadows)
-    $textureChoice=New-EditorTabChoice -Grid $cs2Grid -Title 'Texture detail' -Column 0 -Row 11 -Labels @('Low','Medium','High','Very high') -Values @('0','1','2','3') -SelectedValue ([string]$gs.TextureDetail)
-    $shaderChoice=New-EditorTabChoice -Grid $cs2Grid -Title 'Shader quality' -Column 1 -Row 11 -Labels @('Low','Medium','High') -Values @('0','1','2') -SelectedValue ([string]$gs.ShaderQuality)
-    $particleChoice=New-EditorTabChoice -Grid $cs2Grid -Title 'Particle detail' -Column 0 -Row 12 -Labels @('Low','Medium','High','Very high') -Values @('0','1','2','3') -SelectedValue ([string]$gs.ParticleDetail)
-    $aoChoice=New-EditorTabChoice -Grid $cs2Grid -Title 'Ambient occlusion' -Column 1 -Row 12 -Labels @('Off','Low','Medium','High') -Values @('0','1','2','3') -SelectedValue ([string]$gs.AmbientOcclusion)
-    $hdrChoice=New-EditorTabChoice -Grid $cs2Grid -Title 'HDR detail' -Column 0 -Row 13 -Labels @('Game default','Level 0','Level 1','Level 2','Level 3') -Values @('-1','0','1','2','3') -SelectedValue ([string]$gs.HDRDetail)
-    $reflexChoice=New-EditorTabChoice -Grid $cs2Grid -Title 'NVIDIA Reflex' -Column 1 -Row 13 -Labels @('Off','On','On + Boost') -Values @('0','1','2') -SelectedValue ([string]$gs.NvidiaReflex)
-    $filterChoice=New-EditorTabChoice -Grid $cs2Grid -Title 'Texture filtering level' -Column 0 -Row 14 -Labels @('Level 0','Level 1','Level 2','Level 3','Level 4','Level 5') -Values @('0','1','2','3','4','5') -SelectedValue ([string]$gs.TextureFiltering)
-    $fsrChoice=New-EditorTabChoice -Grid $cs2Grid -Title 'FSR level' -Column 1 -Row 14 -Labels @('Off','Level 1','Level 2','Level 3','Level 4') -Values @('0','1','2','3','4') -SelectedValue ([string]$gs.FSRDetail)
-    $vsyncChoice=New-EditorTabChoice -Grid $cs2Grid -Title 'Vertical sync' -Column 0 -Row 15 -Labels @('Off','On') -Values @('0','1') -SelectedValue ([string]$gs.VSync)
-    $cmaaChoice=New-EditorTabChoice -Grid $cs2Grid -Title 'CMAA' -Column 1 -Row 15 -Labels @('Off','On') -Values @('0','1') -SelectedValue ([string]$gs.CMAA)
+    $scalingChoice=New-EditorTabChoice -Grid $cs2Grid -Title 'Stretch / scaling' -Column 0 -Row 10 -Labels @('Stretch to fill','Keep aspect ratio','Center without scaling') -Values @('2','5','3') -SelectedValue ([string]$graphicsPreset.ScalingMode)
+    $msaaChoice=New-EditorTabChoice -Grid $cs2Grid -Title 'Anti-aliasing (MSAA)' -Column 1 -Row 10 -Labels @('Off','2×','4×','8×','16×') -Values @('0','2','4','8','16') -SelectedValue ([string]$gs.MSAASamples)
+    $shadowChoice=New-EditorTabChoice -Grid $cs2Grid -Title 'Shadow quality' -Column 0 -Row 11 -Labels @('Low','Medium','High','Very high') -Values @('0','1','2','3') -SelectedValue ([string]$gs.ShadowQuality)
+    $dynamicShadowChoice=New-EditorTabChoice -Grid $cs2Grid -Title 'Dynamic shadows' -Column 1 -Row 11 -Labels @('Off','On') -Values @('0','1') -SelectedValue ([string]$gs.DynamicShadows)
+    $textureChoice=New-EditorTabChoice -Grid $cs2Grid -Title 'Texture detail' -Column 0 -Row 12 -Labels @('Low','Medium','High','Very high') -Values @('0','1','2','3') -SelectedValue ([string]$gs.TextureDetail)
+    $shaderChoice=New-EditorTabChoice -Grid $cs2Grid -Title 'Shader quality' -Column 1 -Row 12 -Labels @('Low','Medium','High') -Values @('0','1','2') -SelectedValue ([string]$gs.ShaderQuality)
+    $particleChoice=New-EditorTabChoice -Grid $cs2Grid -Title 'Particle detail' -Column 0 -Row 13 -Labels @('Low','Medium','High','Very high') -Values @('0','1','2','3') -SelectedValue ([string]$gs.ParticleDetail)
+    $aoChoice=New-EditorTabChoice -Grid $cs2Grid -Title 'Ambient occlusion' -Column 1 -Row 13 -Labels @('Off','Low','Medium','High') -Values @('0','1','2','3') -SelectedValue ([string]$gs.AmbientOcclusion)
+    $hdrChoice=New-EditorTabChoice -Grid $cs2Grid -Title 'HDR detail' -Column 0 -Row 14 -Labels @('Game default','Level 0','Level 1','Level 2','Level 3') -Values @('-1','0','1','2','3') -SelectedValue ([string]$gs.HDRDetail)
+    $reflexChoice=New-EditorTabChoice -Grid $cs2Grid -Title 'NVIDIA Reflex' -Column 1 -Row 14 -Labels @('Off','On','On + Boost') -Values @('0','1','2') -SelectedValue ([string]$gs.NvidiaReflex)
+    $filterChoice=New-EditorTabChoice -Grid $cs2Grid -Title 'Texture filtering level' -Column 0 -Row 15 -Labels @('Level 0','Level 1','Level 2','Level 3','Level 4','Level 5') -Values @('0','1','2','3','4','5') -SelectedValue ([string]$gs.TextureFiltering)
+    $fsrChoice=New-EditorTabChoice -Grid $cs2Grid -Title 'FSR level' -Column 1 -Row 15 -Labels @('Off','Level 1','Level 2','Level 3','Level 4') -Values @('0','1','2','3','4') -SelectedValue ([string]$gs.FSRDetail)
+    $vsyncChoice=New-EditorTabChoice -Grid $cs2Grid -Title 'Vertical sync' -Column 0 -Row 16 -Labels @('Off','On') -Values @('0','1') -SelectedValue ([string]$gs.VSync)
+    $cmaaChoice=New-EditorTabChoice -Grid $cs2Grid -Title 'CMAA' -Column 1 -Row 16 -Labels @('Off','On') -Values @('0','1') -SelectedValue ([string]$gs.CMAA)
     $historyChoice=New-Object System.Windows.Forms.ComboBox
     $historyChoice.DropDownStyle='DropDownList'
     [void]$historyChoice.Items.Add('Load history first')
     $historyChoice.SelectedIndex=0
     $historyChoice.Enabled=$false
-    [void](Add-EditorTabField -Grid $cs2Grid -Title 'Earlier GitHub file revisions (commit ID shown)' -Control $historyChoice -Column 0 -Row 16)
+    [void](Add-EditorTabField -Grid $cs2Grid -Title 'Earlier GitHub file revisions (commit ID shown)' -Control $historyChoice -Column 0 -Row 17)
     $loadHistory=New-Object System.Windows.Forms.Button
     $loadHistory.Text='Load history'
     $loadHistory.BackColor=[System.Drawing.Color]::FromArgb(58,67,83)
     $loadHistory.ForeColor=$WHITE
     $loadHistory.FlatStyle='Flat'
-    [void](Add-EditorTabField -Grid $cs2Grid -Title 'Cached 24 hours; requires internet' -Control $loadHistory -Column 1 -Row 16)
+    [void](Add-EditorTabField -Grid $cs2Grid -Title 'Cached 24 hours; requires internet' -Control $loadHistory -Column 1 -Row 17)
     $resetGraphics=New-Object System.Windows.Forms.Button
     $resetGraphics.Text='Reset to defaults'
     $resetGraphics.BackColor=[System.Drawing.Color]::FromArgb(70,75,88)
     $resetGraphics.ForeColor=$WHITE
     $resetGraphics.FlatStyle='Flat'
-    [void](Add-EditorTabField -Grid $cs2Grid -Title 'Load canonical profile preset' -Control $resetGraphics -Column 0 -Row 17)
+    [void](Add-EditorTabField -Grid $cs2Grid -Title 'Load canonical profile preset' -Control $resetGraphics -Column 0 -Row 18)
     $restoreHistory=New-Object System.Windows.Forms.Button
     $restoreHistory.Text='Restore selected version'
     $restoreHistory.BackColor=[System.Drawing.Color]::FromArgb(58,67,83)
     $restoreHistory.ForeColor=$WHITE
     $restoreHistory.FlatStyle='Flat'
     $restoreHistory.Enabled=$false
-    [void](Add-EditorTabField -Grid $cs2Grid -Title 'Loads into editor; save to keep' -Control $restoreHistory -Column 1 -Row 17)
+    [void](Add-EditorTabField -Grid $cs2Grid -Title 'Loads into editor; save to keep' -Control $restoreHistory -Column 1 -Row 18)
     $captureGraphics=New-Object System.Windows.Forms.Button
     $captureGraphics.Text='Capture from CS2'
     $captureGraphics.BackColor=[System.Drawing.Color]::FromArgb(58,67,83)
     $captureGraphics.ForeColor=$WHITE
     $captureGraphics.FlatStyle='Flat'
-    [void](Add-EditorTabField -Grid $cs2Grid -Title 'Game must be closed; review, then Save & Sync' -Control $captureGraphics -Column 0 -Row 18)
+    [void](Add-EditorTabField -Grid $cs2Grid -Title 'Game must be closed; review, then Save & Sync' -Control $captureGraphics -Column 0 -Row 19)
 
     $editorFooter=New-Object System.Windows.Forms.TableLayoutPanel
     $editorFooter.Dock='Fill'
@@ -4799,7 +4987,8 @@ function Show-ProfileEditor {
                 'Restore Graphics Version','OK','Warning')
         }finally{$dialog.Cursor=[System.Windows.Forms.Cursors]::Default}
     }.GetNewClosure())
-    $captureGraphics.Add_Click({
+    # One shared action powers the editor button and the dashboard shortcut.
+    $invokeCS2Capture={
         try{
             $captureGraphics.Enabled=$false
             $dialog.Cursor=[System.Windows.Forms.Cursors]::WaitCursor
@@ -4816,6 +5005,18 @@ function Show-ProfileEditor {
             $answer=[System.Windows.Forms.MessageBox]::Show($preview,'Capture CS2 Graphics','YesNo','Question')
             if($answer -ne [System.Windows.Forms.DialogResult]::Yes){return}
             [void](& $applyGraphicsPresetToEditor $capture.Preset)
+            try{
+                $source=[pscustomobject]@{Path=$capture.Path;AccountID=$capture.AccountID}
+                $convars=Get-CafeCS2UserConvarsCapture -Source $source
+                if($convars.Values.Count -eq 0){throw 'No relevant sensitivity or crosshair keys in saved convars.'}
+                $script:CapturedCS2Convars[$ProfileName]=$convars.Values
+                if($convars.Values.ContainsKey('sensitivity')){$sens.Text=[string]$convars.Values['sensitivity']}
+                Write-Log ('Staged '+$convars.Values.Count+' CS2 sensitivity/crosshair values for '+$ProfileName)
+            }catch{
+                [void]$script:CapturedCS2Convars.Remove($ProfileName)
+                Write-Log ('CS2 user convars capture skipped: '+$_.Exception.Message) 'WARN'
+                [void][System.Windows.Forms.MessageBox]::Show(('Graphics captured but crosshair/sensitivity unavailable: '+$_.Exception.Message),'Partial CS2 capture','OK','Warning')
+            }
             $status.Text=('Captured CS2 settings from Steam account '+$capture.AccountID+'. Review them, then Save & Sync to publish; nothing has been saved or applied yet.')
             $status.ForeColor=[System.Drawing.Color]::FromArgb(255,190,105)
             Write-Log ('Captured '+$capture.CapturedFields.Count+' CS2 graphics values from '+$capture.Path+' for '+$ProfileName+'; missing values kept the current preset. No game, local profile, or GitHub data was changed.')
@@ -4826,7 +5027,12 @@ function Show-ProfileEditor {
             $captureGraphics.Enabled=$true
             if(-not $dialog.IsDisposed){$dialog.Cursor=[System.Windows.Forms.Cursors]::Default}
         }
-    }.GetNewClosure())
+    }.GetNewClosure()
+    $captureGraphics.Add_Click($invokeCS2Capture)
+    if($CaptureOnOpen){
+        $editorTabs.SelectedTab=$cs2Page
+        $dialog.Add_Shown({ & $invokeCS2Capture }.GetNewClosure())
+    }
     $saveLocal=New-Object System.Windows.Forms.Button
     $saveLocal.Text='Save Locally'
     $saveLocal.BackColor=$BLUE
@@ -4842,7 +5048,7 @@ function Show-ProfileEditor {
     $saveSync.FlatStyle='Flat'
     $saveSync.Dock='Fill'
     $editorFooter.Controls.Add($saveSync,1,2)
-    $saveSync.Tag='Sync this profile, its CS2 graphics preset, and (if set) sensitivity in its matching CFG on GitHub.'
+    $saveSync.Tag='Sync profile, graphics, voice push-to-talk, sensitivity and captured crosshair to the matching GitHub CFG.'
 
     $cancel=New-Object System.Windows.Forms.Button
     $cancel.Text='Cancel'
@@ -4909,6 +5115,7 @@ function Show-ProfileEditor {
         $p.ApplyNvidia=[bool]$nv.Checked
         $p.LaunchApps=[bool]$apps.Checked
         $p.CS2Sensitivity=$sensValue
+        $p.VoicePushToTalkKey=[string]$voiceBox.Tag[$voiceBox.SelectedIndex]
         # Use the captured shared dictionary, not script: scope in this closure.
         $pendingSyncState[$ProfileName] = $true
         Save-ProfileSettings
@@ -4931,7 +5138,11 @@ function Show-ProfileEditor {
     $saveSync.Add_Click({
         try {
             & $saveEditorValues
-            $changes=if($sens.Text.Trim()){
+            $changes=if($p.VoicePushToTalkKey){
+                "profiles/$ProfileName.json, graphics/$ProfileName.json AND $($p.ConfigFile) (voice key and selected settings)"
+            }elseif($script:CapturedCS2Convars.ContainsKey($ProfileName)){
+                "profiles/$ProfileName.json, graphics/$ProfileName.json AND $($p.ConfigFile) (captured CS2 crosshair/sensitivity)"
+            }elseif($sens.Text.Trim()){
                 "profiles/$ProfileName.json, graphics/$ProfileName.json AND $($p.ConfigFile) (sensitivity only)"
             }else{
                 "profiles/$ProfileName.json and graphics/$ProfileName.json (CFG unchanged: sensitivity blank)"
@@ -4975,7 +5186,7 @@ function Show-ProfileEditor {
                 Sync-ProfileToGitHub -ProfileName $ProfileName -Token $token
                 $pendingSyncState[$ProfileName] = $false
                 Save-ProfileSettings
-                [System.Windows.Forms.MessageBox]::Show("$ProfileName settings saved locally and synced to GitHub. The CS2 graphics preset was updated or already matched GitHub.`nOther PCs can now download the settings without signing in.`nIf CS2 sensitivity was set, it was also synced into the matching .cfg; binds and other commands remain unchanged.", 'GitHub sync complete', 'OK', 'Information') | Out-Null
+                [System.Windows.Forms.MessageBox]::Show("$ProfileName settings saved locally and synced to GitHub. The CS2 graphics preset was updated or already matched GitHub.`nOther PCs can now download the settings without signing in.`nSelected sensitivity and push-to-talk changes and captured crosshair values are saved in the matching .cfg when present; unrelated binds remain unchanged.", 'GitHub sync complete', 'OK', 'Information') | Out-Null
                 $dialog.DialogResult=[System.Windows.Forms.DialogResult]::OK
                 $dialog.Close()
             } finally {
@@ -5560,6 +5771,13 @@ function Invoke-GraphicsOnly {
 # Backward-compatible entry point.
 function Invoke-FabModeFull { Invoke-GamingProfile -ProfileName 'FabMode' }
 
+$script:ProfileAccentColors=@{
+    FabMode=[System.Drawing.Color]::FromArgb(56,137,240)
+    ArliMode=[System.Drawing.Color]::FromArgb(54,181,117)
+    BrileMode=[System.Drawing.Color]::FromArgb(167,111,226)
+    ArmlMode=[System.Drawing.Color]::FromArgb(232,151,65)
+    OliMode=[System.Drawing.Color]::FromArgb(71,193,207)
+}
 # Modern CafeLauncher dashboard. Profile actions remain separate and independently callable.
 $form=New-Object System.Windows.Forms.Form
 $form.Text='CafeLauncher | CS2 Setup Center'
@@ -5684,7 +5902,7 @@ $profilesGrid.RowCount=6
 $profilesGrid.ColumnCount=1
 [void]$profilesGrid.RowStyles.Add((New-Object System.Windows.Forms.RowStyle('Absolute',45)))
 for($i=1;$i -le 5;$i++){[void]$profilesGrid.RowStyles.Add((New-Object System.Windows.Forms.RowStyle('Percent',20)))}
-$profilesGrid.Controls.Add((New-CafeLabel -Text 'PLAYER PROFILES  |  Apply, Play, Graphics, Edit' -Strong),0,0)
+$profilesGrid.Controls.Add((New-CafeLabel -Text 'NEW? Capture CS2 settings into a profile  |  Apply, Play, Graphics, Edit' -Strong),0,0)
 $dashGrid.Controls.Add($profilesGrid,0,0)
 
 $rightGrid=New-Object System.Windows.Forms.TableLayoutPanel
@@ -5734,12 +5952,14 @@ function New-Tile {
         $selectedProfile=$EditProfile
         $card=New-Object System.Windows.Forms.TableLayoutPanel
         $card.Dock='Fill'
-        $card.ColumnCount=4
+        $card.ColumnCount=5
         $card.RowCount=1
-        $card.BackColor=$PANEL
-        $card.Padding=New-Object System.Windows.Forms.Padding(3)
+        $profileColor=$script:ProfileAccentColors[$selectedProfile]
+        $card.BackColor=$profileColor
+        $card.Padding=New-Object System.Windows.Forms.Padding(2)
+        $card.Tag=$selectedProfile
         $card.Margin=New-Object System.Windows.Forms.Padding(3)
-        foreach($pct in @(28,23,26,23)){[void]$card.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle('Percent',$pct)))}
+        foreach($pct in @(24,20,20,14,22)){[void]$card.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle('Percent',$pct)))}
         $button.Dock='Fill'
         $button.Add_Click({
             Update-SelectedProfileCard -Name $selectedProfile
@@ -5771,9 +5991,9 @@ function New-Tile {
         }.GetNewClosure())
         $card.Controls.Add($graphics,2,0)
         $edit=New-Object System.Windows.Forms.Button
-        $edit.Text='Edit'
+        $edit.Text=[string]([char]0x2699)+' Edit '+$selectedProfile
         Style-CafeButton -Button $edit
-        $edit.BackColor=[System.Drawing.Color]::FromArgb(58,67,83)
+        $edit.BackColor=[System.Drawing.Color]::FromArgb(47,56,72)
         $edit.Dock='Fill'
         $edit.Add_Click({
             Update-SelectedProfileCard -Name $selectedProfile
@@ -5783,6 +6003,30 @@ function New-Tile {
             }catch{Write-Log ('Editor failed: '+$_.Exception.Message) 'ERROR'}
         }.GetNewClosure())
         $card.Controls.Add($edit,3,0)
+        $capture=New-Object System.Windows.Forms.Button
+        $capture.Text='Capture CS2'
+        Style-CafeButton -Button $capture
+        $capture.BackColor=[System.Drawing.Color]::FromArgb(44,90,112)
+        $capture.Dock='Fill'
+        $capture.Add_Click({
+            try{
+                Show-ProfileEditor -ProfileName $selectedProfile -CaptureOnOpen
+                Update-SelectedProfileCard -Name $selectedProfile
+            }catch{Write-Log ('Capture shortcut failed for '+$selectedProfile+': '+$_.Exception.Message) 'ERROR'}
+        }.GetNewClosure())
+        $card.Controls.Add($capture,4,0)
+        # Track pointer position over the entire row, including its child buttons.
+        # Avoid a white hover border against the dark dashboard.
+        $rowHover=New-Object System.Windows.Forms.Timer
+        $rowHover.Interval=80
+        $rowHover.Add_Tick({
+            if($card.IsDisposed){$rowHover.Stop();$rowHover.Dispose();return}
+            $pointer=$card.PointToClient([System.Windows.Forms.Cursor]::Position)
+            $inside=$card.ClientRectangle.Contains($pointer)
+            $desired=if($inside){[System.Drawing.Color]::FromArgb(238,238,245)}else{$profileColor}
+            if($card.BackColor.ToArgb() -ne $desired.ToArgb()){$card.BackColor=$desired}
+        }.GetNewClosure())
+        $rowHover.Start()
         $profilesGrid.Controls.Add($card,0,($Index-5))
     }else{
         $button.Add_Click({
