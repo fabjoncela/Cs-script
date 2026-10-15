@@ -57,7 +57,7 @@ try{
     $script:TestSteamExe=Join-Path $script:TestSteamRoot 'steam.exe'
     $library=Join-Path $sandbox 'LibraryD'
     $gameName='Counter-Strike Global Offensive'
-    $installRoot=Join-Path (Join-Path (Join-Path $library 'steamapps\common') $gameName) ''
+    $installRoot=[IO.Path]::GetFullPath((Join-Path (Join-Path $library 'steamapps\common') $gameName)).TrimEnd('\')
     $cfg=Join-Path $installRoot 'game\csgo\cfg'
     $invalidLibrary=Join-Path $sandbox 'InvalidLibrary'
     [void](New-Item -ItemType Directory -Path (Join-Path $script:TestSteamRoot 'steamapps') -Force)
