@@ -163,7 +163,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tools\Update-Context.p
 
 GitHub Actions runs the GitHub sync authentication, CS2 graphics capture, graphics history (including its async worker), and Steam/CS2 path-discovery tests in the existing Profiles and CS2 Windows PowerShell 5.1 jobs. Changes to those test scripts trigger CI on pull requests and pushes to `main`.
 
-The `publish-drive` job runs after all five validation jobs for pushes to `main` and manual dispatches from `main`. It skips pushes that did not change `cafe.bat`; when configured, it posts the validated release to the Apps Script endpoint in `tools/google-drive-sync/Code.gs`, which updates the single existing `cafe.bat` in the configured Drive folder in place. This preserves the Drive file ID and folder link. The mirror stays inactive until the GitHub Actions secrets `DRIVE_SYNC_URL` and `DRIVE_SYNC_TOKEN` are configured; setup is documented in `tools/google-drive-sync/README.md`.
+The `publish-drive` job runs after all five validation jobs for pushes to `main` and manual dispatches from `main`. It skips pushes that did not change `cafe.bat`; when configured, it posts the validated release to the Apps Script endpoint in `tools/google-drive-sync/Code.gs`, which updates the single existing `cafe.bat` in the configured Drive folder in place. This preserves the Drive file ID and folder link.
 
 These checks cover parser/formatting, profile Apply's GitHub-authoritative graphics scaling and fail-closed behavior, mocked persistence and GitHub sync, device-flow worker compilation and in-memory token clearing without network or GUI, graphics fixtures, legacy DVC range mapping without hardware writes, read-only NVIDIA capability inventory, mocked Steam launch arguments, and status reporting. A real CS2/Steam account and monitor smoke test is still separate.
 
@@ -190,10 +190,6 @@ These checks cover parser/formatting, profile Apply's GitHub-authoritative graph
 - The CFG rewrite replaces the unique active `+voicerecord` bind, rejects duplicated voice bindings and an already-occupied target key, preserves unrelated bind commands, and skips rewriting unchanged binds. A changed voice binding is read back from GitHub for verification.
 - No admin privileges, permanent token storage, Steam restart, profile-to-profile copying, or changes to Apply Graphics were introduced.
 - PR #23 merged into `main` as commit `61112a43de74e85071611aa69499702060555b8e`. All five Windows PowerShell 5.1 CI jobs passed on head commit `0ea8b11c066e35f54fba568f397a04a794be74de` (Core, Profiles, UI, CS2, Hardware). The CFG voice-bind matcher was corrected to preserve Windows CRLF line endings. Real Windows mouse-button capture and in-game CS2 confirmation are still outstanding.
-
-## Next UI improvement (not yet implemented)
-
-- Move the editable CFG download URL out of the everyday CS2/Apps fields into an **Advanced Settings** section with a **Restore Default URL** control. Keep the URL functional and editable for troubleshooting, but harder to change accidentally. This is a proposal, not shipped behavior.
 
 ## 2026-10-15 — Release marker catch-up for dashboard UI
 
