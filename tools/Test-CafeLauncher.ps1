@@ -413,7 +413,8 @@ if($dashboardSource -match "New-CafeLabel -Text 'v\d{4}\.\d{2}\.\d{2}\.\d+'" -or
     throw 'Version badge must use the active CAFE_RELEASE marker and startup/manual update checks must remain wired.'
 }
 if($psSource -match 'CAFE_PREVIEW_BRANCH|\$script:PreviewBranch|UI PREVIEW' -or
-   $definitions['Check-CafeLauncherUpdates'] -notmatch 'GitHub main release is' -or
+   $definitions['Check-CafeLauncherUpdates'] -notmatch 'Test-LauncherIsCurrent -CurrentPath \$source -RemoteBlobSha \$remote\.sha' -or
+    $definitions['Check-CafeLauncherUpdates'] -notmatch '\$remoteRelease -lt \$runningRelease' -or
    $definitions['Check-CafeLauncherUpdates'] -notmatch 'CafeLauncher Update Available'){
     throw 'Production dashboard must use normal verified main-branch updates without preview restrictions.'
 }
