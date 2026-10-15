@@ -178,3 +178,11 @@ These checks cover parser/formatting, profile Apply's GitHub-authoritative graph
 - Editor headings display `EDITING: <PROFILE>` and dashboard Edit buttons identify their own profile (`⚙ Edit <Profile>`).
 - Dashboard row hover brightens the slim container outline while preserving dark button backgrounds, including when the cursor is over a child button. Button handlers remain bound to their row's captured profile.
 - Testing required: WinForms layout at Windows DPI scaling and PowerShell 5.1 smoke test before merge.
+
+## 2026-10-15 — Per-profile CS2 push-to-talk binding (feature branch)
+
+- Each profile editor's **CS2 / Apps** tab has a push-to-talk selector. The launcher looks up the current `bind "<key>" "+voicerecord"` from the matching GitHub CFG when no unsynced local profile changes exist; if the network is unavailable, the locally saved key can be shown.
+- The selected key is locally persisted as `VoicePushToTalkKey` in profile settings; blank means do not modify the remote CFG. `Save & Sync to GitHub` stages an update to the matching `fab.cfg`, `arli.cfg`, `brile.cfg`, `arml.cfg` or `oli.cfg`.
+- The CFG rewrite replaces the unique active `+voicerecord` bind, rejects duplicated voice bindings and an already-occupied target key, preserves unrelated bind commands, and skips rewriting unchanged binds. A changed voice binding is read back from GitHub for verification.
+- No admin privileges, permanent token storage, Steam restart, profile-to-profile copying, or changes to Apply Graphics were introduced.
+- Windows PowerShell 5.1 workflow validation and in-game smoke testing are required before merging or using on café PCs.

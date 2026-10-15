@@ -10,7 +10,7 @@ $code=[string]::Join([Environment]::NewLine,[string[]]$lines[($marker+1)..($line
 $tokens=$null;$errors=$null
 $ast=[Management.Automation.Language.Parser]::ParseInput($code,[ref]$tokens,[ref]$errors)
 if(@($errors).Count){throw ('Launcher syntax failed: '+$errors[0].Message)}
-foreach($name in @('Set-CS2CfgSensitivityText','Sync-ProfileToGitHub','Export-ProfileValues','Get-ProfileGraphicsPreset','Get-GitHubJsonFromContentsApi','ConvertTo-CafeGraphicsPreset','Refresh-ProfileFromGitHub','Get-LatestGitHubFileCommit','Compare-GitHubCommitOrder','Import-ProfileValues')){
+foreach($name in @('Get-CafeVoiceBindingFromCfg','Set-CafeVoiceBindingInCfg','Set-CS2CfgSensitivityText','Sync-ProfileToGitHub','Export-ProfileValues','Get-ProfileGraphicsPreset','Get-GitHubJsonFromContentsApi','ConvertTo-CafeGraphicsPreset','Refresh-ProfileFromGitHub','Get-LatestGitHubFileCommit','Compare-GitHubCommitOrder','Import-ProfileValues')){
     $funcs=@($ast.FindAll({param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst]},$true) |
         Where-Object {$_.Name -eq $name})
     if($funcs.Count -ne 1){throw ('Missing or duplicate sync function: '+$name)}
@@ -42,6 +42,30 @@ foreach($bad in @('0','20.1','-1','a','2; quit','1e3')){
     Assert-True $failed ('Invalid sensitivity was accepted: '+$bad)
 }
 
+
+# Voice PTT: only replace the selected voice command, retain other binds, and reject collisions.
+$voiceCfg='bind "V" "+voicerecord"'+$crlf+'bind "r" "+reload"'+$crlf+'// bind "MOUSE4" "+voicerecord"'+$crlf
+Assert-True ((Get-CafeVoiceBindingFromCfg -Content $voiceCfg) -ceq 'V') 'Existing CFG voice bind not detected.'
+$newVoice=Set-CafeVoiceBindingInCfg -Content $voiceCfg -Key 'MOUSE4'
+Assert-True ($newVoice.Contains('bind "MOUSE4" "+voicerecord"')) 'New voice key missing.'
+Assert-True ($newVoice -notmatch '(?m)^bind "V" "\+voicerecord"') 'Old voice binding was not removed.'
+Assert-True ($newVoice.Contains('bind "r" "+reload"')) 'Voice update modified an unrelated bind.'
+Assert-True ($newVoice -notmatch '(?<!\r)\n') 'Voice update lost CRLF line endings.'
+Assert-True ((Set-CafeVoiceBindingInCfg -Content $newVoice -Key 'MOUSE4') -ceq $newVoice) 'Unchanged voice key should not rewrite CFG.'
+$collisionCfg='bind "V" "+voicerecord"'+$lf+'bind "MOUSE4" "+jump"'+$lf
+$voiceConflict=$false
+try{[void](Set-CafeVoiceBindingInCfg -Content $collisionCfg -Key 'MOUSE4')}catch{$voiceConflict=$true}
+Assert-True $voiceConflict 'Changing voice onto an occupied key must be rejected.'
+foreach($badKey in @('MOUSE6','V; quit','', 'WHEELUP')) {
+    $voiceConflict=$false
+    try{[void](Set-CafeVoiceBindingInCfg -Content $voiceCfg -Key $badKey)}catch{$voiceConflict=$true}
+    Assert-True $voiceConflict ('Invalid voice key was accepted: '+$badKey)
+}
+$duplicateVoice='bind "V" "+voicerecord"'+$lf+'bind "K" "+voicerecord"'+$lf
+$voiceConflict=$false
+try{[void](Set-CafeVoiceBindingInCfg -Content $duplicateVoice -Key 'MOUSE4')}catch{$voiceConflict=$true}
+Assert-True $voiceConflict 'Multiple existing voice bindings must require manual review.'
+
 $script:GithubRepo='fabjoncela/Cs-script'
 $script:GithubBranch='main'
 # The launcher initializes this during startup; function-only CI tests must mirror it.
@@ -69,7 +93,7 @@ function Clear-ProfileGraphicsHistoryCache {param([string]$ProfileName)}
 foreach($name in @('FabMode','ArliMode','BrileMode','ArmlMode','OliMode')){
     $cfgName=($name -replace 'Mode$','').ToLowerInvariant()+'.cfg'
     $script:GamingProfiles[$name]=@{
-        ConfigFile=$cfgName;CS2Sensitivity='1.5';PointerSpeed=10;LogitechDPI=800
+        ConfigFile=$cfgName;CS2Sensitivity='1.5';VoicePushToTalkKey='';PointerSpeed=10;LogitechDPI=800
         DisableAcceleration=$true;ApplyNvidia=$true;Width=1920;Height=1080
         RefreshHz=360;Vibrance=75;Hue=-1;ScalingMode=2;CfgDownloadUrl='';LaunchApps=$true
     }
@@ -151,6 +175,17 @@ foreach($name in @('FabMode','ArliMode','BrileMode','ArmlMode','OliMode')){
     Assert-True ($graphics.ProfileName -eq $name -and $graphics.Settings.Width -eq 1280) ($name+' graphics preset differs.')
     Assert-True ($script:FakeCalls[-2] -eq ('Get:profiles/'+$name+'.json') -and $script:FakeCalls[-1] -eq ('Get:graphics/'+$name+'.json')) ($name+' did not read both saved JSON files back after upload.')
 }
+# Ensure per-profile voice binding reaches only the requested CFG and survives JSON sync.
+$script:FakeFiles['arli.cfg']='bind "V" "+voicerecord"'+$lf+'bind "r" "+reload"'+$lf
+$script:GamingProfiles['ArliMode'].VoicePushToTalkKey='MOUSE4'
+$script:FakeWrites.Clear()
+Sync-ProfileToGitHub -ProfileName 'ArliMode' -Token ('testtoken-'+'x'*22)
+Assert-True ($script:FakeFiles['arli.cfg'].Contains('bind "MOUSE4" "+voicerecord"')) 'Voice binding did not sync to arli.cfg.'
+Assert-True ($script:FakeFiles['arli.cfg'].Contains('bind "r" "+reload"')) 'Voice sync removed unrelated binds.'
+Assert-True ((Get-CafeVoiceBindingFromCfg -Content $script:FakeFiles['arli.cfg']) -ceq 'MOUSE4') 'Synced voice binding readback mismatch.'
+Assert-True (($script:FakeFiles['profiles/ArliMode.json']|ConvertFrom-Json).VoicePushToTalkKey -ceq 'MOUSE4') 'Voice binding did not persist in profile JSON.'
+Assert-True (-not $script:FakeFiles['fab.cfg'].Contains('bind "MOUSE4" "+voicerecord"')) 'Voice update leaked into FabMode.'
+
 # Reproduce a stale post-sync refresh: a differing file blob must be checked
 # against the latest path commit before it can replace verified values.
 $script:GamingProfiles['FabMode'].PointerSpeed=16
