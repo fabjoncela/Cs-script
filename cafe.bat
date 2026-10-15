@@ -3077,6 +3077,62 @@ function Get-CafeCS2GraphicsCapture {
     return ConvertFrom-CafeCS2VideoText -ProfileName $ProfileName -Text $text -BasePreset $BasePreset -Path $source.Path -AccountID $source.AccountID
 }
 
+# CS2 user settings captured only on demand; keyed by target profile.
+$script:CapturedCS2Convars=@{}
+function Get-CafeCS2UserConvarsCapture {
+    param($Source)
+    if(@(Get-Process -Name 'cs2' -ErrorAction SilentlyContinue).Count){throw 'Close CS2 before capture.'}
+    $path=Join-Path (Split-Path -Parent $Source.Path) 'cs2_user_convars_0_slot0.vcfg'
+    if(-not (Test-Path -LiteralPath $path -PathType Leaf)){throw ('No saved CS2 user convars for Steam account '+$Source.AccountID)}
+    $file=Get-Item -LiteralPath $path -ErrorAction Stop
+    if($file.Length -lt 10 -or $file.Length -gt 1048576){throw 'Invalid user convars file size.'}
+    $reader=New-Object IO.StreamReader($path,$true)
+    try{$content=$reader.ReadToEnd()}finally{$reader.Dispose()}
+    if($content -notmatch '(?m)^\s*\{\s*$' -or $content -notmatch '(?m)^\s*\}\s*$'){throw 'Unrecognized user convars KeyValues format.'}
+    $allowed=@('sensitivity','cl_crosshair_drawoutline','cl_crosshair_outlinethickness','cl_crosshair_recoil',
+        'cl_crosshair_sniper_width','cl_crosshair_t','cl_crosshairalpha','cl_crosshaircolor',
+        'cl_crosshaircolor_b','cl_crosshaircolor_g','cl_crosshaircolor_r','cl_crosshairdot',
+        'cl_crosshairgap','cl_crosshairgap_useweaponvalue','cl_crosshairsize','cl_crosshairstyle',
+        'cl_crosshairthickness','cl_crosshairusealpha','cl_crosshair_friendly_warning',
+        'cl_crosshair_dynamic_maxdist_splitratio','cl_crosshair_dynamic_splitalpha_innermod',
+        'cl_crosshair_dynamic_splitalpha_outermod','cl_crosshair_dynamic_splitdist')
+    $values=@{}
+    foreach($name in $allowed){
+        $rx='(?im)^\s*"'+[regex]::Escape($name)+'"\s+"(?<v>[^"\r\n]{1,40})"\s*$'
+        $matches=[regex]::Matches($content,$rx)
+        if($matches.Count -gt 1){throw ('Duplicate CS2 saved '+$name+' values.')}
+        if($matches.Count -eq 1){
+            $value=[string]$matches[0].Groups['v'].Value
+            if($value -notmatch '^(true|false|-?[0-9]+(\.[0-9]+)?)$'){throw ('Unexpected '+$name+' in convars.')}
+            $values[$name]=$value
+        }
+    }
+    $active=Get-CafeActiveSteamVideoFile
+    if($active.AccountID -cne $Source.AccountID -or $active.Path -ine $Source.Path){throw 'Steam account changed during capture.'}
+    return [pscustomobject]@{Values=$values;Path=$path}
+}
+function Set-CafeCapturedConvarsInCfg {
+    param([string]$Content,$Values)
+    $text=$Content
+    $newline=if($text.Contains(([string][char]13+[string][char]10))){[string][char]13+[string][char]10}else{[string][char]10}
+    foreach($name in @($Values.Keys|Sort-Object)){
+        if($name -ne 'sensitivity' -and $name -notmatch '^cl_crosshair[a-z0-9_]*$'){continue}
+        $value=[string]$Values[$name]
+        if($value -notmatch '^(true|false|-?[0-9]+(\.[0-9]+)?)$'){throw ('Invalid CFG value for '+$name)}
+        $rx='(?im)^[ \t]*'+[regex]::Escape($name)+'[ \t]+(?:"[^"\r\n]*"|[^\s\r\n/;]+)[ \t]*(?://[^\r\n]*)?[ \t]*(?=\r?$)'
+        $matches=[regex]::Matches($text,$rx)
+        if($matches.Count -gt 1){throw ('Duplicate active '+$name+' in destination CFG.')}
+        $line=$name+' "'+$value+'"'
+        if($matches.Count){
+            $m=$matches[0]
+            $text=$text.Substring(0,$m.Index)+$line+$text.Substring($m.Index+$m.Length)
+        }else{
+            if($text.Length -and -not $text.EndsWith([string][char]10)){$text+=$newline}
+            $text+=$line+$newline
+        }
+    }
+    return $text
+}
 function Get-ProfileGraphicsPreset {
     param([Parameter(Mandatory=$true)][string]$ProfileName,[switch]$Canonical,[switch]$RequireGitHub)
     if(-not $script:GamingProfiles.Contains($ProfileName)){throw ('Unknown graphics profile: '+$ProfileName)}
@@ -4060,7 +4116,9 @@ function Sync-ProfileToGitHub {
     $cfgBody=$null
     $cfgUploaded=$false
     $readbackFailed=$false
-    $cfgStatus='left unchanged because sensitivity is blank'
+    $cfgStatus='left unchanged (no sensitivity or captured crosshair)'
+    $capturedConvars=$null
+    if($script:CapturedCS2Convars.ContainsKey($ProfileName)){$capturedConvars=$script:CapturedCS2Convars[$ProfileName]}
     [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
     try {
         $current = Invoke-CafeGitHubRestMethod -Uri ($uri + '?ref=' + $script:GithubBranch) -Method Get -Headers $headers -TimeoutSec 20 -MaximumRedirection 0
@@ -4132,7 +4190,7 @@ function Sync-ProfileToGitHub {
     # Stage a matching CFG update after validating its path, blob metadata, and SHA.
     # Empty sensitivity means "use the CFG's value" and does not edit the CFG.
     $sensValue=[string]$values['CS2Sensitivity']
-    if(-not [string]::IsNullOrWhiteSpace($sensValue)){
+    if(-not [string]::IsNullOrWhiteSpace($sensValue) -or ($capturedConvars -and $capturedConvars.Count -gt 0)){
         $cfgUri="https://api.github.com/repos/$($script:GithubRepo)/contents/$cfgName"
         $cfgRemote=Invoke-CafeGitHubRestMethod -Uri ($cfgUri+'?ref='+$script:GithubBranch) -Method Get -Headers $headers -TimeoutSec 20 -MaximumRedirection 0
         if($cfgRemote.type -ne 'file' -or $cfgRemote.path -ne $cfgName -or
@@ -4143,10 +4201,12 @@ function Sync-ProfileToGitHub {
             throw ('Invalid GitHub CFG metadata, cannot safely sync '+$cfgName)
         }
         $cfgText=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String(([string]$cfgRemote.content -replace '\s','')))
-        $newCfgText=Set-CS2CfgSensitivityText -Content $cfgText -Sensitivity $sensValue
+        $newCfgText=$cfgText
+        if($capturedConvars -and $capturedConvars.Count -gt 0){$newCfgText=Set-CafeCapturedConvarsInCfg -Content $newCfgText -Values $capturedConvars}
+        if(-not [string]::IsNullOrWhiteSpace($sensValue)){$newCfgText=Set-CS2CfgSensitivityText -Content $newCfgText -Sensitivity $sensValue}
         if($newCfgText -cne $cfgText){
             $cfgBody=@{
-                message="Update $cfgName sensitivity from CafeLauncher"
+                message="Sync $cfgName CS2 sensitivity and crosshair from CafeLauncher"
                 content=[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($newCfgText))
                 branch=$script:GithubBranch
                 sha=[string]$cfgRemote.sha
@@ -4158,7 +4218,7 @@ function Sync-ProfileToGitHub {
             $cfgResponse=Invoke-CafeGitHubRestMethod -Uri $cfgUri -Method Put -Headers $headers -ContentType 'application/json' -Body ($cfgBody | ConvertTo-Json -Depth 5 -Compress) -TimeoutSec 25 -MaximumRedirection 0
             if(-not $cfgResponse.commit.sha){throw ('CFG write was not confirmed for '+$cfgName)}
             $cfgUploaded=$true
-            $cfgStatus="updated sensitivity to $sensValue"
+            $cfgStatus="updated CS2 sensitivity/crosshair"
             Write-Log ("GitHub CFG sensitivity saved to "+$cfgName+"; commit="+$cfgResponse.commit.sha)
         }
         $result = Invoke-CafeGitHubRestMethod -Uri $uri -Method Put -Headers $headers -ContentType 'application/json' -Body ($body | ConvertTo-Json -Depth 5 -Compress) -TimeoutSec 25 -MaximumRedirection 0
@@ -4222,6 +4282,7 @@ function Sync-ProfileToGitHub {
         }
         $script:GraphicsPresets[$ProfileName]=$verifiedGraphics
         $script:GamingProfiles[$ProfileName].ScalingMode=[int]$verifiedGraphics.ScalingMode
+        if($script:CapturedCS2Convars.ContainsKey($ProfileName)){[void]$script:CapturedCS2Convars.Remove($ProfileName)}
         $script:VerifiedProfileState[$ProfileName]=@{BlobSha=[string]$remoteProfile.sha;CommitSha=[string]$result.commit.sha}
         $readbackFailed=$false
         if($graphicsChanged){
@@ -4394,7 +4455,7 @@ function Add-EditorTabWide {
 }
 
 function Show-ProfileEditor {
-    param([Parameter(Mandatory=$true)][string]$ProfileName)
+    param([Parameter(Mandatory=$true)][string]$ProfileName,[switch]$CaptureOnOpen)
     if(-not $script:GamingProfiles.Contains($ProfileName)){throw "Unknown profile: $ProfileName"}
     if(-not (Resolve-PendingProfileChanges -ProfileName $ProfileName)){return}
     $profileSource=Refresh-ProfileFromGitHub -ProfileName $ProfileName
@@ -4426,7 +4487,7 @@ function Show-ProfileEditor {
     }
 
     $dialog = New-Object System.Windows.Forms.Form
-    $dialog.Text = "Edit $ProfileName - CafeLauncher"
+    $dialog.Text = "EDITING: $ProfileName - CafeLauncher"
     $dialog.ClientSize = New-Object System.Drawing.Size(740,600)
     $dialog.MinimumSize = New-Object System.Drawing.Size(740,620)
     $dialog.StartPosition = 'CenterParent'
@@ -4836,7 +4897,8 @@ function Show-ProfileEditor {
                 'Restore Graphics Version','OK','Warning')
         }finally{$dialog.Cursor=[System.Windows.Forms.Cursors]::Default}
     }.GetNewClosure())
-    $captureGraphics.Add_Click({
+    # One shared action powers the editor button and the dashboard shortcut.
+    $invokeCS2Capture={
         try{
             $captureGraphics.Enabled=$false
             $dialog.Cursor=[System.Windows.Forms.Cursors]::WaitCursor
@@ -4853,6 +4915,18 @@ function Show-ProfileEditor {
             $answer=[System.Windows.Forms.MessageBox]::Show($preview,'Capture CS2 Graphics','YesNo','Question')
             if($answer -ne [System.Windows.Forms.DialogResult]::Yes){return}
             [void](& $applyGraphicsPresetToEditor $capture.Preset)
+            try{
+                $source=[pscustomobject]@{Path=$capture.Path;AccountID=$capture.AccountID}
+                $convars=Get-CafeCS2UserConvarsCapture -Source $source
+                if($convars.Values.Count -eq 0){throw 'No relevant sensitivity or crosshair keys in saved convars.'}
+                $script:CapturedCS2Convars[$ProfileName]=$convars.Values
+                if($convars.Values.ContainsKey('sensitivity')){$sens.Text=[string]$convars.Values['sensitivity']}
+                Write-Log ('Staged '+$convars.Values.Count+' CS2 sensitivity/crosshair values for '+$ProfileName)
+            }catch{
+                [void]$script:CapturedCS2Convars.Remove($ProfileName)
+                Write-Log ('CS2 user convars capture skipped: '+$_.Exception.Message) 'WARN'
+                [void][System.Windows.Forms.MessageBox]::Show(('Graphics captured but crosshair/sensitivity unavailable: '+$_.Exception.Message),'Partial CS2 capture','OK','Warning')
+            }
             $status.Text=('Captured CS2 settings from Steam account '+$capture.AccountID+'. Review them, then Save & Sync to publish; nothing has been saved or applied yet.')
             $status.ForeColor=[System.Drawing.Color]::FromArgb(255,190,105)
             Write-Log ('Captured '+$capture.CapturedFields.Count+' CS2 graphics values from '+$capture.Path+' for '+$ProfileName+'; missing values kept the current preset. No game, local profile, or GitHub data was changed.')
@@ -4863,7 +4937,12 @@ function Show-ProfileEditor {
             $captureGraphics.Enabled=$true
             if(-not $dialog.IsDisposed){$dialog.Cursor=[System.Windows.Forms.Cursors]::Default}
         }
-    }.GetNewClosure())
+    }.GetNewClosure()
+    $captureGraphics.Add_Click($invokeCS2Capture)
+    if($CaptureOnOpen){
+        $editorTabs.SelectedTab=$cs2Page
+        $dialog.Add_Shown({ & $invokeCS2Capture }.GetNewClosure())
+    }
     $saveLocal=New-Object System.Windows.Forms.Button
     $saveLocal.Text='Save Locally'
     $saveLocal.BackColor=$BLUE
@@ -4971,7 +5050,9 @@ function Show-ProfileEditor {
     $saveSync.Add_Click({
         try {
             & $saveEditorValues
-            $changes=if($sens.Text.Trim()){
+            $changes=if($script:CapturedCS2Convars.ContainsKey($ProfileName)){
+                "profiles/$ProfileName.json, graphics/$ProfileName.json AND $($p.ConfigFile) (captured CS2 crosshair/sensitivity)"
+            }elseif($sens.Text.Trim()){
                 "profiles/$ProfileName.json, graphics/$ProfileName.json AND $($p.ConfigFile) (sensitivity only)"
             }else{
                 "profiles/$ProfileName.json and graphics/$ProfileName.json (CFG unchanged: sensitivity blank)"
@@ -5724,7 +5805,7 @@ $profilesGrid.RowCount=6
 $profilesGrid.ColumnCount=1
 [void]$profilesGrid.RowStyles.Add((New-Object System.Windows.Forms.RowStyle('Absolute',45)))
 for($i=1;$i -le 5;$i++){[void]$profilesGrid.RowStyles.Add((New-Object System.Windows.Forms.RowStyle('Percent',20)))}
-$profilesGrid.Controls.Add((New-CafeLabel -Text 'PLAYER PROFILES  |  Apply, Play, Graphics, Edit' -Strong),0,0)
+$profilesGrid.Controls.Add((New-CafeLabel -Text 'NEW? Capture CS2 settings into a profile  |  Apply, Play, Graphics, Edit' -Strong),0,0)
 $dashGrid.Controls.Add($profilesGrid,0,0)
 
 $rightGrid=New-Object System.Windows.Forms.TableLayoutPanel
@@ -5774,12 +5855,14 @@ function New-Tile {
         $selectedProfile=$EditProfile
         $card=New-Object System.Windows.Forms.TableLayoutPanel
         $card.Dock='Fill'
-        $card.ColumnCount=4
+        $card.ColumnCount=5
         $card.RowCount=1
-        $card.BackColor=$PANEL
-        $card.Padding=New-Object System.Windows.Forms.Padding(3)
+        $profileColors=@{FabMode=[System.Drawing.Color]::FromArgb(56,137,240);ArliMode=[System.Drawing.Color]::FromArgb(54,181,117);BrileMode=[System.Drawing.Color]::FromArgb(167,111,226);ArmlMode=[System.Drawing.Color]::FromArgb(232,151,65);OliMode=[System.Drawing.Color]::FromArgb(71,193,207)}
+        $profileColor=$profileColors[$selectedProfile]
+        $card.BackColor=$profileColor
+        $card.Padding=New-Object System.Windows.Forms.Padding(2)
         $card.Margin=New-Object System.Windows.Forms.Padding(3)
-        foreach($pct in @(28,23,26,23)){[void]$card.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle('Percent',$pct)))}
+        foreach($pct in @(24,20,20,14,22)){[void]$card.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle('Percent',$pct)))}
         $button.Dock='Fill'
         $button.Add_Click({
             Update-SelectedProfileCard -Name $selectedProfile
@@ -5811,9 +5894,9 @@ function New-Tile {
         }.GetNewClosure())
         $card.Controls.Add($graphics,2,0)
         $edit=New-Object System.Windows.Forms.Button
-        $edit.Text='Edit'
+        $edit.Text='Edit '+$selectedProfile
         Style-CafeButton -Button $edit
-        $edit.BackColor=[System.Drawing.Color]::FromArgb(58,67,83)
+        $edit.BackColor=[System.Drawing.Color]::FromArgb(47,56,72)
         $edit.Dock='Fill'
         $edit.Add_Click({
             Update-SelectedProfileCard -Name $selectedProfile
@@ -5823,6 +5906,20 @@ function New-Tile {
             }catch{Write-Log ('Editor failed: '+$_.Exception.Message) 'ERROR'}
         }.GetNewClosure())
         $card.Controls.Add($edit,3,0)
+        $capture=New-Object System.Windows.Forms.Button
+        $capture.Text='Capture CS2'
+        Style-CafeButton -Button $capture
+        $capture.BackColor=[System.Drawing.Color]::FromArgb(44,90,112)
+        $capture.Dock='Fill'
+        $capture.Add_Click({
+            try{
+                Show-ProfileEditor -ProfileName $selectedProfile -CaptureOnOpen
+                Update-SelectedProfileCard -Name $selectedProfile
+            }catch{Write-Log ('Capture shortcut failed for '+$selectedProfile+': '+$_.Exception.Message) 'ERROR'}
+        }.GetNewClosure())
+        $card.Controls.Add($capture,4,0)
+        $card.Add_MouseEnter({$card.BackColor=[System.Drawing.Color]::ControlLightLight}.GetNewClosure())
+        $card.Add_MouseLeave({$card.BackColor=$profileColor}.GetNewClosure())
         $profilesGrid.Controls.Add($card,0,($Index-5))
     }else{
         $button.Add_Click({
