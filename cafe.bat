@@ -4487,7 +4487,7 @@ function Show-ProfileEditor {
     }
 
     $dialog = New-Object System.Windows.Forms.Form
-    $dialog.Text = "Edit $ProfileName - CafeLauncher"
+    $dialog.Text = "EDITING: $ProfileName - CafeLauncher"
     $dialog.ClientSize = New-Object System.Drawing.Size(740,600)
     $dialog.MinimumSize = New-Object System.Drawing.Size(740,620)
     $dialog.StartPosition = 'CenterParent'
@@ -5857,8 +5857,10 @@ function New-Tile {
         $card.Dock='Fill'
         $card.ColumnCount=5
         $card.RowCount=1
-        $card.BackColor=$PANEL
-        $card.Padding=New-Object System.Windows.Forms.Padding(3)
+        $profileColors=@{FabMode=[System.Drawing.Color]::FromArgb(56,137,240);ArliMode=[System.Drawing.Color]::FromArgb(54,181,117);BrileMode=[System.Drawing.Color]::FromArgb(167,111,226);ArmlMode=[System.Drawing.Color]::FromArgb(232,151,65);OliMode=[System.Drawing.Color]::FromArgb(71,193,207)}
+        $profileColor=$profileColors[$selectedProfile]
+        $card.BackColor=$profileColor
+        $card.Padding=New-Object System.Windows.Forms.Padding(2)
         $card.Margin=New-Object System.Windows.Forms.Padding(3)
         foreach($pct in @(24,20,20,14,22)){[void]$card.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle('Percent',$pct)))}
         $button.Dock='Fill'
@@ -5892,9 +5894,9 @@ function New-Tile {
         }.GetNewClosure())
         $card.Controls.Add($graphics,2,0)
         $edit=New-Object System.Windows.Forms.Button
-        $edit.Text='Edit'
+        $edit.Text='Edit '+$selectedProfile
         Style-CafeButton -Button $edit
-        $edit.BackColor=[System.Drawing.Color]::FromArgb(58,67,83)
+        $edit.BackColor=[System.Drawing.Color]::FromArgb(47,56,72)
         $edit.Dock='Fill'
         $edit.Add_Click({
             Update-SelectedProfileCard -Name $selectedProfile
@@ -5916,6 +5918,8 @@ function New-Tile {
             }catch{Write-Log ('Capture shortcut failed for '+$selectedProfile+': '+$_.Exception.Message) 'ERROR'}
         }.GetNewClosure())
         $card.Controls.Add($capture,4,0)
+        $card.Add_MouseEnter({$card.BackColor=[System.Drawing.Color]::ControlLightLight}.GetNewClosure())
+        $card.Add_MouseLeave({$card.BackColor=$profileColor}.GetNewClosure())
         $profilesGrid.Controls.Add($card,0,($Index-5))
     }else{
         $button.Add_Click({
