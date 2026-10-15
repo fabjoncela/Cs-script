@@ -4564,7 +4564,7 @@ function Show-ProfileEditor {
     $copyOptions=@($script:GamingProfiles.Keys|Where-Object{$_ -cne $ProfileName})
     $copyFromChoice=New-EditorTabChoice -Grid $cs2Grid -Title 'Copy CS2 graphics from profile' -Column 0 -Row 5 -Labels $copyOptions -Values $copyOptions -SelectedValue $copyOptions[0]
     $copyGraphics=New-Object System.Windows.Forms.Button
-    $copyGraphics.Text='Copy graphics'
+    $copyGraphics.Text='Copy graphics + sensitivity'
     $copyGraphics.BackColor=[System.Drawing.Color]::FromArgb(58,67,83)
     $copyGraphics.ForeColor=$WHITE
     $copyGraphics.FlatStyle='Flat'
@@ -4699,9 +4699,19 @@ function Show-ProfileEditor {
                 Settings=$sourcePreset.Settings
             }
             $copyResult=& $applyGraphicsPresetToEditor $copyPreset
-            $status.Text=('Copied '+$sourceName+' CS2 graphics into this editor. Save to keep the changes.')
+            # Copy the profile sensitivity override only if it is explicitly set.
+            # A blank override means the CFG supplies sensitivity; never replace a
+            # target override with blank or pretend the CFG was read/copied.
+            $sourceSensitivity=[string]$script:GamingProfiles[$sourceName].CS2Sensitivity
+            $copiedSensitivity=$false
+            if(-not [string]::IsNullOrWhiteSpace($sourceSensitivity)){
+                $sens.Text=$sourceSensitivity
+                $copiedSensitivity=$true
+            }
+            $copyDetail=if($copiedSensitivity){'graphics and sensitivity'}else{'graphics only (source sensitivity override is blank; CFG sensitivity not copied)'}
+            $status.Text=('Copied '+$sourceName+' '+$copyDetail+' into this editor. Save to keep the changes.')
             $status.ForeColor=[System.Drawing.Color]::FromArgb(255,190,105)
-            Write-Log ("Copied CS2 graphics from "+$sourceName+" to "+$ProfileName+" in the editor; changes are not saved yet.")
+            Write-Log ("Copied CS2 "+$copyDetail+" from "+$sourceName+" to "+$ProfileName+" in the editor; changes are not saved yet.")
         }catch{
             Write-Log ("Copy graphics to "+$ProfileName+" failed: "+$_.Exception.Message) 'WARN'
             $null=[System.Windows.Forms.MessageBox]::Show(
