@@ -161,6 +161,8 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tools\Test-StepResults
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tools\Update-Context.ps1 -Check
 ```
 
+GitHub Actions runs the GitHub sync authentication, CS2 graphics capture, graphics history (including its async worker), and Steam/CS2 path-discovery tests in the existing Profiles and CS2 Windows PowerShell 5.1 jobs. Changes to those test scripts trigger CI on pull requests and pushes to `main`.
+
 These checks cover parser/formatting, profile Apply's GitHub-authoritative graphics scaling and fail-closed behavior, mocked persistence and GitHub sync, device-flow worker compilation and in-memory token clearing without network or GUI, graphics fixtures, legacy DVC range mapping without hardware writes, read-only NVIDIA capability inventory, mocked Steam launch arguments, and status reporting. A real CS2/Steam account and monitor smoke test is still separate.
 
 ## 2026-10-15 — CS2 capture and dashboard usability

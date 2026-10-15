@@ -57,7 +57,7 @@ try{
     $script:TestSteamExe=Join-Path $script:TestSteamRoot 'steam.exe'
     $library=Join-Path $sandbox 'LibraryD'
     $gameName='Counter-Strike Global Offensive'
-    $installRoot=Join-Path (Join-Path (Join-Path $library 'steamapps\common') $gameName) ''
+    $installRoot=[IO.Path]::GetFullPath((Join-Path (Join-Path $library 'steamapps\common') $gameName)).TrimEnd('\')
     $cfg=Join-Path $installRoot 'game\csgo\cfg'
     $invalidLibrary=Join-Path $sandbox 'InvalidLibrary'
     [void](New-Item -ItemType Directory -Path (Join-Path $script:TestSteamRoot 'steamapps') -Force)
@@ -118,7 +118,10 @@ try{
     $activeExe=Get-SteamExecutable
     if($activeExe -cne $script:TestSteamExe){throw 'Steam executable discovery chose a stale default before the running client.'}
     $detected=Get-CS2InstallFromManifest -LibraryRoot $library
-    if(-not $detected -or $detected.ConfigPath -cne $cfg){throw 'Validated app 730 install did not resolve its CFG path.'}
+    if(-not $detected){throw ('Validated app 730 install was rejected. Logs: '+($script:TestLogs -join ' | '))}
+    if(-not [string]::Equals([string]$detected.ConfigPath,[string]$cfg,[StringComparison]::OrdinalIgnoreCase)){
+        throw ('Validated app 730 install resolved unexpected CFG path. Actual: '+$detected.ConfigPath+'; expected: '+$cfg)
+    }
     if(Get-CS2InstallFromManifest -LibraryRoot $invalidLibrary){throw 'A stale manifest with the wrong appid was accepted.'}
 
     # The bounded fallback may locate a relocated matching folder only inside
