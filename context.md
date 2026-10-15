@@ -172,17 +172,21 @@ These checks cover parser/formatting, profile Apply's GitHub-authoritative graph
 - Keep the shortcut and editor wired to the **same** capture action to avoid diverging behavior. GitHub credentials must not be persisted; preserve Deep Freeze portability and non-admin assumptions.
 - **Validation required:** Windows PowerShell 5.1 parser and Windows/CS2 smoke test (including local account detection, saved user convars format, and GitHub read-back) before relying on this build in internet cafés. This environment cannot run the Windows GUI.
 
-## 2026-10-15 — Profile identity refinement (review branch)
+## 2026-10-15 — Profile identity refinement (merged via PR #22)
 
 - `feature/profile-identity-ui` centralizes the FabMode/ArliMode/BrileMode/ArmlMode/OliMode accent palette in `$script:ProfileAccentColors`; dashboard borders and editor heading use consistent colors.
 - Editor headings display `EDITING: <PROFILE>` and dashboard Edit buttons identify their own profile (`⚙ Edit <Profile>`).
 - Dashboard row hover brightens the slim container outline while preserving dark button backgrounds, including when the cursor is over a child button. Button handlers remain bound to their row's captured profile.
-- Testing required: WinForms layout at Windows DPI scaling and PowerShell 5.1 smoke test before merge.
+- CI validation was performed before merge; real Windows WinForms layout testing at different DPI scaling remains recommended.
 
-## 2026-10-15 — Per-profile CS2 push-to-talk binding (feature branch)
+## 2026-10-15 — Per-profile CS2 push-to-talk binding (merged via PR #23)
 
 - Each profile editor's **CS2 / Apps** tab has a push-to-talk selector. The launcher looks up the current `bind "<key>" "+voicerecord"` from the matching GitHub CFG when no unsynced local profile changes exist; if the network is unavailable, the locally saved key can be shown.
 - The selected key is locally persisted as `VoicePushToTalkKey` in profile settings; blank means do not modify the remote CFG. `Save & Sync to GitHub` stages an update to the matching `fab.cfg`, `arli.cfg`, `brile.cfg`, `arml.cfg` or `oli.cfg`.
 - The CFG rewrite replaces the unique active `+voicerecord` bind, rejects duplicated voice bindings and an already-occupied target key, preserves unrelated bind commands, and skips rewriting unchanged binds. A changed voice binding is read back from GitHub for verification.
 - No admin privileges, permanent token storage, Steam restart, profile-to-profile copying, or changes to Apply Graphics were introduced.
-- Windows PowerShell 5.1 workflow validation and in-game smoke testing are required before merging or using on café PCs.
+- PR #23 merged into `main` as commit `61112a43de74e85071611aa69499702060555b8e`. All five Windows PowerShell 5.1 CI jobs passed on head commit `0ea8b11c066e35f54fba568f397a04a794be74de` (Core, Profiles, UI, CS2, Hardware). The CFG voice-bind matcher was corrected to preserve Windows CRLF line endings. Real Windows mouse-button capture and in-game CS2 confirmation are still outstanding.
+
+## Next UI improvement (not yet implemented)
+
+- Move the editable CFG download URL out of the everyday CS2/Apps fields into an **Advanced Settings** section with a **Restore Default URL** control. Keep the URL functional and editable for troubleshooting, but harder to change accidentally. This is a proposal, not shipped behavior.
