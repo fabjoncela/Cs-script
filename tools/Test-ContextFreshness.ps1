@@ -19,4 +19,4 @@ foreach($required in @(
     if(-not $context.Contains($required)){throw ('Required Codex context is missing: '+$required)}
 }
 if(-not $agentInstructions.Contains('context.md')){throw 'AGENTS.md must direct Codex to read context.md.'}
-Write-Host 'PASS: context is branch-aware, documents the editor/persistence flow, and matches the launcher release.'
+Write-Host 'PASS: context is branch-aware, documents the editor/persistence flow, and README/context release metadata matches the launcher.'

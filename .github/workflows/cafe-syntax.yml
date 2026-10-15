@@ -27,6 +27,7 @@ on:
       - 'tools/Publish-CafeBatToDrive.ps1'
       - 'tools/google-drive-sync/**'
       - 'context.md'
+      - 'README.md'
       - 'AGENTS.md'
       - '.githooks/**'
       - 'tools/Install-GitHooks.ps1'
@@ -59,6 +60,7 @@ on:
       - 'tools/Publish-CafeBatToDrive.ps1'
       - 'tools/google-drive-sync/**'
       - 'context.md'
+      - 'README.md'
       - 'AGENTS.md'
       - '.githooks/**'
       - 'tools/Install-GitHooks.ps1'
@@ -77,7 +79,7 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
-      - name: Check project context matches launcher release
+      - name: Check README and project context match launcher release
         shell: powershell
         run: |
           & "$env:GITHUB_WORKSPACE\tools\Test-ContextFreshness.ps1"

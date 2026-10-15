@@ -13,8 +13,8 @@ This file gives Codex and maintainers the operational context needed to work saf
 - `main` is the production source. A `codex/*`, `feature/*`, or other non-main branch is testing/development until merged. A feature present in a testing branch is **not** shipped just because it is documented here or pushed to GitHub.
 - Describe behavior from the current checkout. When discussing release status, compare the current branch with `origin/main`; do not infer production behavior from branch-local code.
 - Keep `context.md` useful on both branches: it describes architecture and branch-aware rules rather than claiming every checked-out change is deployed.
-- The local Git hooks refresh the generated release block before commit, merge commit, and push. If refresh changes `context.md`, the attempted operation stops so the file can be reviewed and committed. CI also checks that the generated block matches `cafe.bat`.
-- For a new clone, run `powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tools\Install-GitHooks.ps1` once to enable the repository hooks. GitHub Actions checks context freshness even when a merge is performed on GitHub.
+- The local Git hooks refresh the generated release blocks in `README.md` and `context.md` before commit, merge commit, and push. If refresh changes either file, the attempted operation stops so the changes can be reviewed and committed. CI checks both generated values against `cafe.bat`.
+- For a new clone, run `powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tools\Install-GitHooks.ps1` once to enable the repository hooks. GitHub Actions checks release metadata freshness even when a merge is performed on GitHub.
 
 ## What this project is
 
