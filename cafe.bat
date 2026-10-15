@@ -4241,7 +4241,7 @@ function Sync-ProfileToGitHub {
         if($voiceKey){$newCfgText=Set-CafeVoiceBindingInCfg -Content $newCfgText -Key $voiceKey}
         if($newCfgText -cne $cfgText){
             $cfgBody=@{
-                message="Sync $cfgName CS2 sensitivity and crosshair from CafeLauncher"
+                message="Sync $cfgName voice, sensitivity and crosshair from CafeLauncher"
                 content=[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($newCfgText))
                 branch=$script:GithubBranch
                 sha=[string]$cfgRemote.sha
@@ -4260,8 +4260,8 @@ function Sync-ProfileToGitHub {
                 $voiceText=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String(([string]$voiceRead.content -replace '\s','')))
                 if((Get-CafeVoiceBindingFromCfg -Content $voiceText) -cne $voiceKey){throw 'GitHub did not confirm the requested push-to-talk binding.'}
             }
-            $cfgStatus="updated CS2 sensitivity/crosshair"
-            Write-Log ("GitHub CFG sensitivity saved to "+$cfgName+"; commit="+$cfgResponse.commit.sha)
+            $cfgStatus="updated selected CS2 voice/sensitivity/crosshair"
+            Write-Log ("GitHub CFG settings saved to "+$cfgName+"; commit="+$cfgResponse.commit.sha)
         }
         $result = Invoke-CafeGitHubRestMethod -Uri $uri -Method Put -Headers $headers -ContentType 'application/json' -Body ($body | ConvertTo-Json -Depth 5 -Compress) -TimeoutSec 25 -MaximumRedirection 0
         if (-not $result.commit.sha) { throw 'GitHub did not return a successful commit.' }
@@ -5052,7 +5052,7 @@ function Show-ProfileEditor {
     $saveSync.FlatStyle='Flat'
     $saveSync.Dock='Fill'
     $editorFooter.Controls.Add($saveSync,1,2)
-    $saveSync.Tag='Sync this profile, its CS2 graphics preset, and (if set) sensitivity in its matching CFG on GitHub.'
+    $saveSync.Tag='Sync profile, graphics, voice push-to-talk, sensitivity and captured crosshair to the matching GitHub CFG.'
 
     $cancel=New-Object System.Windows.Forms.Button
     $cancel.Text='Cancel'
@@ -5193,7 +5193,7 @@ function Show-ProfileEditor {
                 Sync-ProfileToGitHub -ProfileName $ProfileName -Token $token
                 $pendingSyncState[$ProfileName] = $false
                 Save-ProfileSettings
-                [System.Windows.Forms.MessageBox]::Show("$ProfileName settings saved locally and synced to GitHub. The CS2 graphics preset was updated or already matched GitHub.`nOther PCs can now download the settings without signing in.`nIf CS2 sensitivity was set, it was also synced into the matching .cfg; binds and other commands remain unchanged.", 'GitHub sync complete', 'OK', 'Information') | Out-Null
+                [System.Windows.Forms.MessageBox]::Show("$ProfileName settings saved locally and synced to GitHub. The CS2 graphics preset was updated or already matched GitHub.`nOther PCs can now download the settings without signing in.`nSelected sensitivity and push-to-talk changes and captured crosshair values are saved in the matching .cfg when present; unrelated binds remain unchanged.", 'GitHub sync complete', 'OK', 'Information') | Out-Null
                 $dialog.DialogResult=[System.Windows.Forms.DialogResult]::OK
                 $dialog.Close()
             } finally {
