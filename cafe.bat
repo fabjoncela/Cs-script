@@ -4068,7 +4068,7 @@ function Get-GitHubSyncAuthorization {
 
 function Get-CafeVoiceBindingFromCfg {
     param([string]$Content)
-    $matches=[regex]::Matches($Content,'(?im)^[ \t]*bind[ \t]+"?(?<key>[A-Z0-9_]+)"?[ \t]+"?\+voicerecord"?[ \t]*(?://[^\r\n]*)?$')
+    $matches=[regex]::Matches($Content,'(?im)^[ \t]*bind[ \t]+"?(?<key>[A-Z0-9_]+)"?[ \t]+"?\+voicerecord"?[ \t]*(?://[^\r\n]*)?\r?$')
     if($matches.Count -gt 1){throw 'Multiple voice binds in CFG. Resolve manually.'}
     if($matches.Count -eq 0){return ''}
     return [string]$matches[0].Groups['key'].Value.ToUpperInvariant()
@@ -4079,9 +4079,9 @@ function Set-CafeVoiceBindingInCfg {
     if($key -notmatch '^(?:[A-Z]|[0-9]|F(?:[1-9]|1[0-2])|MOUSE[1-5]|CAPSLOCK|ALT|SHIFT|CTRL|SPACE|TAB)$'){throw 'Unsupported voice key.'}
     $old=Get-CafeVoiceBindingFromCfg -Content $Content
     if($old -ceq $key){return $Content}
-    $collision=[regex]::Matches($Content,'(?im)^[ \t]*bind[ \t]+"?'+[regex]::Escape($key)+'"?[ \t]+(?:"[^"\r\n]*"|[^\r\n]+)$')
+    $collision=[regex]::Matches($Content,'(?im)^[ \t]*bind[ \t]+"?'+[regex]::Escape($key)+'"?[ \t]+(?:"[^"\r\n]*"|[^\r\n]+)\r?$')
     if($collision.Count){throw ('New voice key '+$key+' is already bound in CFG. Choose another key.')}
-    $rx='(?im)^[ \t]*bind[ \t]+"?[A-Z0-9_]+"?[ \t]+"?\+voicerecord"?[ \t]*(?://[^\r\n]*)?$'
+    $rx='(?im)^[ \t]*bind[ \t]+"?[A-Z0-9_]+"?[ \t]+"?\+voicerecord"?[ \t]*(?://[^\r\n]*)?\r?$'
     $line='bind "'+$key+'" "+voicerecord"'
     if($old){$m=[regex]::Match($Content,$rx);return $Content.Substring(0,$m.Index)+$line+$Content.Substring($m.Index+$m.Length)}
     $nl=if($Content.Contains(([string][char]13+[string][char]10))){[string][char]13+[string][char]10}else{[string][char]10}
