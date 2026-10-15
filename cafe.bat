@@ -4,7 +4,7 @@ start "" powershell.exe -NoProfile -ExecutionPolicy Bypass -STA -WindowStyle Hid
 exit /b
 
 # POWERSHELL_GUI
-# CAFE_RELEASE=2026.10.14.34
+# CAFE_RELEASE=2026.10.15.36
 
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
@@ -2738,8 +2738,7 @@ function Check-CafeLauncherUpdates {
         $remote=Invoke-CafeGitHubRestMethod -Uri $uri -Headers @{'User-Agent'='CafeLauncher-Updater'; 'Accept'='application/vnd.github+json'} -TimeoutSec 8
         if ($remote.path -ne 'cafe.bat' -or $remote.sha -notmatch '^[a-fA-F0-9]{40}$' -or
             [int64]$remote.size -lt 10000 -or [int64]$remote.size -gt 1000000) { throw 'Unexpected update metadata from GitHub.' }
-        # Ignore older/unversioned GitHub builds. A new release must increment
-        # its CAFE_RELEASE marker, rather than merely have different line endings.
+        # Ignore older/unversioned GitHub builds; the SHA handles same-version changes.
         if ($remote.encoding -ne 'base64' -or [string]::IsNullOrWhiteSpace($remote.content)) {
             throw 'GitHub did not include update version metadata.'
         }
@@ -2756,12 +2755,19 @@ function Check-CafeLauncherUpdates {
         $runningReleaseText=Get-CafeLauncherRelease
         $runningRelease=if($runningReleaseText -match '^\d{4}\.\d{1,2}\.\d{1,2}\.\d+$'){[version]::Parse($runningReleaseText)}else{[version]'0.0.0.0'}
         $diskRelease=if ($localMatch.Success) { [version]::Parse($localMatch.Groups[1].Value) } else { [version]'0.0.0.0' }
-        if ($remoteRelease -le $runningRelease) {
-            Write-Log "CafeLauncher running release $runningRelease is current; GitHub main release is $remoteRelease."
-            if ($Manual) { [System.Windows.Forms.MessageBox]::Show("CafeLauncher is current (running $runningRelease; GitHub $remoteRelease).", 'Update Check', 'OK', 'Information') | Out-Null }
+        # Version prevents downgrades; Git blob SHA detects builds that forgot a version bump.
+        if ($remoteRelease -lt $runningRelease) {
+            Write-Log "GitHub release $remoteRelease is older than running release $runningRelease; skipping downgrade."
+            if ($Manual) { [System.Windows.Forms.MessageBox]::Show("Your running CafeLauncher ($runningRelease) is newer than GitHub ($remoteRelease).", 'Update Check', 'OK', 'Information') | Out-Null }
             return
         }
-        if (Test-LauncherIsCurrent -CurrentPath $source -RemoteBlobSha $remote.sha) {
+        $diskCurrent=Test-LauncherIsCurrent -CurrentPath $source -RemoteBlobSha $remote.sha
+        if ($diskCurrent -and $remoteRelease -eq $runningRelease) {
+            Write-Log "CafeLauncher release $runningRelease matches GitHub main (file SHA verified)."
+            if ($Manual) { [System.Windows.Forms.MessageBox]::Show("CafeLauncher is up to date ($runningRelease).", 'Update Check', 'OK', 'Information') | Out-Null }
+            return
+        }
+        if ($diskCurrent) {
             Write-Log "A newer release $remoteRelease is already installed at $source; this open launcher is still running $runningRelease."
             [System.Windows.Forms.MessageBox]::Show(
                 "CafeLauncher release $remoteRelease is already installed at:`n$source`n`nClick OK to restart into the newer build.",
