@@ -162,3 +162,12 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tools\Update-Context.p
 ```
 
 These checks cover parser/formatting, profile Apply's GitHub-authoritative graphics scaling and fail-closed behavior, mocked persistence and GitHub sync, device-flow worker compilation and in-memory token clearing without network or GUI, graphics fixtures, legacy DVC range mapping without hardware writes, read-only NVIDIA capability inventory, mocked Steam launch arguments, and status reporting. A real CS2/Steam account and monitor smoke test is still separate.
+
+## 2026-10-15 — CS2 capture and dashboard usability
+
+- Added **Capture CS2** beside each of FabMode, ArliMode, BrileMode, ArmlMode and OliMode. The shortcut opens that profile's editor directly on **CS2 / Apps**, triggering the same extracted capture action as the editor button; GitHub authentication, Save Locally, and Save & Sync are unchanged.
+- Capture reads video values from the active Steam account's `cs2_video.txt` and attempts to read sensitivity and supported crosshair commands from `cs2_user_convars_0_slot0.vcfg`. Missing user convars produce a warning and do not overwrite an existing CFG with invented values. Captured values are staged per profile until GitHub sync.
+- Save & Sync updates only recognized sensitivity/crosshair commands in that profile's matching `.cfg` (alongside existing graphics/profile JSON sync); unrelated binds and CFG commands remain untouched. Profile-to-profile **Copy graphics** remains graphics-only.
+- Dashboard profile rows have distinct outline accents (FabMode blue, ArliMode green, BrileMode purple, ArmlMode orange, OliMode cyan), more identifiable `Edit <Profile>` buttons, and `EDITING: <Profile>` window titles.
+- Keep the shortcut and editor wired to the **same** capture action to avoid diverging behavior. GitHub credentials must not be persisted; preserve Deep Freeze portability and non-admin assumptions.
+- **Validation required:** Windows PowerShell 5.1 parser and Windows/CS2 smoke test (including local account detection, saved user convars format, and GitHub read-back) before relying on this build in internet cafés. This environment cannot run the Windows GUI.
