@@ -4564,7 +4564,7 @@ function Show-ProfileEditor {
     $copyOptions=@($script:GamingProfiles.Keys|Where-Object{$_ -cne $ProfileName})
     $copyFromChoice=New-EditorTabChoice -Grid $cs2Grid -Title 'Copy CS2 graphics from profile' -Column 0 -Row 5 -Labels $copyOptions -Values $copyOptions -SelectedValue $copyOptions[0]
     $copyGraphics=New-Object System.Windows.Forms.Button
-    $copyGraphics.Text='Copy graphics'
+    $copyGraphics.Text='Copy graphics + sensitivity'
     $copyGraphics.BackColor=[System.Drawing.Color]::FromArgb(58,67,83)
     $copyGraphics.ForeColor=$WHITE
     $copyGraphics.FlatStyle='Flat'
@@ -4688,6 +4688,28 @@ function Show-ProfileEditor {
         return $validated
     }.GetNewClosure()
 
+    # Read a blank source override from its canonical GitHub CFG, never from another account.
+    $getSourceCfgSensitivity={
+        param([string]$SourceProfile)
+        if(-not $script:GamingProfiles.Contains($SourceProfile)){throw 'Unknown source profile.'}
+        $cfgName=($SourceProfile -replace 'Mode$','').ToLowerInvariant()+'.cfg'
+        if($cfgName -notmatch '^[a-z0-9_-]+\.cfg$'){throw 'Unsafe source CFG filename.'}
+        $url="https://api.github.com/repos/$($script:GithubRepo)/contents/$cfgName" + '?ref=' + [Uri]::EscapeDataString([string]$script:GithubBranch)
+        $headers=@{Accept='application/vnd.github+json';'User-Agent'='CafeLauncher-CfgCopy';'Cache-Control'='no-cache'}
+        $remote=Invoke-CafeGitHubRestMethod -Uri $url -Method Get -Headers $headers -TimeoutSec 15 -MaximumRedirection 0
+        if($remote.type -ne 'file' -or $remote.path -ne $cfgName -or $remote.encoding -ne 'base64' -or
+           [string]$remote.sha -notmatch '^[a-fA-F0-9]{40}$' -or [int64]$remote.size -gt 2097152 -or
+           [string]::IsNullOrWhiteSpace([string]$remote.content)){throw 'Source CFG metadata failed validation.'}
+        $cfgText=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String(([string]$remote.content -replace '\s','')))
+        $rx='(?im)^[ \t]*sensitivity[ \t]+"?(?<dpi>[0-9]+(?:\.[0-9]+)?)"?[ \t]*(?://[^\r\n]*)?$'
+        $matches=[regex]::Matches($cfgText,$rx)
+        if($matches.Count -ne 1){throw ('CFG must contain exactly one active sensitivity command; found '+$matches.Count+'.')}
+        $number=0.0
+        $value=[string]$matches[0].Groups['dpi'].Value
+        if(-not [double]::TryParse($value,[Globalization.NumberStyles]::Float,[Globalization.CultureInfo]::InvariantCulture,[ref]$number) -or $number -le 0 -or $number -gt 20){throw 'CFG sensitivity is out of range.'}
+        return $number.ToString('0.####',[Globalization.CultureInfo]::InvariantCulture)
+    }.GetNewClosure()
+
     $copyGraphics.Add_Click({
         $sourceName=[string]$copyFromChoice.Tag[$copyFromChoice.SelectedIndex]
         try{
@@ -4699,9 +4721,28 @@ function Show-ProfileEditor {
                 Settings=$sourcePreset.Settings
             }
             $copyResult=& $applyGraphicsPresetToEditor $copyPreset
-            $status.Text=('Copied '+$sourceName+' CS2 graphics into this editor. Save to keep the changes.')
+            # Copy the profile sensitivity override only if it is explicitly set.
+            # A blank override means the CFG supplies sensitivity; never replace a
+            # target override with blank or pretend the CFG was read/copied.
+            $sourceSensitivity=[string]$script:GamingProfiles[$sourceName].CS2Sensitivity
+            $sourceSensitivityOrigin='profile override'
+            $copiedSensitivity=$false
+            if([string]::IsNullOrWhiteSpace($sourceSensitivity)){
+                try{
+                    $sourceSensitivity=[string](& $getSourceCfgSensitivity $sourceName)
+                    $sourceSensitivityOrigin='GitHub CFG'
+                }catch{
+                    Write-Log ('Could not copy source sensitivity from '+$sourceName+' CFG: '+$_.Exception.Message) 'WARN'
+                }
+            }
+            if(-not [string]::IsNullOrWhiteSpace($sourceSensitivity)){
+                $sens.Text=$sourceSensitivity
+                $copiedSensitivity=$true
+            }
+            $copyDetail=if($copiedSensitivity){'graphics and sensitivity ('+$sourceSensitivityOrigin+')'}else{'graphics only; source sensitivity could not be verified (target unchanged)'}
+            $status.Text=('Copied '+$sourceName+' '+$copyDetail+' into this editor. Save to keep the changes.')
             $status.ForeColor=[System.Drawing.Color]::FromArgb(255,190,105)
-            Write-Log ("Copied CS2 graphics from "+$sourceName+" to "+$ProfileName+" in the editor; changes are not saved yet.")
+            Write-Log ("Copied CS2 "+$copyDetail+" from "+$sourceName+" to "+$ProfileName+" in the editor; changes are not saved yet.")
         }catch{
             Write-Log ("Copy graphics to "+$ProfileName+" failed: "+$_.Exception.Message) 'WARN'
             $null=[System.Windows.Forms.MessageBox]::Show(
