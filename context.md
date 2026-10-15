@@ -3,7 +3,7 @@
 This file gives Codex and maintainers the operational context needed to work safely in this repository. **Always follow the checked-out source tree.** The generated state block below reports the launcher release marker, not whether that code has shipped to `main`.
 
 <!-- BEGIN GENERATED LAUNCHER STATE -->
-- Launcher release: `2026.10.15.35`
+- Launcher release: `2026.10.15.36`
 - Generated from the unique `# CAFE_RELEASE` marker in `cafe.bat` by `tools/Update-Context.ps1`.
 <!-- END GENERATED LAUNCHER STATE -->
 
@@ -195,3 +195,8 @@ These checks cover parser/formatting, profile Apply's GitHub-authoritative graph
 
 - Release `2026.10.15.35` increments the launcher marker so existing `2026.10.14.34` installations can detect and install the dashboard **Capture CS2** shortcuts and color-coded profile borders that were merged earlier without a version bump.
 - The launcher code for capture/profile colors was already on main; this fixes release discovery, not the in-game capture algorithm. Close and reopen the app after updating to see the new UI.
+
+## 2026-10-15 — Same-version updater safety
+
+- The updater now compares the existing GitHub Contents API Git blob SHA with the local launcher using `Test-LauncherIsCurrent`, which already ignores CRLF-versus-LF differences. A differing file with the **same** `CAFE_RELEASE` is offered as an update instead of being incorrectly reported current.
+- Version ordering still blocks downgrades and a newer already-installed file still prompts to restart. No extra API request or dependency was added. Release marker `2026.10.15.36` delivers the fix to existing installs.
