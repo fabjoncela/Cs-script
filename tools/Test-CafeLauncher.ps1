@@ -321,8 +321,11 @@ foreach($tabLabel in @('Mouse','NVIDIA / Display','CS2 / Apps')){
     }
 }
 foreach($field in @('Resolution width','Resolution height','Refresh rate (Hz)',
-    'Logitech DPI (live, per profile)','GitHub .cfg URL')){
+    'Logitech DPI (live, per profile)')){
     if(-not $editorSource.Contains($field)){throw ('Editor field missing: '+$field)}
+}
+if($editorSource -match 'CfgDownloadUrl|CFG URL|\.cfg URL'){
+    throw 'CFG download URL must remain hidden from the profile editor.'
 }
 if($editorSource -notmatch 'New-EditorTabGrid' -or
    $editorSource -notmatch 'New-EditorTabNumber' -or

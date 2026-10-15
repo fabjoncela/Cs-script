@@ -4510,10 +4510,6 @@ function Show-ProfileEditor {
     $sens=New-Object System.Windows.Forms.TextBox
     $sens.Text=[string]$p.CS2Sensitivity
     Add-EditorTabField -Grid $cs2Grid -Title 'CS2 sensitivity (sync updates .cfg)' -Control $sens -Column 1 -Row 0
-    $url=New-Object System.Windows.Forms.TextBox
-    $url.Text=[string]$p.CfgDownloadUrl
-    $urlCell=Add-EditorTabField -Grid $cs2Grid -Title 'GitHub .cfg URL (FabMode default: fab.cfg)' -Control $url -Column 0 -Row 1
-    $cs2Grid.SetColumnSpan($urlCell,2)
     $apps=New-Object System.Windows.Forms.CheckBox
     $apps.Text='Launch Steam, FACEIT, Spotify, Mouse Options (no G HUB)'
     $apps.Checked=[bool]$p.LaunchApps
@@ -4865,8 +4861,6 @@ function Show-ProfileEditor {
             }
             $sensValue=$number.ToString('0.####',[Globalization.CultureInfo]::InvariantCulture)
         }
-        $cfgUrl=$url.Text.Trim()
-        if ($cfgUrl) { Assert-ConfigUrl $cfgUrl }
         $readChoiceValue={param($control)[string]$control.Tag[$control.SelectedIndex]}.GetNewClosure()
         $graphicsSettings=[ordered]@{
             Width=[int]$gameWidth.Value;Height=[int]$gameHeight.Value
@@ -4915,7 +4909,6 @@ function Show-ProfileEditor {
         $p.ApplyNvidia=[bool]$nv.Checked
         $p.LaunchApps=[bool]$apps.Checked
         $p.CS2Sensitivity=$sensValue
-        $p.CfgDownloadUrl=$cfgUrl
         # Use the captured shared dictionary, not script: scope in this closure.
         $pendingSyncState[$ProfileName] = $true
         Save-ProfileSettings
