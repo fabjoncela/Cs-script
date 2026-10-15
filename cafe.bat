@@ -4651,7 +4651,7 @@ function Show-ProfileEditor {
     $url=New-Object System.Windows.Forms.TextBox
     $url.Text=[string]$p.CfgDownloadUrl
     $urlCell=Add-EditorTabField -Grid $cs2Grid -Title 'GitHub .cfg URL (FabMode default: fab.cfg)' -Control $url -Column 0 -Row 1
-    $cs2Grid.SetColumnSpan($urlCell,2)
+    # URL and voice selector share the row; no span to avoid overlapping controls.
     $apps=New-Object System.Windows.Forms.CheckBox
     $apps.Text='Launch Steam, FACEIT, Spotify, Mouse Options (no G HUB)'
     $apps.Checked=[bool]$p.LaunchApps
