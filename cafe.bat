@@ -4646,18 +4646,18 @@ function Show-ProfileEditor {
     $sens=New-Object System.Windows.Forms.TextBox
     $sens.Text=[string]$p.CS2Sensitivity
     Add-EditorTabField -Grid $cs2Grid -Title 'CS2 sensitivity (sync updates .cfg)' -Control $sens -Column 1 -Row 0
-    $voiceBox=New-Object System.Windows.Forms.ComboBox
-    $voiceBox.DropDownStyle='DropDownList'
-    $voiceOptions=@('V','MOUSE4','MOUSE5','CAPSLOCK','ALT','K','F1','F2','F3','F4','SPACE','SHIFT','CTRL','TAB')
-    [void]$voiceBox.Items.Add('(Keep existing bind)')
-    foreach($key in $voiceOptions){[void]$voiceBox.Items.Add($key)}
     # CFG remains authoritative unless this profile has unsynced local edits.
     $voiceSelected=[string]$p.VoicePushToTalkKey
     if(-not $pendingSyncState[$ProfileName]){
         try{$voiceSelected=Get-CafeGitHubVoiceBinding -CfgName ([string]$p.ConfigFile)}catch{Write-Log ('Voice key lookup unavailable: '+$_.Exception.Message) 'WARN'}
     }
-    if($voiceSelected -and $voiceBox.Items.Contains($voiceSelected)){$voiceBox.SelectedItem=$voiceSelected}else{$voiceBox.SelectedIndex=0}
-    Add-EditorTabField -Grid $cs2Grid -Title 'Push-to-talk key (CFG)' -Control $voiceBox -Column 1 -Row 1
+    $voiceOptions=@('','V','MOUSE4','MOUSE5','CAPSLOCK','ALT','K','SPACE','SHIFT','CTRL','TAB')+
+        @('A','B','C','D','E','F','G','H','I','J','L','M','N','O','P','Q','R','S','T','U','W','X','Y','Z')+
+        @('0','1','2','3','4','5','6','7','8','9')+
+        @('F1','F2','F3','F4','F5','F6','F7','F8','F9','F10','F11','F12')+
+        @('MOUSE1','MOUSE2','MOUSE3')
+    $voiceLabels=@('(Keep existing CFG binding)')+@($voiceOptions|Select-Object -Skip 1)
+    $voiceBox=New-EditorTabChoice -Grid $cs2Grid -Title 'Push-to-talk key (CFG)' -Column 1 -Row 1 -Labels $voiceLabels -Values $voiceOptions -SelectedValue $voiceSelected
     $url=New-Object System.Windows.Forms.TextBox
     $url.Text=[string]$p.CfgDownloadUrl
     $urlCell=Add-EditorTabField -Grid $cs2Grid -Title 'GitHub .cfg URL (FabMode default: fab.cfg)' -Control $url -Column 0 -Row 1
@@ -5081,7 +5081,7 @@ function Show-ProfileEditor {
         $p.ApplyNvidia=[bool]$nv.Checked
         $p.LaunchApps=[bool]$apps.Checked
         $p.CS2Sensitivity=$sensValue
-        $p.VoicePushToTalkKey=if($voiceBox.SelectedIndex -gt 0){[string]$voiceBox.SelectedItem}else{''}
+        $p.VoicePushToTalkKey=[string]$voiceBox.Tag[$voiceBox.SelectedIndex]
         $p.CfgDownloadUrl=$cfgUrl
         # Use the captured shared dictionary, not script: scope in this closure.
         $pendingSyncState[$ProfileName] = $true
