@@ -4281,6 +4281,39 @@ function New-EditorNumber {
     return $n
 }
 
+# A closed dropdown must never steal mouse-wheel scrolling from the editor tab.
+# Implement this in WinForms rather than relying on PowerShell MouseWheel handlers:
+# by the time those handlers run, ComboBox may already have changed selection.
+if (-not ('CafeEditorScrollComboBox' -as [type])) {
+    Add-Type -ReferencedAssemblies @('System.Windows.Forms','System.Drawing') -TypeDefinition @'
+using System;
+using System.Drawing;
+using System.Windows.Forms;
+
+public sealed class CafeEditorScrollComboBox : ComboBox {
+    protected override void OnMouseWheel(MouseEventArgs e) {
+        if (this.DroppedDown) {
+            base.OnMouseWheel(e);
+            return;
+        }
+        for (Control control = this.Parent; control != null; control = control.Parent) {
+            ScrollableControl container = control as ScrollableControl;
+            if (container == null || !container.AutoScroll || !container.VerticalScroll.Visible) continue;
+            int lines = SystemInformation.MouseWheelScrollLines;
+            int amount = lines < 0 ? container.VerticalScroll.LargeChange :
+                Math.Max(1, lines) * Math.Max(16, container.VerticalScroll.SmallChange);
+            int current = -container.AutoScrollPosition.Y;
+            int upper = Math.Max(0, container.VerticalScroll.Maximum - container.VerticalScroll.LargeChange + 1);
+            int next = Math.Max(0, Math.Min(upper, current - (e.Delta * amount / 120)));
+            container.AutoScrollPosition = new Point(-container.AutoScrollPosition.X, next);
+            return;
+        }
+        // Intentionally ignore wheel on a closed combo if no scrollable parent exists.
+    }
+}
+'@
+}
+
 # Field controls live in isolated table cells: labels can never cover adjacent inputs.
 function New-EditorTabGrid {
     param($Page,[int]$Rows)
@@ -4333,7 +4366,7 @@ function New-EditorTabNumber {
 function New-EditorTabChoice {
     param($Grid,[string]$Title,[int]$Column,[int]$Row,[string[]]$Labels,[object[]]$Values,[object]$SelectedValue)
     if($Labels.Count -ne $Values.Count -or $Labels.Count -lt 1){throw 'Choice control options are invalid.'}
-    $choice=New-Object System.Windows.Forms.ComboBox
+    $choice=New-Object CafeEditorScrollComboBox
     $choice.DropDownStyle='DropDownList'
     [void]$choice.Items.AddRange([object[]]$Labels)
     $choice.Tag=$Values
