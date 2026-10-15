@@ -18,7 +18,7 @@ try {
     # Call the protected wheel override directly. With no parent, the event
     # must not modify selection (regression against native ComboBox).
     $method=[CafeEditorScrollComboBox].GetMethod('OnMouseWheel',[Reflection.BindingFlags]'Instance,NonPublic')
-    $wheel=New-Object System.Windows.Forms.MouseEventArgs ([System.Windows.Forms.MouseButtons]::None,0,0,0,-120)
+    $wheel=[System.Windows.Forms.MouseEventArgs]::new([System.Windows.Forms.MouseButtons]::None,0,0,0,-120)
     $null=$method.Invoke($combo,@($wheel))
     if($combo.SelectedIndex -ne 1) { throw 'Closed dropdown selection changed under mouse wheel' }
 } finally { $combo.Dispose() }
