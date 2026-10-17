@@ -29,9 +29,8 @@ $MUTED = [System.Drawing.Color]::FromArgb(160,170,185)
 
 $script:LogPath = Join-Path $env:TEMP "CafeLauncher.log"
 $script:LogBox = $null
-# A Sentry project DSN is a public, send-only identifier. Fill this in after
-# creating the CafeLauncher Sentry project; no user login is needed to report.
-$script:SentryDsn = ''
+# Sentry project DSN is a public, send-only identifier; no user login is needed.
+$script:SentryDsn = 'https://0d97a16d9ecacc4ebced5dddd7b4aff1@o4512273562402816.ingest.de.sentry.io/4512273566007376'
 $script:SentryLogWorker = $null
 try {
     # Keep recent entries from the previous launch so failed automatic restarts
