@@ -4,7 +4,7 @@ start "" powershell.exe -NoProfile -ExecutionPolicy Bypass -STA -WindowStyle Hid
 exit /b
 
 # POWERSHELL_GUI
-# CAFE_RELEASE=2026.10.17.10
+# CAFE_RELEASE=2026.10.17.11
 
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
@@ -3435,7 +3435,9 @@ function ConvertFrom-CafeWorkshopPublishedDetails {
     $details=@{}
     foreach($item in @($Response.response.publishedfiledetails)){
         $id=[string]$item.publishedfileid
-        if(-not $wanted.Contains($id) -or [string]$item.consumer_appid -cne '730'){continue}
+        # GetPublishedFileDetails does not include consumer_appid in its public
+        # response. Only accept requested IDs, which come from CS2's local 730 folder.
+        if(-not $wanted.Contains($id)){continue}
         $title=[Net.WebUtility]::HtmlDecode([string]$item.title)
         if([string]::IsNullOrWhiteSpace($title)){$title='Workshop item '+$id}
         $description=[Net.WebUtility]::HtmlDecode([string]$item.description)

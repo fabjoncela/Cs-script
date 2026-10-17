@@ -130,11 +130,11 @@ try{
     if(@($emptySubscriptionScan.Entries|Where-Object{$_.WorkshopID -eq '111111' -and $_.CanRemove}).Count -ne 1){throw 'An empty Steamworks subscription list was rejected or overridden by stale local details.'}
 
     $detailsResponse=[pscustomobject]@{response=[pscustomobject]@{publishedfiledetails=@(
-        [pscustomobject]@{publishedfileid='222222';consumer_appid=730;title='surf_kitsune';description='<b>Map</b> &amp; surf [b]practice[/b]'},
-        [pscustomobject]@{publishedfileid='999999';consumer_appid=440;title='Wrong game';description='ignore'}
+        [pscustomobject]@{publishedfileid='222222';title='surf_kitsune';description='<b>Map</b> &amp; surf [b]practice[/b]'},
+        [pscustomobject]@{publishedfileid='999999';title='Unrequested item';description='ignore'}
     )}}
     $metadata=ConvertFrom-CafeWorkshopPublishedDetails -Response $detailsResponse -WorkshopIDs @('222222')
-    if($metadata['222222'].Title -cne 'surf_kitsune' -or $metadata['222222'].Description -cne 'Map & surf practice' -or $metadata.ContainsKey('999999')){throw 'Workshop titles/descriptions were not safely decoded or app-validated.'}
+    if($metadata['222222'].Title -cne 'surf_kitsune' -or $metadata['222222'].Description -cne 'Map & surf practice' -or $metadata.ContainsKey('999999')){throw 'Workshop titles/descriptions were not safely decoded or restricted to requested IDs.'}
 
     # A second library's subscribed copy protects that ID even if another library has an orphan folder.
     $second=New-TestWorkshopLibrary -Root (Join-Path $sandbox 'LibraryB') -Subscribed @('222222') -Installed @('222222')
