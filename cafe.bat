@@ -4,7 +4,7 @@ start "" powershell.exe -NoProfile -ExecutionPolicy Bypass -STA -WindowStyle Hid
 exit /b
 
 # POWERSHELL_GUI
-# CAFE_RELEASE=2026.10.17.5
+# CAFE_RELEASE=2026.10.17.6
 
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
@@ -3238,23 +3238,6 @@ function Get-CafeWorkshopCleanupSnapshot {
 
 function Get-CafeSteamSubscribedWorkshopIDs {
     param([Parameter(Mandatory=$true)][string[]]$LibraryRoots,[Parameter(Mandatory=$true)][string]$ActiveAccountID)
-    if(-not ('CafeSteamWorkshopNative' -as [type])){
-        Add-Type -TypeDefinition @'
-using System;
-using System.Text;
-using System.Runtime.InteropServices;
-public static class CafeSteamWorkshopNative {
-    [DllImport("kernel32.dll", SetLastError=true, CharSet=CharSet.Unicode)] public static extern bool SetDllDirectory(string path);
-    [DllImport("kernel32.dll", SetLastError=true, CharSet=CharSet.Unicode)] public static extern uint GetDllDirectory(uint size, StringBuilder path);
-    [DllImport("steam_api64.dll", CallingConvention=CallingConvention.Cdecl, ExactSpelling=true)] public static extern int SteamAPI_InitFlat(IntPtr errorMessage);
-    [DllImport("steam_api64.dll", CallingConvention=CallingConvention.Cdecl, ExactSpelling=true)] public static extern void SteamAPI_Shutdown();
-    [DllImport("steam_api64.dll", CallingConvention=CallingConvention.Cdecl, ExactSpelling=true)] public static extern int SteamAPI_GetHSteamUser();
-    [DllImport("steam_api64.dll", CallingConvention=CallingConvention.Cdecl, ExactSpelling=true, CharSet=CharSet.Ansi)] public static extern IntPtr SteamInternal_FindOrCreateUserInterface(int user, string version);
-    [DllImport("steam_api64.dll", CallingConvention=CallingConvention.Cdecl, ExactSpelling=true)] public static extern uint SteamAPI_ISteamUGC_GetNumSubscribedItems(IntPtr ugc, [MarshalAs(UnmanagedType.I1)] bool includeLocallyDisabled);
-    [DllImport("steam_api64.dll", CallingConvention=CallingConvention.Cdecl, ExactSpelling=true)] public static extern uint SteamAPI_ISteamUGC_GetSubscribedItems(IntPtr ugc, [Out] ulong[] ids, uint maxEntries, [MarshalAs(UnmanagedType.I1)] bool includeLocallyDisabled);
-}
-'@
-    }
     $active=Get-CafeActiveSteamVideoFile
     if([string]$active.AccountID -cne $ActiveAccountID){throw 'The active Steam account changed before the Workshop subscription scan.'}
     $dllPaths=New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
@@ -3266,44 +3249,98 @@ public static class CafeSteamWorkshopNative {
     }
     if($dllPaths.Count -ne 1){throw 'Could not identify one installed CS2 Steamworks API library for reading the signed-in account subscriptions.'}
     $dllPath=@($dllPaths)[0]
-    $previousDirectory=New-Object System.Text.StringBuilder 1024
-    $previousLength=[CafeSteamWorkshopNative]::GetDllDirectory([uint32]$previousDirectory.Capacity,$previousDirectory)
-    if($previousLength -ge $previousDirectory.Capacity){throw 'Could not safely preserve the current DLL search directory.'}
-    $restoreDirectory=if($previousLength -gt 0){$previousDirectory.ToString()}else{$null}
-    $oldAppId=$env:SteamAppId;$oldGameId=$env:SteamGameId
-    $initialized=$false
-    try{
-        if(-not [CafeSteamWorkshopNative]::SetDllDirectory((Split-Path -Parent $dllPath))){throw 'Could not load the installed CS2 Steamworks API safely.'}
-        $env:SteamAppId='730';$env:SteamGameId='730'
-        $errorBuffer=[Runtime.InteropServices.Marshal]::AllocHGlobal(1024)
-        try{
-            for($i=0;$i -lt 1024;$i++){[Runtime.InteropServices.Marshal]::WriteByte($errorBuffer,$i,0)}
-            $initResult=[CafeSteamWorkshopNative]::SteamAPI_InitFlat($errorBuffer)
-            $nativeMessage=[Runtime.InteropServices.Marshal]::PtrToStringAnsi($errorBuffer)
-        }finally{[Runtime.InteropServices.Marshal]::FreeHGlobal($errorBuffer)}
-        if($initResult -ne 0){throw ('Steam could not provide the signed-in account Workshop list'+$(if($nativeMessage){': '+$nativeMessage}else{'.'}))}
-        $initialized=$true
-        $user=[CafeSteamWorkshopNative]::SteamAPI_GetHSteamUser()
-        if($user -le 0){throw 'Steamworks did not return a signed-in Steam user handle.'}
-        $ugc=[IntPtr]::Zero
-        foreach($version in 21..14){
-            $candidate=[CafeSteamWorkshopNative]::SteamInternal_FindOrCreateUserInterface($user,('STEAMUGC_INTERFACE_VERSION{0:d3}' -f $version))
-            if($candidate -ne [IntPtr]::Zero){$ugc=$candidate;break}
+    # Steam tracks an initialized game's lifetime against its owning process. Keep
+    # Steamworks out of CafeLauncher's long-lived UI process so Steam sees CS2 exit
+    # as soon as this short-lived subscription reader shuts down.
+    $helperScript=@'
+param([Parameter(Mandatory=$true)][string]$DllPath)
+$ErrorActionPreference='Stop'
+Add-Type -TypeDefinition @"
+using System;
+using System.Text;
+using System.Runtime.InteropServices;
+public static class CafeSteamWorkshopChildNative {
+    [DllImport("kernel32.dll", SetLastError=true, CharSet=CharSet.Unicode)] public static extern bool SetDllDirectory(string path);
+    public static string Run(string dllPath) {
+        if(!SetDllDirectory(System.IO.Path.GetDirectoryName(dllPath))) throw new InvalidOperationException("Could not load the installed CS2 Steamworks API safely.");
+        IntPtr errorBuffer=Marshal.AllocHGlobal(1024);
+        bool initialized=false;
+        try {
+            for(int i=0;i<1024;i++) Marshal.WriteByte(errorBuffer,i,0);
+            int initResult=SteamAPI_InitFlat(errorBuffer);
+            string nativeMessage=Marshal.PtrToStringAnsi(errorBuffer);
+            if(initResult!=0) throw new InvalidOperationException("Steam could not provide the signed-in account Workshop list"+(String.IsNullOrEmpty(nativeMessage)?".":": "+nativeMessage));
+            initialized=true;
+            int user=SteamAPI_GetHSteamUser();
+            if(user<=0) throw new InvalidOperationException("Steamworks did not return a signed-in Steam user handle.");
+            IntPtr ugc=IntPtr.Zero;
+            for(int version=21;version>=14;version--) {
+                IntPtr candidate=SteamInternal_FindOrCreateUserInterface(user,String.Format("STEAMUGC_INTERFACE_VERSION{0:D3}",version));
+                if(candidate!=IntPtr.Zero) { ugc=candidate; break; }
+            }
+            if(ugc==IntPtr.Zero) throw new InvalidOperationException("The installed Steamworks runtime does not expose a compatible Workshop interface.");
+            uint count=SteamAPI_ISteamUGC_GetNumSubscribedItems(ugc,true);
+            if(count>200000) throw new InvalidOperationException("Steam returned an unexpected number of subscribed Workshop items.");
+            ulong[] ids=new ulong[count];
+            uint returned=SteamAPI_ISteamUGC_GetSubscribedItems(ugc,ids,count,true);
+            if(returned!=count) throw new InvalidOperationException("Steam subscription data changed while it was being read; scan again.");
+            string[] values=new string[count];
+            for(int i=0;i<count;i++) values[i]=ids[i].ToString(System.Globalization.CultureInfo.InvariantCulture);
+            return values.Length==0 ? "[]" : "[\""+String.Join("\",\"",values)+"\"]";
+        } finally {
+            if(initialized) SteamAPI_Shutdown();
+            Marshal.FreeHGlobal(errorBuffer);
         }
-        if($ugc -eq [IntPtr]::Zero){throw 'The installed Steamworks runtime does not expose a compatible Workshop interface.'}
-        $count=[CafeSteamWorkshopNative]::SteamAPI_ISteamUGC_GetNumSubscribedItems($ugc,$true)
-        if($count -gt 200000){throw 'Steam returned an unexpected number of subscribed Workshop items.'}
-        $ids=New-Object 'UInt64[]' ([int]$count)
-        $returned=[CafeSteamWorkshopNative]::SteamAPI_ISteamUGC_GetSubscribedItems($ugc,$ids,$count,$true)
-        if($returned -ne $count){throw 'Steam subscription data changed while it was being read; scan again.'}
+    }
+    [DllImport("steam_api64.dll", CallingConvention=CallingConvention.Cdecl, ExactSpelling=true)] private static extern int SteamAPI_InitFlat(IntPtr errorMessage);
+    [DllImport("steam_api64.dll", CallingConvention=CallingConvention.Cdecl, ExactSpelling=true)] private static extern void SteamAPI_Shutdown();
+    [DllImport("steam_api64.dll", CallingConvention=CallingConvention.Cdecl, ExactSpelling=true)] private static extern int SteamAPI_GetHSteamUser();
+    [DllImport("steam_api64.dll", CallingConvention=CallingConvention.Cdecl, ExactSpelling=true, CharSet=CharSet.Ansi)] private static extern IntPtr SteamInternal_FindOrCreateUserInterface(int user, string version);
+    [DllImport("steam_api64.dll", CallingConvention=CallingConvention.Cdecl, ExactSpelling=true)] private static extern uint SteamAPI_ISteamUGC_GetNumSubscribedItems(IntPtr ugc, [MarshalAs(UnmanagedType.I1)] bool includeLocallyDisabled);
+    [DllImport("steam_api64.dll", CallingConvention=CallingConvention.Cdecl, ExactSpelling=true)] private static extern uint SteamAPI_ISteamUGC_GetSubscribedItems(IntPtr ugc, [Out] ulong[] ids, uint maxEntries, [MarshalAs(UnmanagedType.I1)] bool includeLocallyDisabled);
+}
+"@
+try {
+    [Console]::Out.WriteLine([CafeSteamWorkshopChildNative]::Run($DllPath))
+} catch {
+    [Console]::Error.WriteLine($_.Exception.Message)
+    exit 1
+}
+'@
+    $helperPath=Join-Path ([IO.Path]::GetTempPath()) ('CafeWorkshopSubscriptions-'+[Guid]::NewGuid().ToString('N')+'.ps1')
+    $utf8NoBom=New-Object Text.UTF8Encoding($false)
+    $process=$null
+    try{
+        [IO.File]::WriteAllText($helperPath,$helperScript,$utf8NoBom)
+        $startInfo=New-Object Diagnostics.ProcessStartInfo
+        $startInfo.FileName=Join-Path $PSHOME 'powershell.exe'
+        $startInfo.Arguments='-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "'+$helperPath+'" -DllPath "'+$dllPath+'"'
+        $startInfo.WorkingDirectory=Split-Path -Parent $dllPath
+        $startInfo.UseShellExecute=$false;$startInfo.CreateNoWindow=$true
+        $startInfo.RedirectStandardOutput=$true;$startInfo.RedirectStandardError=$true
+        $startInfo.EnvironmentVariables['SteamAppId']='730';$startInfo.EnvironmentVariables['SteamGameId']='730'
+        $process=New-Object Diagnostics.Process
+        $process.StartInfo=$startInfo
+        if(-not $process.Start()){throw 'Could not start the isolated Steam subscription reader.'}
+        if(-not $process.WaitForExit(30000)){
+            try{$process.Kill()}catch{}
+            [void]$process.WaitForExit(5000)
+            throw 'Steam took too long to return the signed-in account Workshop list.'
+        }
+        $output=$process.StandardOutput.ReadToEnd().Trim()
+        $errorText=$process.StandardError.ReadToEnd().Trim()
+        if($process.ExitCode -ne 0){throw ('Steam could not provide the signed-in account Workshop list'+$(if($errorText){': '+$errorText}else{'.'}))}
+        $ids=@(ConvertFrom-Json -InputObject $output -ErrorAction Stop)
+        foreach($id in $ids){
+            [UInt64]$parsedId=0
+            if(-not [UInt64]::TryParse([string]$id,[ref]$parsedId) -or $parsedId -eq 0){throw 'Steam returned an invalid Workshop subscription ID.'}
+        }
         $after=Get-CafeActiveSteamVideoFile
         if([string]$after.AccountID -cne $ActiveAccountID){throw 'The active Steam account changed during the Workshop subscription scan.'}
-        return @($ids|ForEach-Object{([UInt64]$_).ToString([Globalization.CultureInfo]::InvariantCulture)}|Sort-Object -Unique)
+        return @($ids|ForEach-Object{[string]$_}|Sort-Object -Unique)
     }finally{
-        if($initialized){[CafeSteamWorkshopNative]::SteamAPI_Shutdown()}
-        if($null -eq $oldAppId){Remove-Item Env:SteamAppId -ErrorAction SilentlyContinue}else{$env:SteamAppId=$oldAppId}
-        if($null -eq $oldGameId){Remove-Item Env:SteamGameId -ErrorAction SilentlyContinue}else{$env:SteamGameId=$oldGameId}
-        [void][CafeSteamWorkshopNative]::SetDllDirectory($restoreDirectory)
+        if($process){$process.Dispose()}
+        if(Test-Path -LiteralPath $helperPath -PathType Leaf){Remove-Item -LiteralPath $helperPath -Force -ErrorAction SilentlyContinue}
     }
 }
 
