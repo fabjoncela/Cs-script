@@ -4,7 +4,7 @@ start "" powershell.exe -NoProfile -ExecutionPolicy Bypass -STA -WindowStyle Hid
 exit /b
 
 # POWERSHELL_GUI
-# CAFE_RELEASE=2026.10.18.1
+# CAFE_RELEASE=2026.10.18.2
 
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
@@ -6569,9 +6569,8 @@ function Invoke-GamingProfile {
     Write-Log "$ProfileName full routine finished. Review logs for individual results."
 }
 
-# Reset only the profile-managed settings to the values captured after CS2's
-# in-game Reset to Default action. The selected profile CFG runs immediately
-# after this file and remains the final authority for its explicit settings.
+# Reset the profile-managed bind, radar, sensitivity, FPS, and visibility defaults captured after CS2's in-game Reset to Default.
+# Crosshair commands are omitted so the selected profile CFG remains the authority for crosshair settings.
 function Get-CS2ProfileBaselineCfgText {
     $lines=@(
         '// CafeLauncher profile baseline captured after CS2 Reset to Default.'
@@ -6596,31 +6595,6 @@ function Get-CS2ProfileBaselineCfgText {
         'cl_hud_radar_scale "1"'
         'cl_radar_scale "0.7"'
         'cl_mute_enemy_team "false"'
-        'cl_crosshair_drawoutline "1"'
-        'cl_crosshair_dynamic_maxdist_splitratio "1"'
-        'cl_crosshair_dynamic_splitalpha_innermod "0"'
-        'cl_crosshair_dynamic_splitalpha_outermod "1"'
-        'cl_crosshair_dynamic_splitdist "3"'
-        'cl_crosshair_dynamic_spread_limit "255"'
-        'cl_crosshair_gap "4"'
-        'cl_crosshair_length "8"'
-        'cl_crosshair_recoil "true"'
-        'cl_crosshair_sniper_width "1"'
-        'cl_crosshair_t "false"'
-        'cl_crosshair_thickness "2"'
-        'cl_crosshairalpha "200"'
-        'cl_crosshaircolor_a "255"'
-        'cl_crosshaircolor_b "0"'
-        'cl_crosshaircolor_g "255"'
-        'cl_crosshaircolor_r "0"'
-        'cl_crosshairdot "false"'
-        'cl_crosshairoutline_a "255"'
-        'cl_crosshairoutline_b "0"'
-        'cl_crosshairoutline_g "0"'
-        'cl_crosshairoutline_r "0"'
-        'cl_crosshairsize "2"'
-        'cl_crosshairstyle "7"'
-        'cl_crosshairthickness "1"'
         'fps_max "400"'
         'r_player_visibility_mode "1"'
     )

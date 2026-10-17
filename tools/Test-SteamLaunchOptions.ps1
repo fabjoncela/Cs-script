@@ -24,11 +24,11 @@ if($source -match '\b(Set-CS2SteamLaunchOptions|Update-CS2LaunchOptionsVdfText|G
 $baseline=Get-CS2ProfileBaselineCfgText
 foreach($required in @(
     'bind "MWHEELDOWN" "invnext"','unbind "CAPSLOCK"','unbind "ALT"',
-    'cl_radar_scale "0.7"','sensitivity "1.25"',
-    'cl_crosshair_dynamic_spread_limit "255"','cl_crosshairstyle "7"'
+    'cl_radar_scale "0.7"','sensitivity "1.25"'
 )){
     if($baseline -notmatch [regex]::Escape($required)){throw "Baseline CFG is missing captured CS2 reset value: $required"}
 }
+if($baseline -match '(?i)\bcl_crosshair[a-z0-9_]*\b'){throw 'The profile baseline must leave crosshair settings to the selected profile CFG.'}
 if($baseline -match '(?i)\bunbindall\b'){throw 'The profile baseline must restore specific defaults, not use unbindall.'}
 $apply=$source.IndexOf('function Invoke-GamingProfile {',[StringComparison]::Ordinal)
 $applyEnd=$source.IndexOf('function Get-CS2SteamLaunchArguments {',[StringComparison]::Ordinal)
