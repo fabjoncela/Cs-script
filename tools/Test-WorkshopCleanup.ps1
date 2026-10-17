@@ -187,9 +187,10 @@ try{
     $duplicateScan=Get-CafeWorkshopCleanupSnapshot -LibraryRoots @($duplicatePrimary,$duplicateSecondary) -ActiveAccountID '123456'
     $duplicateEntries=@($duplicateScan.Entries|Where-Object{$_.WorkshopID -eq '222222' -and $_.CanRemove})
     if($duplicateEntries.Count -ne 2){throw 'Duplicate local Workshop folders were not listed as independent candidates.'}
-    $oneDuplicate=@($duplicateEntries|Where-Object{$_.LibraryRoot -eq $duplicatePrimary})
+    $oneDuplicate=@($duplicateEntries|Select-Object -First 1)
+    $otherDuplicate=@($duplicateEntries|Where-Object{$_.Path -ne $oneDuplicate[0].Path}|Select-Object -First 1)
     [void](Remove-CafeWorkshopItems -Preview $duplicateScan -FreshSnapshot $duplicateScan -SelectedEntries $oneDuplicate -Confirmed)
-    if((Test-Path -LiteralPath $oneDuplicate[0].Path) -or -not (Test-Path -LiteralPath ($duplicateEntries|Where-Object{$_.LibraryRoot -eq $duplicateSecondary}|Select-Object -First 1 -ExpandProperty Path))){throw 'Selecting one duplicate ID removed the wrong library copy or removed more than selected.'}
+    if((Test-Path -LiteralPath $oneDuplicate[0].Path) -or -not $otherDuplicate -or -not (Test-Path -LiteralPath $otherDuplicate[0].Path)){throw 'Selecting one duplicate ID removed the wrong library copy or removed more than selected.'}
 
     Write-Host 'PASS: Steam VDF parsing, subscription protection, multi-library keep behavior, incomplete/stale/invalid state refusal, account/manifest rechecks, confirmation gate, path containment, and independently selected folder removal.'
 }finally{
