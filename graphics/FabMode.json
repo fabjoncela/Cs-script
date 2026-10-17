@@ -2,11 +2,12 @@
     "SchemaVersion":  1,
     "ProfileName":  "FabMode",
     "DisplayPolicy":  "ApplyPreset",
-    "RefreshPolicy":  "Highest",
+    "RefreshPolicy":  "Exact",
     "ScalingMode":  2,
     "Settings":  {
                      "Width":  1280,
                      "Height":  960,
+                     "RefreshHz":  360,
                      "AspectRatioMode":  0,
                      "Fullscreen":  1,
                      "MSAASamples":  8,
