@@ -12,7 +12,7 @@ $functions=@{}
 foreach($f in $ast.FindAll({param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst]},$true)){
     $functions[$f.Name]=$f.Extent.Text
 }
-foreach($name in @('Get-NvidiaCompatibilityScan','Write-NvidiaCompatibilityScan','Apply-NvidiaGamingSettings','Get-PCDiagnostics','Invoke-GamingProfile')){
+foreach($name in @('Set-CafeStartupStatus','Get-NvidiaCompatibilityScan','Write-NvidiaCompatibilityScan','Apply-NvidiaGamingSettings','Get-PCDiagnostics','Invoke-GamingProfile')){
     if(-not $functions.ContainsKey($name)){throw ('Missing '+$name)}
 }
 $scanCode=$functions['Get-NvidiaCompatibilityScan']
@@ -66,12 +66,24 @@ if($profileApply -notmatch 'Apply-NvidiaGamingSettings -Width' -or
     throw 'Every enabled profile apply must select the maximum refresh at its configured resolution.'
 }
 $startupStart=$code.IndexOf('$startupTimer.Add_Tick({',[StringComparison]::Ordinal)
-$startupEnd=$code.IndexOf('$form.Add_Shown({ $startupTimer.Start() })',[StringComparison]::Ordinal)
+$startupEnd=$code.IndexOf('$form.Add_Shown({ $startupStatusTimer.Start(); $startupTimer.Start() })',[StringComparison]::Ordinal)
 if($startupStart -lt 0 -or $startupEnd -le $startupStart -or
    $code.Substring($startupStart,$startupEnd-$startupStart) -match 'Set-StartupHighestRefreshRate|TrySetDisplayMode'){
     throw 'Opening the launcher must not change display refresh before a profile is applied.'
 }
+if($code -notmatch '\$startupStatusTimer\.Interval=250' -or
+   $code -notmatch '\$startupStatusTimer\.Add_Tick\(\{' -or
+   $code -notmatch '\$startupStatusTimer\.Start\(\); \$startupTimer\.Start\(\)'){
+    throw 'The startup inventory status animation must be timer-driven and start with the inventory.'
+}
 if($scanCode -match 'Start-Process|Invoke-WebRequest|Stop-Process|Install-|Update-Driver'){throw 'Compatibility preflight must be read-only.'}
+$script:StartupStatusLabel=$null
+$script:StartupInventoryRunning=$false
+Invoke-Expression $functions['Set-CafeStartupStatus']
+Set-CafeStartupStatus 'NVIDIA compatibility test'
+if($script:StartupStatusMessage -ne 'NVIDIA compatibility test'){
+    throw 'Startup status helper must retain the current scan phase.'
+}
 Invoke-Expression $scanCode
 $scan=Get-NvidiaCompatibilityScan -Width 1280 -Height 960 -RefreshHz 360
 if($null -eq $scan -or $null -eq $scan.Report){throw 'NVIDIA scan did not return diagnostic report.'}
