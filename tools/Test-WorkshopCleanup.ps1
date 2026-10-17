@@ -103,9 +103,9 @@ try{
 
     # An incomplete manifest in any library that contains CS2 Workshop state blocks every cleanup candidate.
     $unknownLibrary=Join-Path $sandbox 'UnknownLibrary'
-    [void](New-Item -ItemType Directory -Path (Join-Path $unknownLibrary 'steamapps\workshop\content\730\111111') -Force)
+    [void](New-Item -ItemType Directory -Path (Join-Path $unknownLibrary 'steamapps\workshop\content\730\444444') -Force)
     $incomplete=Get-CafeWorkshopCleanupSnapshot -LibraryRoots @($primary,$unknownLibrary) -ActiveAccountID '123456'
-    if(@($incomplete.Entries|Where-Object{$_.CanRemove}).Count -or @($incomplete.Entries|Where-Object{$_.Status -like 'Unknown — subscription state incomplete'}).Count -lt 1){throw 'An incomplete library manifest did not block candidates across all libraries.'}
+    if(@($incomplete.Entries|Where-Object{$_.CanRemove}).Count -or @($incomplete.Entries|Where-Object{$_.Status -like 'Unknown*'}).Count -lt 2){throw ('An incomplete library manifest did not block candidates across all libraries: '+(($incomplete.Entries|ForEach-Object{$_.WorkshopID+': '+$_.Status+' (remove='+$_.CanRemove+')'}) -join '; '))}
 
     # Missing, malformed, wrong-app, account-mismatched, or busy manifests never authorize deletion.
     $missingRoot=Join-Path $sandbox 'MissingManifest'
