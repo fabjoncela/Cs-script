@@ -1,10 +1,10 @@
 @echo off
 set "CAFE_SCRIPT=%~f0"
-start "" powershell.exe -NoProfile -ExecutionPolicy Bypass -STA -WindowStyle Hidden -Command "try { $l=[IO.File]::ReadAllLines($env:CAFE_SCRIPT); $i=[Array]::IndexOf($l,'# POWERSHELL_GUI'); if($i -lt 0){throw 'PowerShell script marker not found'}; $code=($l[($i+1)..($l.Length-1)] -join [Environment]::NewLine); $t=$null; $er=$null; [void][System.Management.Automation.Language.Parser]::ParseInput($code,[ref]$t,[ref]$er); if($er.Count -gt 0){throw ('PowerShell syntax: '+$er[0].ToString())}; Invoke-Expression $code } catch { $msg=$_.ToString()+' '+$_.ScriptStackTrace; try { [IO.File]::WriteAllText((Join-Path $env:TEMP 'CafeLauncher-startup-error.log'),$msg) } catch {}; try { Add-Type -AssemblyName System.Windows.Forms; [void][System.Windows.Forms.MessageBox]::Show($msg,'CafeLauncher Startup Error') } catch {} }"
+start "" powershell.exe -NoProfile -ExecutionPolicy Bypass -STA -WindowStyle Hidden -Command "try { $l=[IO.File]::ReadAllLines($env:CAFE_SCRIPT); $i=[Array]::IndexOf($l,'# POWERSHELL_GUI'); if($i -lt 0){throw 'PowerShell script marker not found'}; $code=($l[($i+1)..($l.Length-1)] -join [Environment]::NewLine); $t=$null; $er=$null; [void][System.Management.Automation.Language.Parser]::ParseInput($code,[ref]$t,[ref]$er); if($er.Count -gt 0){throw ('PowerShell syntax: '+$er[0].ToString())}; Invoke-Expression $code } catch { $msg=$_.ToString()+' '+$_.ScriptStackTrace; try { [IO.File]::WriteAllText((Join-Path $env:TEMP 'CafeLauncher-startup-error.log'),$msg) } catch {}; try { Add-Content -LiteralPath (Join-Path $env:TEMP 'CafeLauncher.log') -Value ((Get-Date -Format 'HH:mm:ss')+' [ERROR] Launcher startup failed: '+$msg) -Encoding UTF8 } catch {}; try { Add-Type -AssemblyName System.Windows.Forms; [void][System.Windows.Forms.MessageBox]::Show($msg,'CafeLauncher Startup Error') } catch {} }"
 exit /b
 
 # POWERSHELL_GUI
-# CAFE_RELEASE=2026.10.17.4
+# CAFE_RELEASE=2026.10.17.5
 
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
@@ -29,7 +29,13 @@ $MUTED = [System.Drawing.Color]::FromArgb(160,170,185)
 
 $script:LogPath = Join-Path $env:TEMP "CafeLauncher.log"
 $script:LogBox = $null
-try { Set-Content -LiteralPath $script:LogPath -Value "" -Encoding UTF8 } catch {}
+try {
+    # Keep recent entries from the previous launch so failed automatic restarts
+    # remain visible after the user opens CafeLauncher manually.
+    $previousLog=@()
+    if(Test-Path -LiteralPath $script:LogPath -PathType Leaf){$previousLog=@(Get-Content -LiteralPath $script:LogPath -Tail 2000 -ErrorAction Stop)}
+    Set-Content -LiteralPath $script:LogPath -Value $previousLog -Encoding UTF8
+} catch {}
 
 function Write-Log {
     param([string]$Message, [string]$Level = "INFO")
