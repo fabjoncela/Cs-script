@@ -66,18 +66,19 @@ if($profileApply -notmatch 'Apply-NvidiaGamingSettings -Width' -or
     throw 'Every enabled profile apply must select the maximum refresh at its configured resolution.'
 }
 $startupStart=$code.IndexOf('$startupTimer.Add_Tick({',[StringComparison]::Ordinal)
-$startupEnd=$code.IndexOf('$form.Add_Shown({ $startupStatusTimer.Start(); $startupTimer.Start() })',[StringComparison]::Ordinal)
+$startupEnd=$code.IndexOf('$form.Add_Shown({ $startupTimer.Start() })',[StringComparison]::Ordinal)
 if($startupStart -lt 0 -or $startupEnd -le $startupStart -or
    $code.Substring($startupStart,$startupEnd-$startupStart) -match 'Set-StartupHighestRefreshRate|TrySetDisplayMode'){
     throw 'Opening the launcher must not change display refresh before a profile is applied.'
 }
-if($code -notmatch '\$startupStatusTimer\.Interval=250' -or
-   $code -notmatch '\$startupStatusTimer\.Add_Tick\(\{' -or
-   $code -notmatch '\$startupStatusTimer\.Start\(\); \$startupTimer\.Start\(\)'){
-    throw 'The startup inventory status animation must be timer-driven and start with the inventory.'
+if($code -notmatch '\$script:StartupStatusTimer\.Interval=33' -or
+   $code -notmatch '\$script:StartupStatusTimer\.Add_Tick\(\{' -or
+   $code -notmatch '\$script:StartupSpinnerAngle=\(\$script:StartupSpinnerAngle\+18\)%360' -or
+   $code -notmatch '\$script:StartupStatusTimer\.Start\(\)'){
+    throw 'The startup spinner must animate on its timer while inventory runs.'
 }
 if($scanCode -match 'Start-Process|Invoke-WebRequest|Stop-Process|Install-|Update-Driver'){throw 'Compatibility preflight must be read-only.'}
-$script:StartupStatusLabel=$null
+$script:StartupOverlayLabel=$null
 $script:StartupInventoryRunning=$false
 Invoke-Expression $functions['Set-CafeStartupStatus']
 Set-CafeStartupStatus 'NVIDIA compatibility test'
