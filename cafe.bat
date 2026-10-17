@@ -4,7 +4,7 @@ start "" powershell.exe -NoProfile -ExecutionPolicy Bypass -STA -WindowStyle Hid
 exit /b
 
 # POWERSHELL_GUI
-# CAFE_RELEASE=2026.10.17.6
+# CAFE_RELEASE=2026.10.17.8
 
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
@@ -3322,13 +3322,18 @@ try {
         $process=New-Object Diagnostics.Process
         $process.StartInfo=$startInfo
         if(-not $process.Start()){throw 'Could not start the isolated Steam subscription reader.'}
+        # Drain both redirected pipes while the child is running. Waiting first can
+        # fill a pipe for accounts with large Workshop lists and deadlock the reader.
+        $stdoutTask=$process.StandardOutput.ReadToEndAsync()
+        $stderrTask=$process.StandardError.ReadToEndAsync()
         if(-not $process.WaitForExit(30000)){
             try{$process.Kill()}catch{}
             [void]$process.WaitForExit(5000)
             throw 'Steam took too long to return the signed-in account Workshop list.'
         }
-        $output=$process.StandardOutput.ReadToEnd().Trim()
-        $errorText=$process.StandardError.ReadToEnd().Trim()
+        [void]$process.WaitForExit()
+        $output=$stdoutTask.GetAwaiter().GetResult().Trim()
+        $errorText=$stderrTask.GetAwaiter().GetResult().Trim()
         if($process.ExitCode -ne 0){throw ('Steam could not provide the signed-in account Workshop list'+$(if($errorText){': '+$errorText}else{'.'}))}
         $ids=@(ConvertFrom-Json -InputObject $output -ErrorAction Stop)
         foreach($id in $ids){

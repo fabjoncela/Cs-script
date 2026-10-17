@@ -20,11 +20,17 @@ foreach($name in $wanted){Invoke-Expression $definitions[$name]}
 $subscriptionReader=@($ast.FindAll({param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Get-CafeSteamSubscribedWorkshopIDs'},$true))
 if($subscriptionReader.Count -ne 1){throw 'Missing or duplicate Steam Workshop subscription reader.'}
 $subscriptionReaderSource=$subscriptionReader[0].Extent.Text
-foreach($required in @('CafeSteamWorkshopChildNative','SteamAPI_Shutdown','WaitForExit(30000)','SteamAppId','SteamGameId')){
-    if(-not $subscriptionReaderSource.Contains($required)){throw ('Steam subscription reader must isolate Steamworks lifetime in its helper process: '+$required)}
+foreach($required in @('CafeSteamWorkshopChildNative','SteamAPI_Shutdown','WaitForExit(30000)','SteamAppId','SteamGameId','ReadToEndAsync')){
+    if(-not $subscriptionReaderSource.Contains($required)){throw ('Steam subscription reader is missing its isolated lifecycle or concurrent output drain: '+$required)}
 }
 if($subscriptionReaderSource -match '\[CafeSteamWorkshopNative\]::SteamAPI_'){
     throw 'The long-lived CafeLauncher process must not initialize Steamworks directly.'
+}
+$stdoutDrain=$subscriptionReaderSource.IndexOf('$stdoutTask=$process.StandardOutput.ReadToEndAsync()',[StringComparison]::Ordinal)
+$stderrDrain=$subscriptionReaderSource.IndexOf('$stderrTask=$process.StandardError.ReadToEndAsync()',[StringComparison]::Ordinal)
+$waitForExit=$subscriptionReaderSource.IndexOf('$process.WaitForExit(30000)',[StringComparison]::Ordinal)
+if($stdoutDrain -lt 0 -or $stderrDrain -lt 0 -or $waitForExit -lt 0 -or $stdoutDrain -gt $waitForExit -or $stderrDrain -gt $waitForExit){
+    throw 'Steam helper stdout and stderr must be drained asynchronously before waiting for process exit.'
 }
 $helperAssignment=@($subscriptionReader[0].Body.FindAll({param($node) $node -is [Management.Automation.Language.AssignmentStatementAst] -and $node.Left.Extent.Text -eq '$helperScript'},$true))
 if($helperAssignment.Count -ne 1){throw 'Steamworks helper script must be embedded exactly once.'}
