@@ -3,7 +3,7 @@
 This file gives Codex and maintainers the operational context needed to work safely in this repository. **Always follow the checked-out source tree.** The generated state block below reports the launcher release marker, not whether that code has shipped to `main`.
 
 <!-- BEGIN GENERATED LAUNCHER STATE -->
-- Launcher release: `2026.10.17.2`
+- Launcher release: `2026.10.17.3`
 - Generated from the unique `# CAFE_RELEASE` marker in `cafe.bat` by `tools/Update-Context.ps1`.
 <!-- END GENERATED LAUNCHER STATE -->
 
@@ -130,9 +130,20 @@ This migration removes GitHub profile/graphics Contents API usage and GitHub-hos
 - **Apply Graphics** requires CS2 to be closed, detects the active Steam account at the write boundary, changes only recognized keys in that account's `cs2_video.txt`, backs up before replacing, verifies the result, and restores on failure where possible.
 - The CS2 refresh choice applies to the selected **game resolution**, independently of Windows desktop resolution. `Highest` chooses the highest advertised progressive rate for that resolution. `Exact` applies only if the exact resolution/Hz is advertised; otherwise it preserves existing display values and reports why.
 - NVIDIA preflight defines overall NVAPI availability by calling `NvAPI_Initialize` and balancing a successful initialization with `NvAPI_Unload`; the DLL path is used only for version reporting. Per-setting capability probes still verify each operation independently. Tests do not prove live hardware behavior. Do not perform live mouse, DPI, display, or other device writes as a test without user authorization.
+- The **Workshop Cleanup** tile is a separate **Tools & Apps** action, not a Dashboard or profile action. It scans only CS2 App ID `730`, protects IDs in Steam's local `WorkshopItemDetails` manifest, shows candidates for local content folders not listed there, and removes only user-selected IDs after confirmation. It requires an active signed-in Steam client, CS2 closed, stable manifests, no manifest-reported or on-disk download/update activity, and safe canonical item paths. It never unsubscribes items or edits Workshop manifests. Steam's local ACF format is undocumented; if a manifest cannot be parsed or verified, its items remain protected. When present, `subscribedby` is checked against the active account; otherwise account context is provided by the live Steam session, so retain the limitation that this is Steam client state rather than a Valve-supported external subscription API.
 - **Deferred TODO — reconnect-triggered DPI reapply (do not implement unless the user explicitly asks):** Consider listening for Windows mouse/receiver disconnect and reconnect notifications, then re-detecting the connected supported mouse and reapplying the selected profile's live DPI with a small bounded retry count. Avoid constant polling, identify the mouse rather than targeting only its receiver, and log a clear result if it does not reconnect. This is only a deferred idea; do not start implementation, add background monitoring, or change DPI behavior on your own.
 - **Deferred TODO — ZOWIE DyAc Premium control (not implemented):** Investigate whether CafeLauncher can offer an explicit action to enable DyAc/DyAc 2 Premium on supported BenQ ZOWIE monitors. Check the exact monitor model and whether the official XL Setting to Share `.mccs` profile pathway can apply that setting; prefer a supported profile/software mechanism over undocumented DDC/CI writes. Keep startup detection informational, and report clearly if a model or setting cannot be verified. Do not change monitor OSD settings automatically as part of profile detection or normal Apply.
 - Never store GitHub tokens in files, logs, or profile JSON. Do not enter a token on a shared café PC.
+
+## CS2 Workshop Cleanup
+
+The standalone **Workshop Cleanup** tile appears in **Tools & Apps** only. It is separate from Dashboard profiles, startup detection, profile Apply, and CS2 launch. It operates only on CS2 App ID `730` and local `<SteamLibrary>\steamapps\workshop\content\730\<WorkshopID>` item directories.
+
+The scan requires one running Steam client with a signed-in account. It reads the local `steamapps\workshop\appworkshop_730.acf` manifest from detected libraries, validates the app ID and the `WorkshopItemDetails` / `WorkshopItemsInstalled` sections, and treats `WorkshopItemDetails` IDs as the current Steam client's subscriptions. If `subscribedby` is present on entries, it must match the active Steam account. Steam's ACF format is undocumented; the manifest is a local Steam state source, not a Valve-supported external subscription API. Do not claim stronger account binding than this and retain fail-closed behavior for missing, malformed, account-mismatched, or changing state. If any library containing CS2 Workshop state has an untrusted manifest, disable all cleanup candidates across libraries until the subscription state can be verified.
+
+The dialog lists installed Workshop IDs, estimated size, and keep/removable/unknown status. Subscribed IDs are protected across detected libraries. Unknown items and items containing reparse points are not selectable. ACF download/update flags and nonempty Steam download/temp directories block cleanup. The user selects individual candidates and confirms the exact count, IDs, and estimated total. Immediately before removal, CafeLauncher rescans the active account and manifests, compares manifest signatures with the preview, requires CS2 to be closed, rechecks item paths and contents, then removes only the selected numeric-ID directories. It never edits manifests or changes subscriptions. Each scan and removal outcome is logged without credentials or full account identifiers.
+
+`tools/Test-WorkshopCleanup.ps1` exercises VDF parsing, subscribed-item protection, multi-library keep behavior, incomplete or busy manifest refusal, active-account and manifest rechecks, confirmation gating, path containment, and selected-folder-only removal using temporary fixtures. The fixture test removes only its own temporary directory contents; no live Workshop data is part of automated tests. A real-account scan-only comparison remains a live smoke test because Steam is not guaranteed to be signed in on the development workstation.
 
 ## Editing rules
 
@@ -156,6 +167,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tools\Test-Graphics.ps
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tools\Test-GraphicsHistory.ps1
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tools\Test-NvidiaCompatibility.ps1
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tools\Test-SteamPathDiscovery.ps1
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tools\Test-WorkshopCleanup.ps1
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tools\Test-CS2GraphicsCapture.ps1
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tools\Test-SteamLaunchOptions.ps1
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tools\Test-StepResults.ps1

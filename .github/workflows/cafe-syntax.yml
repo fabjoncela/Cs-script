@@ -15,6 +15,7 @@ on:
       - 'tools/Test-GraphicsHistory.ps1'
       - 'tools/Test-GraphicsHistoryAsync.ps1'
       - 'tools/Test-SteamPathDiscovery.ps1'
+      - 'tools/Test-WorkshopCleanup.ps1'
       - 'tools/fixtures/**'
       - 'tools/Test-NvidiaCompatibility.ps1'
       - 'tools/Test-NvidiaDvcFallback.ps1'
@@ -48,6 +49,7 @@ on:
       - 'tools/Test-GraphicsHistory.ps1'
       - 'tools/Test-GraphicsHistoryAsync.ps1'
       - 'tools/Test-SteamPathDiscovery.ps1'
+      - 'tools/Test-WorkshopCleanup.ps1'
       - 'tools/fixtures/**'
       - 'tools/Test-NvidiaCompatibility.ps1'
       - 'tools/Test-NvidiaDvcFallback.ps1'
@@ -141,6 +143,10 @@ jobs:
         shell: powershell
         run: |
           & "$env:GITHUB_WORKSPACE\tools\Test-SteamPathDiscovery.ps1"
+      - name: Test safe CS2 Workshop cleanup
+        shell: powershell
+        run: |
+          & "$env:GITHUB_WORKSPACE\tools\Test-WorkshopCleanup.ps1"
   hardware:
     name: Hardware validation (PowerShell 5.1)
     runs-on: windows-latest
