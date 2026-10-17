@@ -61,7 +61,7 @@ foreach($functionName in $rateLimitFunctionNames){
     if($functionAst.Count -ne 1){throw ('Missing or duplicate GitHub rate-limit function: '+$functionName)}
     Invoke-Expression $functionAst[0].Extent.Text
 }
-if($psSource -match '(?i)Invoke-RestMethod\s+-Uri'){
+if($psSource -match '(?i)Invoke-RestMethod\s+-Uri\s+(?!''https://api\.steampowered\.com/ISteamRemoteStorage/GetPublishedFileDetails/v1/''|"https://api\.steampowered\.com/ISteamRemoteStorage/GetPublishedFileDetails/v1/")'){
     throw 'GitHub REST requests must use the response-header tracking wrapper.'
 }
 

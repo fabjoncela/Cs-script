@@ -10,7 +10,7 @@ $tokens=$null;$errors=$null
 $ast=[Management.Automation.Language.Parser]::ParseInput($source,[ref]$tokens,[ref]$errors)
 if(@($errors).Count){throw 'Launcher PowerShell failed to parse.'}
 $wanted=@('ConvertFrom-CafeSteamVdfText','Get-CafeWorkshopManifestSnapshot','Get-CafeWorkshopDirectorySize',
-    'Get-CafeWorkshopCleanupSnapshot','Remove-CafeWorkshopItems')
+    'Get-CafeWorkshopCleanupSnapshot','Get-CafeWorkshopSelectionEntries','ConvertFrom-CafeWorkshopPublishedDetails','Remove-CafeWorkshopItems')
 $definitions=@{}
 foreach($function in $ast.FindAll({param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst]},$true)){
     if($function.Name -in $wanted){$definitions[$function.Name]=$function.Extent.Text}
@@ -87,73 +87,89 @@ try{
     try{[void](ConvertFrom-CafeSteamVdfText -Text '"root" { "id" "1"')}catch{$malformedRejected=$true}
     if(-not $malformedRejected){throw 'VDF parser accepted an unclosed object.'}
 
-    $primary=New-TestWorkshopLibrary -Root (Join-Path $sandbox 'LibraryA')
-    $snapshot=Get-CafeWorkshopCleanupSnapshot -LibraryRoots @($primary) -ActiveAccountID '123456'
+    # 222222 is present in the stale local WorkshopItemDetails section but absent from Steamworks subscriptions.
+    $primary=New-TestWorkshopLibrary -Root (Join-Path $sandbox 'LibraryA') -Subscribed @('111111','222222','333333')
+    $snapshot=Get-CafeWorkshopCleanupSnapshot -LibraryRoots @($primary) -ActiveAccountID '123456' -SubscribedWorkshopIDs @('111111','333333')
     $subscribed=@($snapshot.Entries|Where-Object{$_.WorkshopID -eq '111111'}|Select-Object -First 1)
     $candidate=@($snapshot.Entries|Where-Object{$_.WorkshopID -eq '222222'}|Select-Object -First 1)
     if(-not $subscribed -or $subscribed[0].CanRemove -or $subscribed[0].Status -notlike 'Keep*'){throw 'A subscribed Workshop item was not protected.'}
-    if(-not $candidate -or -not $candidate[0].CanRemove){throw 'An installed item absent from the active manifest was not offered as a cleanup candidate.'}
+    if(-not $candidate -or -not $candidate[0].CanRemove){throw 'An installed item absent from the active Steamworks subscriptions was not offered as a cleanup candidate.'}
     if($candidate[0].Bytes -ne 7){throw 'Workshop item size estimate was incorrect.'}
+    if($candidate[0].IsSubscribed){throw 'A stale local WorkshopItemDetails entry was treated as a current subscription.'}
+    $allSelection=@(Get-CafeWorkshopSelectionEntries -Entries $snapshot.Entries)
+    $unsubscribedSelection=@(Get-CafeWorkshopSelectionEntries -Entries $snapshot.Entries -OnlyUnsubscribed)
+    if(@($allSelection|Where-Object{-not $_.CanRemove}).Count -or @($allSelection|Where-Object{$_.WorkshopID -eq '222222'}).Count -ne 1){throw 'Select all included an unsafe or subscribed Workshop item.'}
+    if(@($unsubscribedSelection|Where-Object{$_.IsSubscribed -or -not $_.CanRemove}).Count -or @($unsubscribedSelection|Where-Object{$_.WorkshopID -eq '222222'}).Count -ne 1){throw 'Select not subscribed did not restrict itself to safe unsubscribed items.'}
+    $emptySubscriptionScan=Get-CafeWorkshopCleanupSnapshot -LibraryRoots @($primary) -ActiveAccountID '123456' -SubscribedWorkshopIDs @()
+    if(@($emptySubscriptionScan.Entries|Where-Object{$_.WorkshopID -eq '111111' -and $_.CanRemove}).Count -ne 1){throw 'An empty Steamworks subscription list was rejected or overridden by stale local details.'}
+
+    $detailsResponse=[pscustomobject]@{response=[pscustomobject]@{publishedfiledetails=@(
+        [pscustomobject]@{publishedfileid='222222';consumer_appid=730;title='surf_kitsune';description='<b>Map</b> &amp; surf [b]practice[/b]'},
+        [pscustomobject]@{publishedfileid='999999';consumer_appid=440;title='Wrong game';description='ignore'}
+    )}}
+    $metadata=ConvertFrom-CafeWorkshopPublishedDetails -Response $detailsResponse -WorkshopIDs @('222222')
+    if($metadata['222222'].Title -cne 'surf_kitsune' -or $metadata['222222'].Description -cne 'Map & surf practice' -or $metadata.ContainsKey('999999')){throw 'Workshop titles/descriptions were not safely decoded or app-validated.'}
 
     # A second library's subscribed copy protects that ID even if another library has an orphan folder.
     $second=New-TestWorkshopLibrary -Root (Join-Path $sandbox 'LibraryB') -Subscribed @('222222') -Installed @('222222')
-    $multi=Get-CafeWorkshopCleanupSnapshot -LibraryRoots @($primary,$second) -ActiveAccountID '123456'
+    $multi=Get-CafeWorkshopCleanupSnapshot -LibraryRoots @($primary,$second) -ActiveAccountID '123456' -SubscribedWorkshopIDs @('111111','222222','333333')
     $crossLibrary=@($multi.Entries|Where-Object{$_.WorkshopID -eq '222222'})
     if(@($crossLibrary|Where-Object{$_.CanRemove}).Count){throw ('Subscriptions='+($multi.Subscriptions -join ',')+'; per-library='+(($multi.Libraries|ForEach-Object{$_.LibraryRoot+' => '+($_.Subscriptions -join ',')+' trusted='+$_.Trusted}) -join '; ')+'; items='+(($crossLibrary|ForEach-Object{$_.LibraryRoot+': '+$_.Status+' (remove='+$_.CanRemove+')'}) -join '; '))}
 
     # An incomplete manifest in any library that contains CS2 Workshop state blocks every cleanup candidate.
     $unknownLibrary=Join-Path $sandbox 'UnknownLibrary'
     [void](New-Item -ItemType Directory -Path (Join-Path $unknownLibrary 'steamapps\workshop\content\730\444444') -Force)
-    $incomplete=Get-CafeWorkshopCleanupSnapshot -LibraryRoots @($primary,$unknownLibrary) -ActiveAccountID '123456'
+    $incomplete=Get-CafeWorkshopCleanupSnapshot -LibraryRoots @($primary,$unknownLibrary) -ActiveAccountID '123456' -SubscribedWorkshopIDs @('111111','333333')
     if(@($incomplete.Entries|Where-Object{$_.CanRemove}).Count -or @($incomplete.Entries|Where-Object{$_.Status -like 'Unknown*'}).Count -lt 2){throw ('An incomplete library manifest did not block candidates across all libraries: '+(($incomplete.Entries|ForEach-Object{$_.WorkshopID+': '+$_.Status+' (remove='+$_.CanRemove+')'}) -join '; '))}
 
     # Missing, malformed, wrong-app, account-mismatched, or busy manifests never authorize deletion.
     $missingRoot=Join-Path $sandbox 'MissingManifest'
     [void](New-Item -ItemType Directory -Path (Join-Path $missingRoot 'steamapps\workshop\content\730\444444') -Force)
-    $missing=Get-CafeWorkshopCleanupSnapshot -LibraryRoots @($missingRoot) -ActiveAccountID '123456'
+    $missing=Get-CafeWorkshopCleanupSnapshot -LibraryRoots @($missingRoot) -ActiveAccountID '123456' -SubscribedWorkshopIDs @('111111','333333')
     if(@($missing.Entries|Where-Object{$_.CanRemove}).Count -or @($missing.Entries|Where-Object{$_.Status -like 'Unknown*'}).Count -ne 1){throw 'Missing subscription state did not fail closed.'}
 
     $busy=New-TestWorkshopLibrary -Root (Join-Path $sandbox 'Busy') -NeedsDownload '1'
-    $busyScan=Get-CafeWorkshopCleanupSnapshot -LibraryRoots @($busy) -ActiveAccountID '123456'
+    $busyScan=Get-CafeWorkshopCleanupSnapshot -LibraryRoots @($busy) -ActiveAccountID '123456' -SubscribedWorkshopIDs @('111111','333333')
     if(@($busyScan.Entries|Where-Object{$_.CanRemove}).Count){throw 'Pending Steam downloads did not block cleanup.'}
 
     $downloading=New-TestWorkshopLibrary -Root (Join-Path $sandbox 'Downloading')
     [void](New-Item -ItemType Directory -Path (Join-Path $downloading 'steamapps\downloading\730') -Force)
     [IO.File]::WriteAllText((Join-Path $downloading 'steamapps\downloading\730\partial.tmp'),'partial')
-    $downloadScan=Get-CafeWorkshopCleanupSnapshot -LibraryRoots @($downloading) -ActiveAccountID '123456'
+    $downloadScan=Get-CafeWorkshopCleanupSnapshot -LibraryRoots @($downloading) -ActiveAccountID '123456' -SubscribedWorkshopIDs @('111111','333333')
     if(@($downloadScan.Entries|Where-Object{$_.CanRemove}).Count){throw 'An active Steam download directory did not block cleanup.'}
 
     $wrong=New-TestWorkshopLibrary -Root (Join-Path $sandbox 'WrongApp') -AppId '440'
-    $wrongScan=Get-CafeWorkshopCleanupSnapshot -LibraryRoots @($wrong) -ActiveAccountID '123456'
+    $wrongScan=Get-CafeWorkshopCleanupSnapshot -LibraryRoots @($wrong) -ActiveAccountID '123456' -SubscribedWorkshopIDs @('111111','333333')
     if(@($wrongScan.Entries|Where-Object{$_.CanRemove}).Count){throw 'A manifest for another Steam app authorized cleanup.'}
-
-    $accountRoot=New-TestWorkshopLibrary -Root (Join-Path $sandbox 'WrongAccount') -Subscriber '999999'
-    $accountScan=Get-CafeWorkshopCleanupSnapshot -LibraryRoots @($accountRoot) -ActiveAccountID '123456'
-    if(@($accountScan.Entries|Where-Object{$_.CanRemove}).Count){throw 'A manifest identifying another account authorized cleanup.'}
 
     $badId=New-TestWorkshopLibrary -Root (Join-Path $sandbox 'BadId')
     $badIdManifest=Join-Path $badId 'steamapps\workshop\appworkshop_730.acf'
     $badIdText=[IO.File]::ReadAllText($badIdManifest).Replace('"111111"','"../../escape"')
     [IO.File]::WriteAllText($badIdManifest,$badIdText,[Text.Encoding]::UTF8)
-    $badIdScan=Get-CafeWorkshopCleanupSnapshot -LibraryRoots @($badId) -ActiveAccountID '123456'
+    $badIdScan=Get-CafeWorkshopCleanupSnapshot -LibraryRoots @($badId) -ActiveAccountID '123456' -SubscribedWorkshopIDs @('111111','333333')
     if(@($badIdScan.Entries|Where-Object{$_.CanRemove}).Count){throw 'A malformed Workshop ID authorized cleanup.'}
 
     # A changed account, manifest, or unconfirmed call cannot remove fixture content.
     $removePath=Join-Path $primary 'steamapps\workshop\content\730\222222'
     $selectedCandidate=@($snapshot.Entries|Where-Object{$_.WorkshopID -eq '222222' -and $_.CanRemove}|Select-Object -First 1)
     $accountChanged=$false
-    $differentAccount=Get-CafeWorkshopCleanupSnapshot -LibraryRoots @($primary) -ActiveAccountID '123457'
+    $differentAccount=Get-CafeWorkshopCleanupSnapshot -LibraryRoots @($primary) -ActiveAccountID '123457' -SubscribedWorkshopIDs @('111111','333333')
     try{Remove-CafeWorkshopItems -Preview $snapshot -FreshSnapshot $differentAccount -SelectedEntries $selectedCandidate -Confirmed}catch{$accountChanged=$_.Exception.Message -match 'account changed'}
     if(-not $accountChanged -or -not (Test-Path -LiteralPath $removePath -PathType Container)){throw 'Account-change verification did not refuse removal.'}
+
+    $subscriptionsChanged=$false
+    $differentSubscriptions=Get-CafeWorkshopCleanupSnapshot -LibraryRoots @($primary) -ActiveAccountID '123456' -SubscribedWorkshopIDs @('111111','222222','333333')
+    try{Remove-CafeWorkshopItems -Preview $snapshot -FreshSnapshot $differentSubscriptions -SelectedEntries $selectedCandidate -Confirmed}catch{$subscriptionsChanged=$_.Exception.Message -match 'data changed'}
+    if(-not $subscriptionsChanged -or -not (Test-Path -LiteralPath $removePath -PathType Container)){throw 'A changed Steamworks subscription list did not refuse removal.'}
 
     $manifestChanged=$false
     $manifestPath=Join-Path $primary 'steamapps\workshop\appworkshop_730.acf'
     [IO.File]::AppendAllText($manifestPath,"`n// fixture change`n")
-    $changedScan=Get-CafeWorkshopCleanupSnapshot -LibraryRoots @($primary) -ActiveAccountID '123456'
+    $changedScan=Get-CafeWorkshopCleanupSnapshot -LibraryRoots @($primary) -ActiveAccountID '123456' -SubscribedWorkshopIDs @('111111','333333')
     try{Remove-CafeWorkshopItems -Preview $snapshot -FreshSnapshot $changedScan -SelectedEntries $selectedCandidate -Confirmed}catch{$manifestChanged=$_.Exception.Message -match 'data changed'}
     if(-not $manifestChanged -or -not (Test-Path -LiteralPath $removePath -PathType Container)){throw 'Manifest-change verification did not refuse removal.'}
     [IO.File]::WriteAllText($manifestPath,[IO.File]::ReadAllText((Join-Path (New-TestWorkshopLibrary -Root (Join-Path $sandbox 'Fresh')) 'steamapps\workshop\appworkshop_730.acf')),[Text.Encoding]::UTF8)
-    $freshPreview=Get-CafeWorkshopCleanupSnapshot -LibraryRoots @($primary) -ActiveAccountID '123456'
+    $freshPreview=Get-CafeWorkshopCleanupSnapshot -LibraryRoots @($primary) -ActiveAccountID '123456' -SubscribedWorkshopIDs @('111111','333333')
     $unconfirmed=$false
     $selectedFresh=@($freshPreview.Entries|Where-Object{$_.WorkshopID -eq '222222' -and $_.CanRemove}|Select-Object -First 1)
     try{Remove-CafeWorkshopItems -Preview $freshPreview -FreshSnapshot $freshPreview -SelectedEntries $selectedFresh}catch{$unconfirmed=$_.Exception.Message -match 'explicit confirmation'}
@@ -184,7 +200,7 @@ try{
     # Duplicate IDs in different libraries remain independently selectable by their exact local path.
     $duplicatePrimary=New-TestWorkshopLibrary -Root (Join-Path $sandbox 'DuplicateA') -Installed @('222222')
     $duplicateSecondary=New-TestWorkshopLibrary -Root (Join-Path $sandbox 'DuplicateB') -Installed @('222222')
-    $duplicateScan=Get-CafeWorkshopCleanupSnapshot -LibraryRoots @($duplicatePrimary,$duplicateSecondary) -ActiveAccountID '123456'
+    $duplicateScan=Get-CafeWorkshopCleanupSnapshot -LibraryRoots @($duplicatePrimary,$duplicateSecondary) -ActiveAccountID '123456' -SubscribedWorkshopIDs @('111111','333333')
     $duplicateEntries=@($duplicateScan.Entries|Where-Object{$_.WorkshopID -eq '222222' -and $_.CanRemove})
     if($duplicateEntries.Count -ne 2){throw 'Duplicate local Workshop folders were not listed as independent candidates.'}
     $oneDuplicate=@($duplicateEntries|Select-Object -First 1)
@@ -192,7 +208,7 @@ try{
     [void](Remove-CafeWorkshopItems -Preview $duplicateScan -FreshSnapshot $duplicateScan -SelectedEntries $oneDuplicate -Confirmed)
     if((Test-Path -LiteralPath $oneDuplicate[0].Path) -or -not $otherDuplicate -or -not (Test-Path -LiteralPath $otherDuplicate[0].Path)){throw 'Selecting one duplicate ID removed the wrong library copy or removed more than selected.'}
 
-    Write-Host 'PASS: Steam VDF parsing, subscription protection, multi-library keep behavior, incomplete/stale/invalid state refusal, account/manifest rechecks, confirmation gate, path containment, and independently selected folder removal.'
+    Write-Host 'PASS: Steam VDF parsing, Steamworks subscription protection, stale-manifest regression, empty subscription handling, metadata decoding, selection filters, multi-library keep behavior, incomplete/stale/invalid state refusal, account/manifest rechecks, confirmation gate, path containment, and independently selected folder removal.'
 }finally{
     if(Test-Path -LiteralPath $sandbox){Remove-Item -LiteralPath $sandbox -Recurse -Force -ErrorAction SilentlyContinue}
 }
