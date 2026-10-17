@@ -4,7 +4,7 @@ start "" powershell.exe -NoProfile -ExecutionPolicy Bypass -STA -WindowStyle Hid
 exit /b
 
 # POWERSHELL_GUI
-# CAFE_RELEASE=2026.10.18.2
+# CAFE_RELEASE=2026.10.18.3
 
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
@@ -5430,13 +5430,14 @@ function Show-ProfileEditor {
     }
     $p = $script:GamingProfiles[$ProfileName]
     if (-not $p) { throw "Unknown profile: $ProfileName" }
-    # GetNewClosure() creates a new dynamic module scope. The script: scope
-    # inside a captured click handler is NOT the original launcher's script:
-    # scope. Capture a reference to the real pending-sync dictionary here.
+    # GetNewClosure() creates a dynamic module scope, so capture references to the
+    # launcher's shared state dictionaries before wiring click handlers.
     $pendingSyncState = $script:PendingSync
     $graphicsPresetState = $script:GraphicsPresets
-    if ($null -eq $pendingSyncState -or $pendingSyncState -isnot [System.Collections.IDictionary]) {
-        throw 'Profile sync state is missing; cannot safely edit this profile.'
+    $capturedCS2ConvarsState = $script:CapturedCS2Convars
+    if ($null -eq $pendingSyncState -or $pendingSyncState -isnot [System.Collections.IDictionary] -or
+        $null -eq $capturedCS2ConvarsState -or $capturedCS2ConvarsState -isnot [System.Collections.IDictionary]) {
+        throw 'Profile editor shared state is missing; cannot safely edit this profile.'
     }
 
     $dialog = New-Object System.Windows.Forms.Form
@@ -5920,11 +5921,11 @@ function Show-ProfileEditor {
                 $source=[pscustomobject]@{Path=$capture.Path;AccountID=$capture.AccountID}
                 $convars=Get-CafeCS2UserConvarsCapture -Source $source
                 if($convars.Values.Count -eq 0){throw 'No relevant sensitivity or crosshair keys in saved convars.'}
-                $script:CapturedCS2Convars[$ProfileName]=$convars.Values
+                $capturedCS2ConvarsState[$ProfileName]=$convars.Values
                 if($convars.Values.ContainsKey('sensitivity')){$sens.Text=[string]$convars.Values['sensitivity']}
                 Write-Log ('Staged '+$convars.Values.Count+' CS2 sensitivity/crosshair values for '+$ProfileName)
             }catch{
-                [void]$script:CapturedCS2Convars.Remove($ProfileName)
+                [void]$capturedCS2ConvarsState.Remove($ProfileName)
                 Write-Log ('CS2 user convars capture skipped: '+$_.Exception.Message) 'WARN'
                 [void][System.Windows.Forms.MessageBox]::Show(('Graphics captured but crosshair/sensitivity unavailable: '+$_.Exception.Message),'Partial CS2 capture','OK','Warning')
             }
@@ -6051,7 +6052,7 @@ function Show-ProfileEditor {
             & $saveEditorValues
             $changes=if($p.VoicePushToTalkKey){
                 "profiles/$ProfileName.json, graphics/$ProfileName.json AND $($p.ConfigFile) (voice key and selected settings)"
-            }elseif($script:CapturedCS2Convars.ContainsKey($ProfileName)){
+            }elseif($capturedCS2ConvarsState.ContainsKey($ProfileName)){
                 "profiles/$ProfileName.json, graphics/$ProfileName.json AND $($p.ConfigFile) (captured CS2 crosshair/sensitivity)"
             }elseif($sens.Text.Trim()){
                 "profiles/$ProfileName.json, graphics/$ProfileName.json AND $($p.ConfigFile) (sensitivity only)"
