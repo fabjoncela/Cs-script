@@ -17,6 +17,26 @@ foreach($function in $ast.FindAll({param($node) $node -is [Management.Automation
 }
 foreach($name in $wanted){if(-not $definitions.ContainsKey($name)){throw ('Missing function under test: '+$name)}}
 foreach($name in $wanted){Invoke-Expression $definitions[$name]}
+$subscriptionReader=@($ast.FindAll({param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Get-CafeSteamSubscribedWorkshopIDs'},$true))
+if($subscriptionReader.Count -ne 1){throw 'Missing or duplicate Steam Workshop subscription reader.'}
+$subscriptionReaderSource=$subscriptionReader[0].Extent.Text
+foreach($required in @('CafeSteamWorkshopChildNative','SteamAPI_Shutdown','WaitForExit(30000)','SteamAppId','SteamGameId')){
+    if(-not $subscriptionReaderSource.Contains($required)){throw ('Steam subscription reader must isolate Steamworks lifetime in its helper process: '+$required)}
+}
+if($subscriptionReaderSource -match '\[CafeSteamWorkshopNative\]::SteamAPI_'){
+    throw 'The long-lived CafeLauncher process must not initialize Steamworks directly.'
+}
+$helperAssignment=@($subscriptionReader[0].Body.FindAll({param($node) $node -is [Management.Automation.Language.AssignmentStatementAst] -and $node.Left.Extent.Text -eq '$helperScript'},$true))
+if($helperAssignment.Count -ne 1){throw 'Steamworks helper script must be embedded exactly once.'}
+$helperLiteralMatch=[regex]::Match($helperAssignment[0].Right.Extent.Text,"(?s)^@'[\r\n]+(.*?)[\r\n]+'@$")
+if(-not $helperLiteralMatch.Success){throw 'Could not extract the embedded Steamworks helper source.'}
+$helperSource=$helperLiteralMatch.Groups[1].Value
+$helperTokens=$null;$helperErrors=$null
+[void][Management.Automation.Language.Parser]::ParseInput($helperSource,[ref]$helperTokens,[ref]$helperErrors)
+if(@($helperErrors).Count){throw ('Embedded Steamworks helper failed to parse: '+$helperErrors[0].Message)}
+$nativeSourceMatch=[regex]::Match($helperSource,'(?ms)Add-Type -TypeDefinition @"\r?\n(.*?)\r?\n"@')
+if(-not $nativeSourceMatch.Success){throw 'Embedded Steamworks helper is missing its native reader.'}
+Add-Type -TypeDefinition $nativeSourceMatch.Groups[1].Value -ErrorAction Stop
 
 function Get-Process {
     [CmdletBinding()]
