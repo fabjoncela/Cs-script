@@ -4,7 +4,7 @@ start "" powershell.exe -NoProfile -ExecutionPolicy Bypass -STA -WindowStyle Hid
 exit /b
 
 # POWERSHELL_GUI
-# CAFE_RELEASE=2026.10.18.6
+# CAFE_RELEASE=2026.10.18.7
 
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
@@ -4024,6 +4024,16 @@ function Set-CafeCapturedConvarsInCfg {
         cl_crosshairsize='cl_crosshair_length'
         cl_crosshairthickness='cl_crosshair_thickness'
     }
+    # Remove retired settings only when Capture CS2 supplied their current
+    # replacement/current control, so a partial or stale capture cannot erase
+    # profile values that were not captured this time.
+    $retiredWhenCaptured=@{
+        cl_crosshaircolor=@('cl_crosshaircolor_r','cl_crosshaircolor_g','cl_crosshaircolor_b')
+        cl_crosshairalpha=@('cl_crosshaircolor_a')
+        cl_crosshairusealpha=@('cl_crosshaircolor_a')
+        cl_crosshairgap_useweaponvalue=@('cl_crosshair_gap')
+        cl_crosshair_outlinethickness=@('cl_crosshair_drawoutline')
+    }
     $modernToLegacy=@{}
     foreach($legacyName in $legacyToModern.Keys){$modernToLegacy[$legacyToModern[$legacyName]]=$legacyName}
     foreach($name in @($Values.Keys|Sort-Object)){
@@ -4054,6 +4064,14 @@ function Set-CafeCapturedConvarsInCfg {
                 $text=$text.Remove($legacyMatch.Index,$legacyMatch.Length)
             }
         }
+    }
+    foreach($retiredName in $retiredWhenCaptured.Keys){
+        $replacementNames=[string[]]$retiredWhenCaptured[$retiredName]
+        $replacementCaptured=$true
+        foreach($replacementName in $replacementNames){if(-not $Values.ContainsKey($replacementName)){$replacementCaptured=$false;break}}
+        if(-not $replacementCaptured){continue}
+        $retiredRx='(?im)^[ \t]*'+[regex]::Escape($retiredName)+'[ \t]+(?:"[^"\r\n]*"|[^\s\r\n/;]+)[ \t]*(?://[^\r\n]*)?[ \t]*(?:\r\n|\n|$)'
+        $text=[regex]::Replace($text,$retiredRx,'')
     }
     return $text
 }

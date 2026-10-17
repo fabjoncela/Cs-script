@@ -190,7 +190,11 @@ $newConvars=@'
         "cl_crosshair_gap" "0"
         "cl_crosshair_length" "3"
         "cl_crosshair_thickness" "3"
+        "cl_crosshair_drawoutline" "2"
         "cl_crosshaircolor_a" "255"
+        "cl_crosshaircolor_r" "0"
+        "cl_crosshaircolor_g" "255"
+        "cl_crosshaircolor_b" "255"
         "cl_crosshair_screen_height" "960"
         "cl_crosshair_dynamic_spread_limit" "226"
         "cl_crosshairoutline_a" "255"
@@ -202,6 +206,11 @@ $newConvars=@'
         "cl_crosshairgap" "3"
         "cl_crosshairsize" "2"
         "cl_crosshairthickness" "1"
+        "cl_crosshaircolor" "5"
+        "cl_crosshairalpha" "200"
+        "cl_crosshairusealpha" "true"
+        "cl_crosshairgap_useweaponvalue" "false"
+        "cl_crosshair_outlinethickness" "1"
     }
 }
 '@
@@ -217,6 +226,7 @@ function Get-CafeActiveSteamVideoFile {
 $captured=Get-CafeCS2UserConvarsCapture -Source ([pscustomobject]@{Path=$script:FakeConvarsVideoPath;AccountID=$script:FakeConvarsAccount})
 foreach($expected in @{
     cl_crosshair_gap='0';cl_crosshair_length='3';cl_crosshair_thickness='3';cl_crosshaircolor_a='255'
+    cl_crosshaircolor_r='0';cl_crosshaircolor_g='255';cl_crosshaircolor_b='255'
     cl_crosshair_screen_height='960';cl_crosshair_dynamic_spread_limit='226';cl_crosshairoutline_a='255'
     cl_crosshair_future_option='7'
 }.GetEnumerator()){
@@ -224,7 +234,7 @@ foreach($expected in @{
 }
 Assert-True (-not $captured.Values.ContainsKey('cl_grenadecrosshair_smoke')) 'A non-crosshair command was captured.'
 $script:CapturedCS2Convars['FabMode']=$captured.Values
-$script:FakeFiles['fab.cfg']='cl_crosshairgap "-3.7"'+$lf+'cl_crosshairsize "2"'+$lf+'cl_crosshairthickness "1"'+$lf
+$script:FakeFiles['fab.cfg']='cl_crosshairgap "-3.7"'+$lf+'cl_crosshairsize "2"'+$lf+'cl_crosshairthickness "1"'+$lf+'cl_crosshaircolor "5"'+$lf+'cl_crosshairalpha "200"'+$lf+'cl_crosshairusealpha "true"'+$lf+'cl_crosshairgap_useweaponvalue "false"'+$lf+'cl_crosshair_outlinethickness "1"'+$lf
 $script:GamingProfiles['FabMode'].CS2Sensitivity=''
 $script:FakeWrites.Clear()
 Sync-ProfileToGitHub -ProfileName 'FabMode' -Token ('testtoken-'+'x'*22)
@@ -232,17 +242,22 @@ $syncedFabCfg=$script:FakeFiles['fab.cfg']
 foreach($expected in @{
     'cl_crosshair_gap "0"'=$true;'cl_crosshair_length "3"'=$true
     'cl_crosshair_thickness "3"'=$true;'cl_crosshaircolor_a "255"'=$true
+    'cl_crosshair_drawoutline "2"'=$true
+    'cl_crosshaircolor_r "0"'=$true;'cl_crosshaircolor_g "255"'=$true;'cl_crosshaircolor_b "255"'=$true
     'cl_crosshair_screen_height "960"'=$true;'cl_crosshair_dynamic_spread_limit "226"'=$true
     'cl_crosshairoutline_a "255"'=$true;'cl_crosshair_future_option "7"'=$true
 }.Keys){Assert-True ($syncedFabCfg.Contains($expected)) ('Current CS2 crosshair setting did not sync to fab.cfg: '+$expected)}
 Assert-True ($script:FakeWrites[0] -eq 'fab.cfg') 'Captured crosshair values did not update the selected CFG first.'
 Assert-True ($syncedFabCfg -notmatch '(?m)^\s*cl_crosshairgap\s' -and $syncedFabCfg -notmatch '(?m)^\s*cl_crosshairsize\s' -and $syncedFabCfg -notmatch '(?m)^\s*cl_crosshairthickness\s') 'New FabMode names left their legacy aliases in fab.cfg.'
+Assert-True ($syncedFabCfg -notmatch '(?im)^\s*cl_crosshaircolor\s' -and $syncedFabCfg -notmatch '(?im)^\s*cl_crosshairalpha\s' -and $syncedFabCfg -notmatch '(?im)^\s*cl_crosshairusealpha\s' -and $syncedFabCfg -notmatch '(?im)^\s*cl_crosshairgap_useweaponvalue\s' -and $syncedFabCfg -notmatch '(?im)^\s*cl_crosshair_outlinethickness\s') 'Captured modern crosshair controls left retired commands in fab.cfg.'
+$incompleteRetiredCleanup=Set-CafeCapturedConvarsInCfg -Content ('cl_crosshairalpha "200"'+$lf+'cl_crosshair_outlinethickness "1"'+$lf) -Values @{cl_crosshaircolor_r='0'}
+Assert-True ($incompleteRetiredCleanup.Contains('cl_crosshairalpha "200"') -and $incompleteRetiredCleanup.Contains('cl_crosshair_outlinethickness "1"')) 'A partial capture removed retired settings without their modern control.'
 $legacyOnly=Set-CafeCapturedConvarsInCfg -Content ('cl_crosshairgap "-3.7"'+$lf) -Values @{cl_crosshairgap='-2'}
 Assert-True ($legacyOnly.Contains('cl_crosshairgap "-2"') -and -not $legacyOnly.Contains('cl_crosshair_gap')) 'A legacy-only capture should remain supported without inventing a modern setting.'
 
 # Updating one profile migrates only that profile's legacy aliases. Exercise
 # mixed spacing, quoted/unquoted values, comments, and CRLF in the destination.
-$script:FakeFiles['brile.cfg']='sensitivity "1.2"'+$crlf+'bind "r" "+reload"'+$crlf+'  cl_crosshairgap   "-8" // Brile legacy gap'+$crlf+'   cl_crosshair_length  "1" // Brile old length'+$crlf+'cl_crosshair_thickness 1'+$crlf
+$script:FakeFiles['brile.cfg']='sensitivity "1.2"'+$crlf+'bind "r" "+reload"'+$crlf+'  cl_crosshairgap   "-8" // Brile legacy gap'+$crlf+'   cl_crosshair_length  "1" // Brile old length'+$crlf+'cl_crosshair_thickness 1'+$crlf+'  cl_crosshaircolor   5 // old palette'+$crlf+'cl_crosshairalpha 200'+$crlf+' cl_crosshairusealpha true'+$crlf+'cl_crosshairgap_useweaponvalue false'+$crlf+' cl_crosshair_outlinethickness 1'+$crlf
 $script:FakeFiles['arli.cfg']='cl_crosshairgap "-2"'+$lf+'cl_crosshairsize "1"'+$lf
 $script:FakeFiles['oli.cfg']='cl_crosshairgap "1"'+$crlf+'cl_crosshairsize "3"'+$crlf
 $arliBefore=$script:FakeFiles['arli.cfg']
@@ -251,6 +266,8 @@ $script:CapturedCS2Convars['BrileMode']=@{
     cl_crosshair_gap='4';cl_crosshairgap='-9'
     cl_crosshair_length='5';cl_crosshairsize='2'
     cl_crosshair_thickness='2';cl_crosshairthickness='1'
+    cl_crosshaircolor_r='255';cl_crosshaircolor_g='255';cl_crosshaircolor_b='255';cl_crosshaircolor_a='200'
+    cl_crosshair_drawoutline='1'
 }
 $script:FakeWrites.Clear()
 Sync-ProfileToGitHub -ProfileName 'BrileMode' -Token ('testtoken-'+'x'*22)
@@ -259,6 +276,7 @@ foreach($expected in @('cl_crosshair_gap "4"','cl_crosshair_length "5"','cl_cros
     Assert-True ($syncedBrileCfg.Contains($expected)) ('Modern BrileMode crosshair setting missing: '+$expected)
 }
 Assert-True ($syncedBrileCfg -notmatch '(?m)^\s*cl_crosshairgap\s' -and $syncedBrileCfg -notmatch '(?m)^\s*cl_crosshairsize\s' -and $syncedBrileCfg -notmatch '(?m)^\s*cl_crosshairthickness\s') 'BrileMode kept a legacy alias beside a captured modern name.'
+Assert-True ($syncedBrileCfg -notmatch '(?im)^\s*cl_crosshaircolor\s' -and $syncedBrileCfg -notmatch '(?im)^\s*cl_crosshairalpha\s' -and $syncedBrileCfg -notmatch '(?im)^\s*cl_crosshairusealpha\s' -and $syncedBrileCfg -notmatch '(?im)^\s*cl_crosshairgap_useweaponvalue\s' -and $syncedBrileCfg -notmatch '(?im)^\s*cl_crosshair_outlinethickness\s') 'BrileMode kept retired crosshair commands despite capturing their modern controls.'
 Assert-True ($syncedBrileCfg.Contains('bind "r" "+reload"')) 'BrileMode crosshair migration changed an unrelated bind.'
 Assert-True ($syncedBrileCfg -notmatch '(?<!\r)\n') 'BrileMode crosshair migration lost CRLF line endings.'
 Assert-True ($script:FakeFiles['arli.cfg'] -ceq $arliBefore -and $script:FakeFiles['oli.cfg'] -ceq $oliBefore) 'BrileMode crosshair migration changed another profile CFG.'
