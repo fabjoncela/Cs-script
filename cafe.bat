@@ -4,7 +4,7 @@ start "" powershell.exe -NoProfile -ExecutionPolicy Bypass -STA -WindowStyle Hid
 exit /b
 
 # POWERSHELL_GUI
-# CAFE_RELEASE=2026.10.17.16
+# CAFE_RELEASE=2026.10.18.1
 
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
@@ -2769,9 +2769,8 @@ function Start-DetectedSteam {
 function Set-CafeStartupStatus {
     param([Parameter(Mandatory=$true)][string]$Message)
     $script:StartupStatusMessage=$Message
-    $script:StartupStatusDots=0
-    if($script:StartupStatusLabel -and -not $script:StartupStatusLabel.IsDisposed){
-        $script:StartupStatusLabel.Text=$Message
+    if($script:StartupOverlayLabel -and -not $script:StartupOverlayLabel.IsDisposed){
+        $script:StartupOverlayLabel.Text=$Message
         if($script:StartupInventoryRunning){[System.Windows.Forms.Application]::DoEvents()}
     }
 }
@@ -6858,9 +6857,6 @@ $subtitle=New-CafeLabel -Text 'CS2 Setup Center   |   Profiles / Graphics / DPI'
 $subtitle.Dock='None'
 $subtitle.Location=New-Object System.Drawing.Point(28,49)
 $subtitle.Size=New-Object System.Drawing.Size(600,25)
-$script:StartupStatusLabel=$subtitle
-$script:StartupStatusMessage='Starting CafeLauncher'
-$script:StartupStatusDots=0
 $header.Controls.Add($subtitle)
 $headerStatus=New-Object System.Windows.Forms.Panel
 $headerStatus.Dock='Right'
@@ -7259,6 +7255,8 @@ $footer=New-CafeLabel -Text '  CAFE LAUNCHER | production dashboard | %TEMP%\Caf
 $root.Controls.Add($footer,0,3)
 
 $form.Add_FormClosed({
+    if($script:StartupStatusTimer){try{$script:StartupStatusTimer.Stop();$script:StartupStatusTimer.Dispose()}catch{};$script:StartupStatusTimer=$null}
+    if($script:StartupOverlay -and -not $script:StartupOverlay.IsDisposed){$script:StartupOverlay.Dispose();$script:StartupOverlay=$null}
     if($script:LogihubDownloadTimer){$script:LogihubDownloadTimer.Stop();$script:LogihubDownloadTimer.Dispose();$script:LogihubDownloadTimer=$null}
     if($script:LiveDpiVerificationTimer){$script:LiveDpiVerificationTimer.Stop();$script:LiveDpiVerificationTimer.Dispose();$script:LiveDpiVerificationTimer=$null}
     $script:LogihubRequestedDPI=$null
@@ -7271,12 +7269,55 @@ $form.Add_FormClosed({
 # On first display, inventory the machine after Windows has rendered the UI.
 # Update checks are user-triggered through the Check for Updates tile.
 $script:StartupInventoryRunning=$false
-$startupStatusTimer=New-Object System.Windows.Forms.Timer
-$startupStatusTimer.Interval=250
-$startupStatusTimer.Add_Tick({
-    if(-not $script:StartupInventoryRunning -or -not $script:StartupStatusLabel -or $script:StartupStatusLabel.IsDisposed){return}
-    $script:StartupStatusDots=($script:StartupStatusDots+1)%4
-    $script:StartupStatusLabel.Text=$script:StartupStatusMessage+('.'*$script:StartupStatusDots)
+$script:StartupStatusMessage='Getting CafeLauncher ready...'
+$script:StartupSpinnerAngle=0
+$script:StartupOverlay=New-Object System.Windows.Forms.Panel
+$script:StartupOverlay.Size=New-Object System.Drawing.Size(230,132)
+$script:StartupOverlay.BackColor=$PANEL
+$script:StartupOverlay.BorderStyle='FixedSingle'
+$script:StartupOverlay.Anchor='None'
+$script:StartupOverlay.Location=New-Object System.Drawing.Point(
+    [int](($form.ClientSize.Width-$script:StartupOverlay.Width)/2),
+    [int](($form.ClientSize.Height-$script:StartupOverlay.Height)/2))
+$script:StartupOverlayLabel=New-CafeLabel -Text $script:StartupStatusMessage -FontSize 9 -Strong
+$script:StartupOverlayLabel.Dock='None'
+$script:StartupOverlayLabel.Location=New-Object System.Drawing.Point(8,84)
+$script:StartupOverlayLabel.Size=New-Object System.Drawing.Size(212,30)
+$script:StartupOverlayLabel.TextAlign='MiddleCenter'
+$script:StartupOverlay.Controls.Add($script:StartupOverlayLabel)
+$script:StartupOverlay.Add_Paint({
+    param($sender,$e)
+    $graphics=$e.Graphics
+    $graphics.SmoothingMode=[System.Drawing.Drawing2D.SmoothingMode]::AntiAlias
+    $diameter=48
+    $bounds=New-Object System.Drawing.Rectangle(
+        [int](($sender.ClientSize.Width-$diameter)/2),12,$diameter,$diameter)
+    $trackPen=[System.Drawing.Pen]::new([System.Drawing.Color]::FromArgb(70,82,101),4)
+    $activePen=[System.Drawing.Pen]::new($BLUE,4)
+    try{
+        $trackPen.StartCap=[System.Drawing.Drawing2D.LineCap]::Round
+        $trackPen.EndCap=[System.Drawing.Drawing2D.LineCap]::Round
+        $activePen.StartCap=[System.Drawing.Drawing2D.LineCap]::Round
+        $activePen.EndCap=[System.Drawing.Drawing2D.LineCap]::Round
+        $graphics.DrawArc($trackPen,$bounds,0,360)
+        $graphics.DrawArc($activePen,$bounds,[single]$script:StartupSpinnerAngle,105)
+    }finally{$trackPen.Dispose();$activePen.Dispose()}
+})
+$form.Controls.Add($script:StartupOverlay)
+$form.Add_Resize({
+    if($script:StartupOverlay -and -not $script:StartupOverlay.IsDisposed){
+        $script:StartupOverlay.Location=New-Object System.Drawing.Point(
+            [int](($form.ClientSize.Width-$script:StartupOverlay.Width)/2),
+            [int](($form.ClientSize.Height-$script:StartupOverlay.Height)/2))
+    }
+})
+$script:StartupOverlay.Hide()
+$script:StartupStatusTimer=New-Object System.Windows.Forms.Timer
+$script:StartupStatusTimer.Interval=33
+$script:StartupStatusTimer.Add_Tick({
+    if(-not $script:StartupInventoryRunning -or -not $script:StartupOverlay -or $script:StartupOverlay.IsDisposed){return}
+    $script:StartupSpinnerAngle=($script:StartupSpinnerAngle+18)%360
+    $script:StartupOverlay.Invalidate()
 })
 $startupTimer = New-Object System.Windows.Forms.Timer
 $startupTimer.Interval=350
@@ -7285,7 +7326,10 @@ $startupTimer.Add_Tick({
     $startupTimer.Dispose()
     $script:StartupInventoryRunning=$true
     Set-CafeStartupStatus 'Getting CafeLauncher ready...'
-    $startupStatusTimer.Start()
+    $script:StartupOverlay.Show()
+    $script:StartupOverlay.BringToFront()
+    $script:StartupStatusTimer.Start()
+    [System.Windows.Forms.Application]::DoEvents()
     # Profile and graphics settings refresh only when their profile is opened
     # or applied, instead of spending requests on every profile at startup.
     try {
@@ -7295,13 +7339,9 @@ $startupTimer.Add_Tick({
     } catch { Write-Log "Startup inventory failed: $($_.Exception.Message)" 'WARN' }
     finally {
         $script:StartupInventoryRunning=$false
-        $startupStatusTimer.Stop()
-        $startupStatusTimer.Dispose()
-        if($script:StartupStatusLabel -and -not $script:StartupStatusLabel.IsDisposed){
-            $script:StartupStatusLabel.Text='CS2 Setup Center   |   Profiles / Graphics / DPI'
-        }
-        $script:StartupStatusLabel=$null
+        if($script:StartupStatusTimer){$script:StartupStatusTimer.Stop();$script:StartupStatusTimer.Dispose();$script:StartupStatusTimer=$null}
+        if($script:StartupOverlay -and -not $script:StartupOverlay.IsDisposed){$script:StartupOverlay.Hide()}
     }
 })
-$form.Add_Shown({ $startupStatusTimer.Start(); $startupTimer.Start() })
+$form.Add_Shown({ $startupTimer.Start() })
 [void]$form.ShowDialog()
