@@ -4,7 +4,7 @@ start "" powershell.exe -NoProfile -ExecutionPolicy Bypass -STA -WindowStyle Hid
 exit /b
 
 # POWERSHELL_GUI
-# CAFE_RELEASE=2026.10.17.3
+# CAFE_RELEASE=2026.10.17.4
 
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
@@ -3089,7 +3089,7 @@ function Get-CafeWorkshopManifestSnapshot {
     $root=[IO.Path]::GetFullPath($rootText).TrimEnd('\')
     $manifestPath=Join-Path $root 'steamapps\workshop\appworkshop_730.acf'
     $contentRoot=Join-Path $root 'steamapps\workshop\content\730'
-    $snapshot=[ordered]@{LibraryRoot=$root;ManifestPath=$manifestPath;ContentRoot=$contentRoot;ManifestHash=$null;Subscriptions=@();Installed=@{};Trusted=$false;Reason='Workshop subscription manifest is unavailable.'}
+    $snapshot=[ordered]@{LibraryRoot=$root;ManifestPath=$manifestPath;ContentRoot=$contentRoot;ManifestHash=$null;Installed=@{};Trusted=$false;Reason='Workshop manifest is unavailable.'}
     if(-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)){
         if(Test-Path -LiteralPath $contentRoot -PathType Container){$snapshot.Reason='Workshop content exists but the Steam manifest is missing.'}
         return [pscustomobject]$snapshot
@@ -3120,30 +3120,7 @@ function Get-CafeWorkshopManifestSnapshot {
                 if($pendingItems.Count){throw 'Steam Workshop/game downloads appear to be in progress'}
             }
         }
-        if(-not $app.ContainsKey('WorkshopItemDetails') -or $app.WorkshopItemDetails -isnot [hashtable]){throw 'WorkshopItemDetails section is missing or malformed'}
         if(-not $app.ContainsKey('WorkshopItemsInstalled') -or $app.WorkshopItemsInstalled -isnot [hashtable]){throw 'WorkshopItemsInstalled section is missing or malformed'}
-        $subscriptionIds=New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::Ordinal)
-        foreach($id in $app.WorkshopItemDetails.Keys){
-            $idText=[string]$id
-            [UInt64]$parsedId=0
-            if($idText -notmatch '^\d{1,20}$' -or -not [UInt64]::TryParse($idText,[ref]$parsedId) -or $parsedId -eq 0){throw 'manifest contains an invalid subscribed Workshop ID'}
-            $item=$app.WorkshopItemDetails[$id]
-            if($item -isnot [hashtable]){throw ('subscription entry '+$idText+' is malformed')}
-            if($item.ContainsKey('subscribedby') -and -not [string]::IsNullOrWhiteSpace([string]$item.subscribedby)){
-                $subscriber=[string]$item.subscribedby
-                if($subscriber -cne $ActiveAccountID){
-                    [long]$activeNumber=0
-                    [long]$subscriberNumber=0
-                    if([long]::TryParse($ActiveAccountID,[ref]$activeNumber) -and [long]::TryParse($subscriber,[ref]$subscriberNumber)){
-                        $steamId64=$activeNumber+76561197960265728L
-                        if($subscriber -cne $steamId64.ToString([Globalization.CultureInfo]::InvariantCulture)){
-                            throw 'manifest subscription account does not match the active Steam account'
-                        }
-                    }else{throw 'manifest subscription account cannot be verified against the active Steam account'}
-                }
-            }
-            [void]$subscriptionIds.Add($idText)
-        }
         $installed=@{}
         foreach($id in $app.WorkshopItemsInstalled.Keys){
             $idText=[string]$id
@@ -3154,7 +3131,6 @@ function Get-CafeWorkshopManifestSnapshot {
             [long]$size=0
             if($item.ContainsKey('size') -and [long]::TryParse([string]$item.size,[ref]$size) -and $size -ge 0){$installed[$idText]=$size}
         }
-        $snapshot.Subscriptions=@($subscriptionIds|Sort-Object)
         $snapshot.Installed=$installed
         $snapshot.ManifestHash=$hash
         $snapshot.Trusted=$true
@@ -3187,11 +3163,17 @@ function Get-CafeWorkshopDirectorySize {
 }
 
 function Get-CafeWorkshopCleanupSnapshot {
-    param([Parameter(Mandatory=$true)][string[]]$LibraryRoots,[Parameter(Mandatory=$true)][string]$ActiveAccountID)
+    param([Parameter(Mandatory=$true)][string[]]$LibraryRoots,[Parameter(Mandatory=$true)][string]$ActiveAccountID,
+        [Parameter(Mandatory=$true)][AllowEmptyCollection()][string[]]$SubscribedWorkshopIDs)
     [long]$account=0
     if(-not [long]::TryParse($ActiveAccountID,[ref]$account) -or $account -le 0){throw 'Steam has no verifiable signed-in account. Sign in to Steam, then scan again.'}
     $snapshots=New-Object 'System.Collections.Generic.List[object]'
     $subscriptions=New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::Ordinal)
+    foreach($id in $SubscribedWorkshopIDs){
+        [UInt64]$parsedId=0
+        if([string]$id -notmatch '^\d{1,20}$' -or -not [UInt64]::TryParse([string]$id,[ref]$parsedId) -or $parsedId -eq 0){throw 'Steam returned an invalid subscribed Workshop ID.'}
+        [void]$subscriptions.Add([string]$id)
+    }
     $entries=New-Object 'System.Collections.Generic.List[object]'
     $seenRoots=New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
     $subscriptionStateComplete=$true
@@ -3205,7 +3187,6 @@ function Get-CafeWorkshopCleanupSnapshot {
         if(-not $seenRoots.Add($root)){continue}
         $library=Get-CafeWorkshopManifestSnapshot -LibraryRoot $root -ActiveAccountID $ActiveAccountID
         $snapshots.Add($library)
-        if($library.Trusted){foreach($id in $library.Subscriptions){[void]$subscriptions.Add([string]$id)}}
         if(-not $library.Trusted -and ((Test-Path -LiteralPath $library.ManifestPath -PathType Leaf) -or (Test-Path -LiteralPath $library.ContentRoot -PathType Container))){$subscriptionStateComplete=$false}
         if(-not (Test-Path -LiteralPath $library.ContentRoot -PathType Container)){continue}
         try{$contentRootInfo=Get-Item -LiteralPath $library.ContentRoot -Force -ErrorAction Stop}catch{continue}
@@ -3225,16 +3206,16 @@ function Get-CafeWorkshopCleanupSnapshot {
             $trusted=$library.Trusted
             $subscribed=$subscriptions.Contains($id)
             $canRemove=$subscriptionStateComplete -and $trusted -and -not $subscribed -and $size.Safe
-            $status=if($subscribed){'Keep — subscribed'}elseif(-not $subscriptionStateComplete){'Unknown — subscription state incomplete'}elseif(-not $trusted){'Unknown — subscription state unverified'}elseif(-not $size.Safe){'Unknown — unsafe or unreadable item'}else{'Removable — not in the active Steam manifest'}
-            $reason=if($subscribed){'Present in a verified Steam Workshop subscription manifest.'}elseif(-not $subscriptionStateComplete){'At least one library containing CS2 Workshop state has an unavailable or unverified manifest.'}elseif(-not $trusted){$library.Reason}else{$size.Reason}
-            $entries.Add([pscustomobject]@{WorkshopID=$id;LibraryRoot=$root;Path=$full;Bytes=$size.Bytes;Status=$status;CanRemove=$canRemove;Reason=$reason})
+            $status=if($subscribed){'Keep — subscribed'}elseif(-not $subscriptionStateComplete){'Unknown — local Workshop state incomplete'}elseif(-not $trusted){'Unknown — local Workshop state unverified'}elseif(-not $size.Safe){'Unknown — unsafe or unreadable item'}else{'Removable — not subscribed to by this account'}
+            $reason=if($subscribed){'Steamworks reports this item subscribed by the active Steam account.'}elseif(-not $subscriptionStateComplete){'At least one library containing CS2 Workshop state has an unavailable or unverified manifest.'}elseif(-not $trusted){$library.Reason}else{$size.Reason}
+            $entries.Add([pscustomobject]@{WorkshopID=$id;LibraryRoot=$root;Path=$full;Bytes=$size.Bytes;Status=$status;IsSubscribed=$subscribed;CanRemove=$canRemove;Reason=$reason})
         }
     }
     foreach($entry in $entries){
         if($entry.WorkshopID -and $subscriptions.Contains([string]$entry.WorkshopID)){
             $entry.CanRemove=$false
             $entry.Status='Keep — subscribed'
-            $entry.Reason='Present in a Steam Workshop subscription manifest from one or more detected libraries.'
+            $entry.Reason='Steamworks reports this item subscribed by the active Steam account.'
         }elseif(-not $subscriptionStateComplete -and $entry.CanRemove){
             $entry.CanRemove=$false
             $entry.Status='Unknown — subscription state incomplete'
@@ -3243,16 +3224,137 @@ function Get-CafeWorkshopCleanupSnapshot {
     }
     $signature=New-Object 'System.Collections.Generic.List[string]'
     foreach($library in @($snapshots|Sort-Object LibraryRoot)){$signature.Add(([string]$library.LibraryRoot)+'|'+[string]$library.ManifestHash+'|'+[string]$library.Trusted)}
+    $signature.Add('SteamUGCSubscriptions='+(@($subscriptions|Sort-Object) -join ','))
     $signatureText=$signature -join "`n"
     $signatureHash=[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($signatureText))
     return [pscustomobject]@{AccountID=$ActiveAccountID;Libraries=@($snapshots.ToArray());Subscriptions=@($subscriptions|Sort-Object);Entries=@($entries.ToArray());ManifestSignature=$signatureHash;ScannedAt=[DateTime]::UtcNow}
+}
+
+function Get-CafeSteamSubscribedWorkshopIDs {
+    param([Parameter(Mandatory=$true)][string[]]$LibraryRoots,[Parameter(Mandatory=$true)][string]$ActiveAccountID)
+    if(-not ('CafeSteamWorkshopNative' -as [type])){
+        Add-Type -TypeDefinition @'
+using System;
+using System.Text;
+using System.Runtime.InteropServices;
+public static class CafeSteamWorkshopNative {
+    [DllImport("kernel32.dll", SetLastError=true, CharSet=CharSet.Unicode)] public static extern bool SetDllDirectory(string path);
+    [DllImport("kernel32.dll", SetLastError=true, CharSet=CharSet.Unicode)] public static extern uint GetDllDirectory(uint size, StringBuilder path);
+    [DllImport("steam_api64.dll", CallingConvention=CallingConvention.Cdecl, ExactSpelling=true)] public static extern int SteamAPI_InitFlat(IntPtr errorMessage);
+    [DllImport("steam_api64.dll", CallingConvention=CallingConvention.Cdecl, ExactSpelling=true)] public static extern void SteamAPI_Shutdown();
+    [DllImport("steam_api64.dll", CallingConvention=CallingConvention.Cdecl, ExactSpelling=true)] public static extern int SteamAPI_GetHSteamUser();
+    [DllImport("steam_api64.dll", CallingConvention=CallingConvention.Cdecl, ExactSpelling=true, CharSet=CharSet.Ansi)] public static extern IntPtr SteamInternal_FindOrCreateUserInterface(int user, string version);
+    [DllImport("steam_api64.dll", CallingConvention=CallingConvention.Cdecl, ExactSpelling=true)] public static extern uint SteamAPI_ISteamUGC_GetNumSubscribedItems(IntPtr ugc, [MarshalAs(UnmanagedType.I1)] bool includeLocallyDisabled);
+    [DllImport("steam_api64.dll", CallingConvention=CallingConvention.Cdecl, ExactSpelling=true)] public static extern uint SteamAPI_ISteamUGC_GetSubscribedItems(IntPtr ugc, [Out] ulong[] ids, uint maxEntries, [MarshalAs(UnmanagedType.I1)] bool includeLocallyDisabled);
+}
+'@
+    }
+    $active=Get-CafeActiveSteamVideoFile
+    if([string]$active.AccountID -cne $ActiveAccountID){throw 'The active Steam account changed before the Workshop subscription scan.'}
+    $dllPaths=New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+    foreach($root in $LibraryRoots){
+        $install=Get-CS2InstallFromManifest -LibraryRoot $root
+        if(-not $install){continue}
+        $path=Join-Path $install.InstallRoot 'game\bin\win64\steam_api64.dll'
+        if(Test-Path -LiteralPath $path -PathType Leaf){[void]$dllPaths.Add([IO.Path]::GetFullPath($path))}
+    }
+    if($dllPaths.Count -ne 1){throw 'Could not identify one installed CS2 Steamworks API library for reading the signed-in account subscriptions.'}
+    $dllPath=@($dllPaths)[0]
+    $previousDirectory=New-Object System.Text.StringBuilder 1024
+    $previousLength=[CafeSteamWorkshopNative]::GetDllDirectory([uint32]$previousDirectory.Capacity,$previousDirectory)
+    if($previousLength -ge $previousDirectory.Capacity){throw 'Could not safely preserve the current DLL search directory.'}
+    $restoreDirectory=if($previousLength -gt 0){$previousDirectory.ToString()}else{$null}
+    $oldAppId=$env:SteamAppId;$oldGameId=$env:SteamGameId
+    $initialized=$false
+    try{
+        if(-not [CafeSteamWorkshopNative]::SetDllDirectory((Split-Path -Parent $dllPath))){throw 'Could not load the installed CS2 Steamworks API safely.'}
+        $env:SteamAppId='730';$env:SteamGameId='730'
+        $errorBuffer=[Runtime.InteropServices.Marshal]::AllocHGlobal(1024)
+        try{
+            for($i=0;$i -lt 1024;$i++){[Runtime.InteropServices.Marshal]::WriteByte($errorBuffer,$i,0)}
+            $initResult=[CafeSteamWorkshopNative]::SteamAPI_InitFlat($errorBuffer)
+            $nativeMessage=[Runtime.InteropServices.Marshal]::PtrToStringAnsi($errorBuffer)
+        }finally{[Runtime.InteropServices.Marshal]::FreeHGlobal($errorBuffer)}
+        if($initResult -ne 0){throw ('Steam could not provide the signed-in account Workshop list'+$(if($nativeMessage){': '+$nativeMessage}else{'.'}))}
+        $initialized=$true
+        $user=[CafeSteamWorkshopNative]::SteamAPI_GetHSteamUser()
+        if($user -le 0){throw 'Steamworks did not return a signed-in Steam user handle.'}
+        $ugc=[IntPtr]::Zero
+        foreach($version in 21..14){
+            $candidate=[CafeSteamWorkshopNative]::SteamInternal_FindOrCreateUserInterface($user,('STEAMUGC_INTERFACE_VERSION{0:d3}' -f $version))
+            if($candidate -ne [IntPtr]::Zero){$ugc=$candidate;break}
+        }
+        if($ugc -eq [IntPtr]::Zero){throw 'The installed Steamworks runtime does not expose a compatible Workshop interface.'}
+        $count=[CafeSteamWorkshopNative]::SteamAPI_ISteamUGC_GetNumSubscribedItems($ugc,$true)
+        if($count -gt 200000){throw 'Steam returned an unexpected number of subscribed Workshop items.'}
+        $ids=New-Object 'UInt64[]' ([int]$count)
+        $returned=[CafeSteamWorkshopNative]::SteamAPI_ISteamUGC_GetSubscribedItems($ugc,$ids,$count,$true)
+        if($returned -ne $count){throw 'Steam subscription data changed while it was being read; scan again.'}
+        $after=Get-CafeActiveSteamVideoFile
+        if([string]$after.AccountID -cne $ActiveAccountID){throw 'The active Steam account changed during the Workshop subscription scan.'}
+        return @($ids|ForEach-Object{([UInt64]$_).ToString([Globalization.CultureInfo]::InvariantCulture)}|Sort-Object -Unique)
+    }finally{
+        if($initialized){[CafeSteamWorkshopNative]::SteamAPI_Shutdown()}
+        if($null -eq $oldAppId){Remove-Item Env:SteamAppId -ErrorAction SilentlyContinue}else{$env:SteamAppId=$oldAppId}
+        if($null -eq $oldGameId){Remove-Item Env:SteamGameId -ErrorAction SilentlyContinue}else{$env:SteamGameId=$oldGameId}
+        [void][CafeSteamWorkshopNative]::SetDllDirectory($restoreDirectory)
+    }
+}
+
+function ConvertFrom-CafeWorkshopPublishedDetails {
+    param([Parameter(Mandatory=$true)]$Response,[Parameter(Mandatory=$true)][string[]]$WorkshopIDs)
+    $wanted=New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::Ordinal)
+    foreach($id in $WorkshopIDs){[void]$wanted.Add([string]$id)}
+    $details=@{}
+    foreach($item in @($Response.response.publishedfiledetails)){
+        $id=[string]$item.publishedfileid
+        if(-not $wanted.Contains($id) -or [string]$item.consumer_appid -cne '730'){continue}
+        $title=[Net.WebUtility]::HtmlDecode([string]$item.title)
+        if([string]::IsNullOrWhiteSpace($title)){$title='Workshop item '+$id}
+        $description=[Net.WebUtility]::HtmlDecode([string]$item.description)
+        $description=$description -replace '(?is)<[^>]*>',' ' -replace '\[/?[A-Za-z]+(?:=[^\]]*)?\]',' '
+        $description=[regex]::Replace($description,'\s+',' ').Trim()
+        if($description.Length -gt 1200){$description=$description.Substring(0,1197)+'...'}
+        $details[$id]=[pscustomobject]@{Title=$title;Description=$description}
+    }
+    return ,$details
+}
+
+function Get-CafeWorkshopPublishedDetails {
+    param([Parameter(Mandatory=$true)][AllowEmptyCollection()][string[]]$WorkshopIDs)
+    $ids=@($WorkshopIDs|Where-Object{$_ -match '^\d{1,20}$'}|Sort-Object -Unique)
+    if(-not $ids.Count){return @{}}
+    $allDetails=@{}
+    for($offset=0;$offset -lt $ids.Count;$offset+=100){
+        $end=[Math]::Min($offset+99,$ids.Count-1)
+        $batch=@($ids[$offset..$end])
+        $pairs=New-Object 'System.Collections.Generic.List[string]'
+        $pairs.Add('itemcount='+[uri]::EscapeDataString([string]$batch.Count))
+        for($i=0;$i -lt $batch.Count;$i++){$pairs.Add('publishedfileids['+$i+']='+[uri]::EscapeDataString([string]$batch[$i]))}
+        try{
+            $response=Invoke-RestMethod -Uri 'https://api.steampowered.com/ISteamRemoteStorage/GetPublishedFileDetails/v1/' -Method Post -ContentType 'application/x-www-form-urlencoded' -Body ($pairs -join '&') -TimeoutSec 8 -ErrorAction Stop
+            $batchDetails=ConvertFrom-CafeWorkshopPublishedDetails -Response $response -WorkshopIDs $batch
+            foreach($id in $batchDetails.Keys){$allDetails[$id]=$batchDetails[$id]}
+        }catch{
+            Write-Log ('Steam Workshop names and descriptions were unavailable for one metadata batch: '+$_.Exception.Message) 'WARN'
+        }
+    }
+    return ,$allDetails
+}
+
+function Get-CafeWorkshopSelectionEntries {
+    param([Parameter(Mandatory=$true)][object[]]$Entries,[switch]$OnlyUnsubscribed)
+    if($OnlyUnsubscribed){return @($Entries|Where-Object{$_.CanRemove -and -not $_.IsSubscribed})}
+    return @($Entries|Where-Object{$_.CanRemove})
 }
 
 function Get-CafeActiveWorkshopContext {
     $active=Get-CafeActiveSteamVideoFile
     $steamProcesses=@(Get-Process -Name 'steam' -ErrorAction SilentlyContinue | Where-Object {$_.Path -and (Test-Path -LiteralPath $_.Path -PathType Leaf)})
     if($steamProcesses.Count -ne 1){throw 'Could not identify exactly one running Steam client. Keep Steam open and retry.'}
-    return [pscustomobject]@{AccountID=[string]$active.AccountID;SteamRoot=[string]$active.SteamRoot;LibraryRoots=@(Get-SteamLibraryRoots)}
+    $libraryRoots=@(Get-SteamLibraryRoots)
+    $subscriptions=@(Get-CafeSteamSubscribedWorkshopIDs -LibraryRoots $libraryRoots -ActiveAccountID ([string]$active.AccountID))
+    return [pscustomobject]@{AccountID=[string]$active.AccountID;SteamRoot=[string]$active.SteamRoot;LibraryRoots=$libraryRoots;SubscriptionIDs=$subscriptions}
 }
 
 function Remove-CafeWorkshopItems {
@@ -3293,44 +3395,59 @@ function Remove-CafeWorkshopItems {
 function Show-CafeWorkshopCleanupDialog {
     $dialog=New-Object System.Windows.Forms.Form
     $dialog.Text='CS2 Workshop Cleanup - CafeLauncher'
-    $dialog.ClientSize=[System.Drawing.Size]::new(760,500)
-    $dialog.MinimumSize=[System.Drawing.Size]::new(700,420)
+    $dialog.ClientSize=[System.Drawing.Size]::new(1040,650)
+    $dialog.MinimumSize=[System.Drawing.Size]::new(900,540)
     $dialog.StartPosition='CenterParent'
     $dialog.BackColor=$BG
     $dialog.ForeColor=$WHITE
     $dialog.Font=New-Object System.Drawing.Font('Segoe UI',9)
-    $intro=New-CafeLabel -Text 'Keep Workshop maps subscribed to the signed-in Steam account. Select only local items Steam no longer lists as subscribed.' -FontSize 9
-    $intro.Location=[System.Drawing.Point]::new(14,12);$intro.Size=[System.Drawing.Size]::new(730,38);$intro.Anchor='Top,Left,Right'
+    $intro=New-CafeLabel -Text 'Subscriptions come from the signed-in Steam account. Select only safe local items that account is not subscribed to.' -FontSize 9
+    $intro.Location=[System.Drawing.Point]::new(14,12);$intro.Size=[System.Drawing.Size]::new(1000,38);$intro.Anchor='Top,Left,Right'
     $dialog.Controls.Add($intro)
     $status=New-CafeLabel -Text 'Scan requires Steam to be running and signed in.' -FontSize 9
-    $status.Location=[System.Drawing.Point]::new(14,51);$status.Size=[System.Drawing.Size]::new(730,28);$status.Anchor='Top,Left,Right'
+    $status.Location=[System.Drawing.Point]::new(14,51);$status.Size=[System.Drawing.Size]::new(1000,28);$status.Anchor='Top,Left,Right'
     $dialog.Controls.Add($status)
     $list=New-Object System.Windows.Forms.ListView
-    $list.Location=[System.Drawing.Point]::new(14,84);$list.Size=[System.Drawing.Size]::new(730,340);$list.Anchor='Top,Bottom,Left,Right'
-    $list.View='Details';$list.CheckBoxes=$true;$list.FullRowSelect=$true;$list.GridLines=$true
+    $list.Location=[System.Drawing.Point]::new(14,84);$list.Size=[System.Drawing.Size]::new(1000,475);$list.Anchor='Top,Bottom,Left,Right'
+    $list.View='Details';$list.CheckBoxes=$true;$list.FullRowSelect=$true;$list.GridLines=$true;$list.ShowItemToolTips=$true
     $list.BackColor=$PANEL;$list.ForeColor=$WHITE
-    [void]$list.Columns.Add('Workshop ID',140)
-    [void]$list.Columns.Add('Estimated size',120)
-    [void]$list.Columns.Add('Status',440)
+    [void]$list.Columns.Add('Workshop name',220)
+    [void]$list.Columns.Add('Workshop ID',115)
+    [void]$list.Columns.Add('Estimated size',110)
+    [void]$list.Columns.Add('Status',250)
+    [void]$list.Columns.Add('Description',300)
     $dialog.Controls.Add($list)
-    $scanButton=New-Object System.Windows.Forms.Button;$scanButton.Text='Scan again';$scanButton.Location=[System.Drawing.Point]::new(14,445);$scanButton.Size=[System.Drawing.Size]::new(125,38);Style-CafeButton -Button $scanButton;$scanButton.Anchor='Bottom,Left';$dialog.Controls.Add($scanButton)
-    $removeButton=New-Object System.Windows.Forms.Button;$removeButton.Text='Remove selected';$removeButton.Location=[System.Drawing.Point]::new(435,445);$removeButton.Size=[System.Drawing.Size]::new(160,38);Style-CafeButton -Button $removeButton;$removeButton.BackColor=[System.Drawing.Color]::FromArgb(150,62,62);$removeButton.Anchor='Bottom,Right';$dialog.Controls.Add($removeButton)
-    $closeButton=New-Object System.Windows.Forms.Button;$closeButton.Text='Close';$closeButton.Location=[System.Drawing.Point]::new(605,445);$closeButton.Size=[System.Drawing.Size]::new(139,38);Style-CafeButton -Button $closeButton;$closeButton.Anchor='Bottom,Right';$closeButton.Add_Click({$dialog.Close()}.GetNewClosure());$dialog.Controls.Add($closeButton)
+    $scanButton=New-Object System.Windows.Forms.Button;$scanButton.Text='Scan again';$scanButton.Location=[System.Drawing.Point]::new(14,585);$scanButton.Size=[System.Drawing.Size]::new(120,38);Style-CafeButton -Button $scanButton;$scanButton.Anchor='Bottom,Left';$dialog.Controls.Add($scanButton)
+    $selectAllButton=New-Object System.Windows.Forms.Button;$selectAllButton.Text='Select all';$selectAllButton.Location=[System.Drawing.Point]::new(145,585);$selectAllButton.Size=[System.Drawing.Size]::new(130,38);Style-CafeButton -Button $selectAllButton;$selectAllButton.Anchor='Bottom,Left';$dialog.Controls.Add($selectAllButton)
+    $selectUnsubscribedButton=New-Object System.Windows.Forms.Button;$selectUnsubscribedButton.Text='Select unsubscribed';$selectUnsubscribedButton.Location=[System.Drawing.Point]::new(286,585);$selectUnsubscribedButton.Size=[System.Drawing.Size]::new(190,38);Style-CafeButton -Button $selectUnsubscribedButton;$selectUnsubscribedButton.Anchor='Bottom,Left';$dialog.Controls.Add($selectUnsubscribedButton)
+    $removeButton=New-Object System.Windows.Forms.Button;$removeButton.Text='Remove selected';$removeButton.Location=[System.Drawing.Point]::new(685,585);$removeButton.Size=[System.Drawing.Size]::new(160,38);Style-CafeButton -Button $removeButton;$removeButton.BackColor=[System.Drawing.Color]::FromArgb(150,62,62);$removeButton.Anchor='Bottom,Right';$dialog.Controls.Add($removeButton)
+    $closeButton=New-Object System.Windows.Forms.Button;$closeButton.Text='Close';$closeButton.Location=[System.Drawing.Point]::new(865,585);$closeButton.Size=[System.Drawing.Size]::new(149,38);Style-CafeButton -Button $closeButton;$closeButton.Anchor='Bottom,Right';$closeButton.Add_Click({$dialog.Close()}.GetNewClosure());$dialog.Controls.Add($closeButton)
     $state=[pscustomobject]@{Snapshot=$null}
-    $list.Add_ItemCheck({
-        if($_.Index -ge 0 -and $_.Index -lt $list.Items.Count -and -not $list.Items[$_.Index].Tag.CanRemove){$_.NewValue=$_.CurrentValue}
+    $list.Add_ItemCheck({param($sender,$eventArgs)
+        if($eventArgs.Index -ge 0 -and $eventArgs.Index -lt $sender.Items.Count -and -not $sender.Items[$eventArgs.Index].Tag.CanRemove){$eventArgs.NewValue=$eventArgs.CurrentValue}
+    }.GetNewClosure())
+    $selectAllButton.Add_Click({
+        foreach($item in $list.Items){$item.Checked=($item.Tag.CanRemove -eq $true)}
+    }.GetNewClosure())
+    $selectUnsubscribedButton.Add_Click({
+        foreach($item in $list.Items){$item.Checked=($item.Tag.CanRemove -eq $true -and -not $item.Tag.IsSubscribed)}
     }.GetNewClosure())
     $scanAction={
         $scanButton.Enabled=$false;$removeButton.Enabled=$false;$status.Text='Scanning Steam Workshop manifests and local CS2 content...'
         try{
             $context=Get-CafeActiveWorkshopContext
-            $scan=Get-CafeWorkshopCleanupSnapshot -LibraryRoots $context.LibraryRoots -ActiveAccountID $context.AccountID
+            $scan=Get-CafeWorkshopCleanupSnapshot -LibraryRoots $context.LibraryRoots -ActiveAccountID $context.AccountID -SubscribedWorkshopIDs $context.SubscriptionIDs
+            $metadata=Get-CafeWorkshopPublishedDetails -WorkshopIDs @($scan.Entries|Where-Object{$_.WorkshopID}|ForEach-Object{$_.WorkshopID}|Sort-Object -Unique)
             $state.Snapshot=$scan
             $list.BeginUpdate();$list.Items.Clear()
             foreach($entry in $scan.Entries){
                 $sizeText=if($null -eq $entry.Bytes){'Unknown'}else{('{0:N1} MB' -f ([double]$entry.Bytes/1MB))}
-                $item=New-Object System.Windows.Forms.ListViewItem([string]$entry.WorkshopID)
-                [void]$item.SubItems.Add($sizeText);[void]$item.SubItems.Add([string]$entry.Status);$item.Tag=$entry
+                $details=$metadata[[string]$entry.WorkshopID]
+                $title=if($details){[string]$details.Title}else{'Workshop item '+[string]$entry.WorkshopID}
+                $description=if($details){[string]$details.Description}else{'Description unavailable'}
+                $item=New-Object System.Windows.Forms.ListViewItem($title)
+                [void]$item.SubItems.Add([string]$entry.WorkshopID);[void]$item.SubItems.Add($sizeText);[void]$item.SubItems.Add([string]$entry.Status);[void]$item.SubItems.Add($description);$item.Tag=$entry
+                $item.ToolTipText=$title+' ('+[string]$entry.WorkshopID+')'+[Environment]::NewLine+$description
                 if($entry.CanRemove){$item.ForeColor=$WHITE}else{$item.ForeColor=$MUTED}
                 [void]$list.Items.Add($item)
             }
@@ -3361,7 +3478,7 @@ function Show-CafeWorkshopCleanupDialog {
         $removeButton.Enabled=$false
         try{
             $context=Get-CafeActiveWorkshopContext
-            $fresh=Get-CafeWorkshopCleanupSnapshot -LibraryRoots $context.LibraryRoots -ActiveAccountID $context.AccountID
+            $fresh=Get-CafeWorkshopCleanupSnapshot -LibraryRoots $context.LibraryRoots -ActiveAccountID $context.AccountID -SubscribedWorkshopIDs $context.SubscriptionIDs
             $result=@(Remove-CafeWorkshopItems -Preview $state.Snapshot -FreshSnapshot $fresh -SelectedEntries $selected -Confirmed)
             $removed=@($result|Where-Object{$_.Status -eq 'Removed'}).Count
             $failed=@($result|Where-Object{$_.Status -eq 'Failed'}).Count

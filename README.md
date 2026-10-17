@@ -5,7 +5,7 @@ CafeLauncher is a portable Windows setup launcher for CS2 internet cafés. It ru
 [Technical architecture and maintenance notes](./context.md)
 
 <!-- BEGIN GENERATED LAUNCHER RELEASE -->
-> Launcher release: **2026.10.17.3**. Features depend on the PC's hardware, installed programs and user permissions.
+> Launcher release: **2026.10.17.4**. Features depend on the PC's hardware, installed programs and user permissions.
 <!-- END GENERATED LAUNCHER RELEASE -->
 
 ## Download and start
@@ -69,7 +69,7 @@ Startup hardware detection is informational and does not change display settings
 
 The **Tools & Apps** tab contains less-used shortcuts, and the dashboard can launch configured apps with a profile. **LAUNCH ALL** opens its configured applications; it is not a Steam or FACEIT readiness check.
 
-- **Workshop Cleanup** previews locally installed CS2 Workshop items against Steam's local subscription manifest. It protects subscribed items and removes only individually selected local folders after confirmation. Steam must be running and signed in, CS2 must be closed, and the manifest/download state must be readable and stable. It does not unsubscribe Workshop items.
+- **Workshop Cleanup** previews locally installed CS2 Workshop items against the signed-in Steam account's Steamworks subscription list. It shows item names and descriptions when available, protects subscribed items, and removes only selected safe local folders after confirmation. Steam must be running and signed in, CS2 must be closed, and Steam's local manifest/download state must be readable and stable. It does not unsubscribe Workshop items.
 
 The dashboard reports profile-step outcomes and includes an API allowance indicator based on responses it already receives; the indicator does not make a separate polling request. Detailed output appears in LIVE LOGS and `%TEMP%\CafeLauncher.log`. Startup parse errors are written to `%TEMP%\CafeLauncher-startup-error.log`.
 
