@@ -4,7 +4,7 @@ start "" powershell.exe -NoProfile -ExecutionPolicy Bypass -STA -WindowStyle Hid
 exit /b
 
 # POWERSHELL_GUI
-# CAFE_RELEASE=2026.10.17.8
+# CAFE_RELEASE=2026.10.17.10
 
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
@@ -37,9 +37,78 @@ try {
     Set-Content -LiteralPath $script:LogPath -Value $previousLog -Encoding UTF8
 } catch {}
 
+function Add-LiveLogLine {
+    param([string]$Line)
+    if(-not $script:LogBox -or $script:LogBox.IsDisposed){return}
+    $start=$script:LogBox.TextLength
+    $script:LogBox.SelectionStart=$start
+    $script:LogBox.SelectionLength=0
+    $script:LogBox.SelectionColor=$script:LogBaseColor
+    $script:LogBox.SelectionFont=$script:LogBaseFont
+    $script:LogBox.AppendText($Line + [Environment]::NewLine)
+
+    $rules=@(
+        @{Pattern='^\d{2}:\d{2}:\d{2}';Color=[System.Drawing.Color]::FromArgb(130,145,165)},
+        @{Pattern='\[(ERROR|WARN|RESULT|SUMMARY)\]';Color=[System.Drawing.Color]::FromArgb(255,190,105)}
+    )
+    foreach($rule in $rules){
+        foreach($match in [regex]::Matches($Line,$rule.Pattern)){
+            $script:LogBox.Select($start+$match.Index,$match.Length)
+            $script:LogBox.SelectionColor=$rule.Color
+        }
+    }
+    $messageMatch=[regex]::Match($Line,'\[(ERROR|WARN)\] (.*)$')
+    if($messageMatch.Success -and $messageMatch.Groups[2].Length -gt 0){
+        $detailColor=if($messageMatch.Groups[1].Value -eq 'ERROR'){[System.Drawing.Color]::FromArgb(255,115,115)}else{[System.Drawing.Color]::FromArgb(255,190,105)}
+        $script:LogBox.Select($start+$messageMatch.Groups[2].Index,$messageMatch.Groups[2].Length)
+        $script:LogBox.SelectionColor=$detailColor
+    }
+    $valueRules=@(
+        @{Pattern='(?i)\brequested\s*:?[ ]*[^|]+';Color=[System.Drawing.Color]::FromArgb(120,175,255)},
+        @{Pattern='(?i)\bactual\s*:?[ ]*[^|]+';Color=[System.Drawing.Color]::FromArgb(100,215,230)},
+        @{Pattern='(?i)\btarget\s*:?[ ]*[^|]+';Color=[System.Drawing.Color]::FromArgb(195,150,245)}
+    )
+    foreach($rule in $valueRules){
+        foreach($match in [regex]::Matches($Line,$rule.Pattern)){
+            $script:LogBox.Select($start+$match.Index,$match.Length)
+            $script:LogBox.SelectionColor=$rule.Color
+        }
+    }
+    $statusColors=@{
+        APPLIED=[System.Drawing.Color]::FromArgb(105,220,140)
+        SUCCESS=[System.Drawing.Color]::FromArgb(105,220,140)
+        FAILED=[System.Drawing.Color]::FromArgb(255,115,115)
+        ERROR=[System.Drawing.Color]::FromArgb(255,115,115)
+        PARTIAL=[System.Drawing.Color]::FromArgb(255,190,105)
+        FALLBACK=[System.Drawing.Color]::FromArgb(255,190,105)
+        WARN=[System.Drawing.Color]::FromArgb(255,190,105)
+        SKIPPED=[System.Drawing.Color]::FromArgb(150,180,220)
+        PENDING=[System.Drawing.Color]::FromArgb(150,180,220)
+    }
+    foreach($status in $statusColors.Keys){
+        foreach($match in [regex]::Matches($Line,('(?i)\b'+[regex]::Escape($status)+'\b'))){
+            $script:LogBox.Select($start+$match.Index,$match.Length)
+            $script:LogBox.SelectionColor=$statusColors[$status]
+        }
+    }
+    foreach($match in [regex]::Matches($Line,'\b(FabMode|ArliMode|ArmlMode|OliMode|BrileMode|Apply Graphics|Play \+ Exec|Save Locally|Save & Sync)\b')){
+        $script:LogBox.Select($start+$match.Index,$match.Length)
+        $script:LogBox.SelectionFont=$script:LogBoldFont
+    }
+
+    $script:LogBox.SelectionStart=$script:LogBox.TextLength
+    $script:LogBox.SelectionLength=0
+    $script:LogBox.SelectionColor=$script:LogBaseColor
+    $script:LogBox.SelectionFont=$script:LogBaseFont
+    $script:LogBox.ScrollToCaret()
+}
+
 function Write-Log {
-    param([string]$Message, [string]$Level = "INFO")
+    param([string]$Message, [string]$Level = "INFO", [string]$LiveMessage=$null, [string]$FileDetail=$null)
     $line = "{0} [{1}] {2}" -f (Get-Date -Format "HH:mm:ss"), $Level, $Message
+    if(-not [string]::IsNullOrWhiteSpace($FileDetail)){$line+=[Environment]::NewLine+$FileDetail}
+    $visibleMessage=if($PSBoundParameters.ContainsKey('LiveMessage')){$LiveMessage}else{$Message}
+    $liveLine="{0} [{1}] {2}" -f (Get-Date -Format "HH:mm:ss"), $Level, ([regex]::Replace([string]$visibleMessage,'\s+',' ').Trim())
     if($script:StepScope){
         if($Level -eq "ERROR"){$script:StepScopeError=$true}
         elseif($Level -eq "WARN"){$script:StepScopeWarning=$true}
@@ -48,7 +117,7 @@ function Write-Log {
     if($script:StatusLine -and -not $script:StatusLine.IsDisposed -and
         $Level -in @('ERROR','WARN','RESULT','SUMMARY')){
         try {
-            $messageForStatus=$Message
+            $messageForStatus=[regex]::Replace([string]$visibleMessage,'\s+',' ').Trim()
             if($script:StatusLine.InvokeRequired){
                 [void]$script:StatusLine.BeginInvoke([Action]{
                     $script:StatusLine.Text=$messageForStatus
@@ -67,12 +136,10 @@ function Write-Log {
         try {
             if ($script:LogBox.InvokeRequired) {
                 $null = $script:LogBox.BeginInvoke([Action]{
-                    $script:LogBox.AppendText($line + [Environment]::NewLine)
+                    Add-LiveLogLine -Line $liveLine
                 })
             } else {
-                $script:LogBox.AppendText($line + [Environment]::NewLine)
-                $script:LogBox.SelectionStart = $script:LogBox.TextLength
-                $script:LogBox.ScrollToCaret()
+                Add-LiveLogLine -Line $liveLine
             }
         } catch {}
     }
@@ -213,7 +280,12 @@ function Write-RunSummary {
         if($outcome.Target){$parts+=('target: '+$outcome.Target)}
         if($outcome.Actual){$parts+=('actual: '+$outcome.Actual)}
         if($outcome.Detail){$parts+=('detail: '+$outcome.Detail)}
-        Write-Log ($parts -join ' | ') 'INFO'
+        $liveParts=@($outcome.Setting+' - '+$outcome.Status)
+        if($outcome.Requested){$liveParts+=('requested '+$outcome.Requested)}
+        if($outcome.Target){$liveParts+=('target '+$outcome.Target)}
+        if($outcome.Actual){$liveParts+=('actual '+$outcome.Actual)}
+        if($outcome.Status -ne 'APPLIED' -and $outcome.Detail){$liveParts+=('detail '+$outcome.Detail)}
+        Write-Log -Message ($parts -join ' | ') -Level 'INFO' -LiveMessage ($liveParts -join ' | ')
     }
     $outcomeCounts=@{}
     foreach($state in @('APPLIED','FALLBACK','SKIPPED','FAILED','PENDING')){
@@ -3335,14 +3407,21 @@ try {
         $output=$stdoutTask.GetAwaiter().GetResult().Trim()
         $errorText=$stderrTask.GetAwaiter().GetResult().Trim()
         if($process.ExitCode -ne 0){throw ('Steam could not provide the signed-in account Workshop list'+$(if($errorText){': '+$errorText}else{'.'}))}
-        $ids=@(ConvertFrom-Json -InputObject $output -ErrorAction Stop)
-        foreach($id in $ids){
+        # Windows PowerShell 5.1 captures a JSON array as one nested Object[]
+        # pipeline value here, so validating each item sees the whole array.
+        # Parse the helper's strict JSON array format directly instead.
+        $jsonPattern='^\s*\[(?:\s*"(?<id>\d{1,20})"\s*(?:,\s*"(?<id>\d{1,20})"\s*)*)?\]\s*$'
+        $jsonMatch=[regex]::Match($output,$jsonPattern)
+        if(-not $jsonMatch.Success){throw 'Steam returned a malformed Workshop subscription list.'}
+        $ids=New-Object 'System.Collections.Generic.List[string]'
+        foreach($match in [regex]::Matches($output,'"(?<id>\d{1,20})"')){
             [UInt64]$parsedId=0
-            if(-not [UInt64]::TryParse([string]$id,[ref]$parsedId) -or $parsedId -eq 0){throw 'Steam returned an invalid Workshop subscription ID.'}
+            if(-not [UInt64]::TryParse($match.Groups['id'].Value,[Globalization.NumberStyles]::None,[Globalization.CultureInfo]::InvariantCulture,[ref]$parsedId) -or $parsedId -eq 0){throw 'Steam returned an invalid Workshop subscription ID.'}
+            $ids.Add($parsedId.ToString([Globalization.CultureInfo]::InvariantCulture))
         }
         $after=Get-CafeActiveSteamVideoFile
         if([string]$after.AccountID -cne $ActiveAccountID){throw 'The active Steam account changed during the Workshop subscription scan.'}
-        return @($ids|ForEach-Object{[string]$_}|Sort-Object -Unique)
+        return @($ids.ToArray()|Sort-Object -Unique)
     }finally{
         if($process){$process.Dispose()}
         if(Test-Path -LiteralPath $helperPath -PathType Leaf){Remove-Item -LiteralPath $helperPath -Force -ErrorAction SilentlyContinue}
@@ -5672,7 +5751,7 @@ function Show-ProfileEditor {
             $dialog.DialogResult=[System.Windows.Forms.DialogResult]::OK
             $dialog.Close()
         } catch {
-            Write-Log "Save Locally failed for ${ProfileName}: $($_.Exception.Message); $($_.ScriptStackTrace)" 'ERROR'
+            Write-Log -Message "Save Locally failed for ${ProfileName}: $($_.Exception.Message)" -Level 'ERROR' -FileDetail ([string]$_.ScriptStackTrace)
             [System.Windows.Forms.MessageBox]::Show("Could not save ${ProfileName}:`n$($_.Exception.Message)`n`nSee LIVE LOGS for the failing line.", 'Profile Editor', 'OK', 'Error') | Out-Null
         }
     }.GetNewClosure())
@@ -5741,7 +5820,7 @@ function Show-ProfileEditor {
                 }
             }
         } catch {
-            Write-Log "$ProfileName GitHub sync failed; local settings kept. $($_.Exception.Message); $($_.ScriptStackTrace)" 'WARN'
+            Write-Log -Message "$ProfileName GitHub sync failed; local settings kept. $($_.Exception.Message)" -Level 'WARN' -FileDetail ([string]$_.ScriptStackTrace)
             $status.Text='Cloud sync failed; settings are saved locally. Retry Save & Sync.'
             $status.ForeColor=[System.Drawing.Color]::FromArgb(255,190,105)
             [System.Windows.Forms.MessageBox]::Show("$ProfileName saved locally, but GitHub sync failed:`n$($_.Exception.Message)", 'GitHub sync', 'OK', 'Warning') | Out-Null
@@ -6799,15 +6878,19 @@ $clearLogs.Text='Clear Logs'
 Style-CafeButton -Button $clearLogs
 $clearLogs.Dock='Fill'
 $logPane.Controls.Add($clearLogs,2,0)
-$script:LogBox=New-Object System.Windows.Forms.TextBox
+$script:LogBox=New-Object System.Windows.Forms.RichTextBox
 $script:LogBox.Dock='Fill'
 $script:LogBox.Multiline=$true
 $script:LogBox.ReadOnly=$true
-$script:LogBox.ScrollBars=[System.Windows.Forms.ScrollBars]::Vertical
+$script:LogBox.DetectUrls=$false
+$script:LogBox.ScrollBars=[System.Windows.Forms.RichTextBoxScrollBars]::Both
 $script:LogBox.WordWrap=$false
 $script:LogBox.BackColor=[System.Drawing.Color]::FromArgb(12,15,20)
 $script:LogBox.ForeColor=[System.Drawing.Color]::FromArgb(190,220,190)
 $script:LogBox.Font=New-Object System.Drawing.Font('Consolas',9)
+$script:LogBaseColor=$script:LogBox.ForeColor
+$script:LogBaseFont=$script:LogBox.Font
+$script:LogBoldFont=New-Object System.Drawing.Font($script:LogBox.Font,[System.Drawing.FontStyle]::Bold)
 $logPane.Controls.Add($script:LogBox,0,1)
 $logPane.SetColumnSpan($script:LogBox,3)
 $script:LogBox.Visible=$false
@@ -6823,7 +6906,19 @@ $clearLogs.Add_Click({
     try{Set-Content -LiteralPath $script:LogPath -Value '' -Encoding UTF8}catch{}
     Write-Log 'Logs cleared.'
 })
-try {$script:LogBox.Text=Get-Content -LiteralPath $script:LogPath -Raw -ErrorAction Stop}catch{}
+try {
+    $recentEntries=New-Object 'System.Collections.Generic.List[string]'
+    $currentEntry=''
+    foreach($savedLine in @(Get-Content -LiteralPath $script:LogPath -Tail 2000 -ErrorAction Stop)){
+        if([string]$savedLine -match '^\d{2}:\d{2}:\d{2} \[[A-Z]+\] '){
+            if($currentEntry){$recentEntries.Add([regex]::Replace($currentEntry,'\s+',' ').Trim())}
+            $currentEntry=[string]$savedLine
+        }elseif($currentEntry){$currentEntry+=' '+[string]$savedLine}
+        elseif(-not [string]::IsNullOrWhiteSpace([string]$savedLine)){$currentEntry=[string]$savedLine}
+    }
+    if($currentEntry){$recentEntries.Add([regex]::Replace($currentEntry,'\s+',' ').Trim())}
+    foreach($entry in $recentEntries){Add-LiveLogLine -Line $entry}
+}catch{}
 Write-Log ('CafeLauncher dashboard ready. Log file: '+$script:LogPath)
 Update-SelectedProfileCard -Name 'FabMode'
 $footer=New-CafeLabel -Text '  CAFE LAUNCHER | production dashboard | %TEMP%\CafeLauncher.log' -FontSize 9
@@ -6837,6 +6932,7 @@ $form.Add_FormClosed({
         try {$script:ColorWatchTimer.Stop();$script:ColorWatchTimer.Dispose()}catch{}
         Write-Log 'Color Watch stopped because the launcher closed.'
     }
+    if($script:LogBoldFont){$script:LogBoldFont.Dispose();$script:LogBoldFont=$null}
 })
 # On first display, automatically inventory the machine and check GitHub for
 # an update. One-shot timer lets Windows render the UI before network access.
