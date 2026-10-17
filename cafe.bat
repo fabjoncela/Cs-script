@@ -4,7 +4,7 @@ start "" powershell.exe -NoProfile -ExecutionPolicy Bypass -STA -WindowStyle Hid
 exit /b
 
 # POWERSHELL_GUI
-# CAFE_RELEASE=2026.10.18.3
+# CAFE_RELEASE=2026.10.18.4
 
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
@@ -4001,10 +4001,14 @@ function Get-CafeCS2UserConvarsCapture {
     try{$content=$reader.ReadToEnd()}finally{$reader.Dispose()}
     if($content -notmatch '(?m)^\s*\{\s*$' -or $content -notmatch '(?m)^\s*\}\s*$'){throw 'Unrecognized user convars KeyValues format.'}
     $allowed=@('sensitivity','cl_crosshair_drawoutline','cl_crosshair_outlinethickness','cl_crosshair_recoil',
-        'cl_crosshair_sniper_width','cl_crosshair_t','cl_crosshairalpha','cl_crosshaircolor',
+        'cl_crosshair_sniper_width','cl_crosshair_t','cl_crosshairalpha','cl_crosshaircolor','cl_crosshaircolor_a',
         'cl_crosshaircolor_b','cl_crosshaircolor_g','cl_crosshaircolor_r','cl_crosshairdot',
         'cl_crosshairgap','cl_crosshairgap_useweaponvalue','cl_crosshairsize','cl_crosshairstyle',
         'cl_crosshairthickness','cl_crosshairusealpha','cl_crosshair_friendly_warning',
+        # Include current CS2 names as well as legacy names that older builds save.
+        'cl_crosshair_gap','cl_crosshair_length','cl_crosshair_thickness','cl_crosshair_screen_height',
+        'cl_crosshair_dynamic_spread_limit','cl_crosshairoutline_a','cl_crosshairoutline_b',
+        'cl_crosshairoutline_g','cl_crosshairoutline_r',
         'cl_crosshair_dynamic_maxdist_splitratio','cl_crosshair_dynamic_splitalpha_innermod',
         'cl_crosshair_dynamic_splitalpha_outermod','cl_crosshair_dynamic_splitdist')
     $values=@{}
@@ -5923,7 +5927,8 @@ function Show-ProfileEditor {
                 if($convars.Values.Count -eq 0){throw 'No relevant sensitivity or crosshair keys in saved convars.'}
                 $capturedCS2ConvarsState[$ProfileName]=$convars.Values
                 if($convars.Values.ContainsKey('sensitivity')){$sens.Text=[string]$convars.Values['sensitivity']}
-                Write-Log ('Staged '+$convars.Values.Count+' CS2 sensitivity/crosshair values for '+$ProfileName)
+                $capturedNames=@($convars.Values.Keys|Sort-Object)
+                Write-Log ('Staged '+$convars.Values.Count+' CS2 sensitivity/crosshair values for '+$ProfileName+'; keys='+($capturedNames -join ', '))
             }catch{
                 [void]$capturedCS2ConvarsState.Remove($ProfileName)
                 Write-Log ('CS2 user convars capture skipped: '+$_.Exception.Message) 'WARN'

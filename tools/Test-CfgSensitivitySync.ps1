@@ -10,7 +10,7 @@ $code=[string]::Join([Environment]::NewLine,[string[]]$lines[($marker+1)..($line
 $tokens=$null;$errors=$null
 $ast=[Management.Automation.Language.Parser]::ParseInput($code,[ref]$tokens,[ref]$errors)
 if(@($errors).Count){throw ('Launcher syntax failed: '+$errors[0].Message)}
-foreach($name in @('Get-CafeVoiceBindingFromCfg','Set-CafeVoiceBindingInCfg','Set-CS2CfgSensitivityText','Sync-ProfileToGitHub','Export-ProfileValues','Get-ProfileGraphicsPreset','Get-GitHubJsonFromContentsApi','ConvertTo-CafeGraphicsPreset','Refresh-ProfileFromGitHub','Get-LatestGitHubFileCommit','Compare-GitHubCommitOrder','Import-ProfileValues')){
+foreach($name in @('Get-CafeVoiceBindingFromCfg','Set-CafeVoiceBindingInCfg','Set-CS2CfgSensitivityText','Get-CafeCS2UserConvarsCapture','Set-CafeCapturedConvarsInCfg','Sync-ProfileToGitHub','Export-ProfileValues','Get-ProfileGraphicsPreset','Get-GitHubJsonFromContentsApi','ConvertTo-CafeGraphicsPreset','Refresh-ProfileFromGitHub','Get-LatestGitHubFileCommit','Compare-GitHubCommitOrder','Import-ProfileValues')){
     $funcs=@($ast.FindAll({param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst]},$true) |
         Where-Object {$_.Name -eq $name})
     if($funcs.Count -ne 1){throw ('Missing or duplicate sync function: '+$name)}
@@ -175,6 +175,65 @@ foreach($name in @('FabMode','ArliMode','BrileMode','ArmlMode','OliMode')){
     Assert-True ($graphics.ProfileName -eq $name -and $graphics.Settings.Width -eq 1280) ($name+' graphics preset differs.')
     Assert-True ($script:FakeCalls[-2] -eq ('Get:profiles/'+$name+'.json') -and $script:FakeCalls[-1] -eq ('Get:graphics/'+$name+'.json')) ($name+' did not read both saved JSON files back after upload.')
 }
+# Capture the post-September-2026 CS2 crosshair names from the active-account
+# convars file, then verify they are written to that profile's GitHub CFG.
+$script:FakeConvarsAccount='12345'
+$script:FakeConvarsVideoPath=Join-Path $env:TEMP ('Cafe-CS2-user-convars-'+[guid]::NewGuid().ToString('N')+'\cs2_video.txt')
+$script:FakeConvarsPath=Join-Path (Split-Path -Parent $script:FakeConvarsVideoPath) 'cs2_user_convars_0_slot0.vcfg'
+[void](New-Item -ItemType Directory -Path (Split-Path -Parent $script:FakeConvarsPath) -Force)
+$newConvars=@'
+"config"
+{
+    "convars"
+    {
+        "sensitivity" "1.1"
+        "cl_crosshair_gap" "0"
+        "cl_crosshair_length" "3"
+        "cl_crosshair_thickness" "3"
+        "cl_crosshaircolor_a" "255"
+        "cl_crosshair_screen_height" "960"
+        "cl_crosshair_dynamic_spread_limit" "226"
+        "cl_crosshairoutline_a" "255"
+        "cl_crosshairoutline_b" "0"
+        "cl_crosshairoutline_g" "0"
+        "cl_crosshairoutline_r" "0"
+        "cl_crosshairgap" "3"
+        "cl_crosshairsize" "2"
+        "cl_crosshairthickness" "1"
+    }
+}
+'@
+[IO.File]::WriteAllText($script:FakeConvarsPath,$newConvars)
+function Get-Process {
+    [CmdletBinding()]
+    param([string]$Name)
+    return @()
+}
+function Get-CafeActiveSteamVideoFile {
+    return [pscustomobject]@{AccountID=$script:FakeConvarsAccount;Path=$script:FakeConvarsVideoPath}
+}
+$captured=Get-CafeCS2UserConvarsCapture -Source ([pscustomobject]@{Path=$script:FakeConvarsVideoPath;AccountID=$script:FakeConvarsAccount})
+foreach($expected in @{
+    cl_crosshair_gap='0';cl_crosshair_length='3';cl_crosshair_thickness='3';cl_crosshaircolor_a='255'
+    cl_crosshair_screen_height='960';cl_crosshair_dynamic_spread_limit='226';cl_crosshairoutline_a='255'
+}.GetEnumerator()){
+    Assert-True ($captured.Values[$expected.Key] -ceq $expected.Value) ('Current CS2 convar was not captured: '+$expected.Key)
+}
+$script:CapturedCS2Convars['FabMode']=$captured.Values
+$script:FakeFiles['fab.cfg']='cl_crosshairgap "-3.7"'+$lf+'cl_crosshairsize "2"'+$lf+'cl_crosshairthickness "1"'+$lf
+$script:GamingProfiles['FabMode'].CS2Sensitivity=''
+$script:FakeWrites.Clear()
+Sync-ProfileToGitHub -ProfileName 'FabMode' -Token ('testtoken-'+'x'*22)
+$syncedFabCfg=$script:FakeFiles['fab.cfg']
+foreach($expected in @{
+    'cl_crosshair_gap "0"'=$true;'cl_crosshair_length "3"'=$true
+    'cl_crosshair_thickness "3"'=$true;'cl_crosshaircolor_a "255"'=$true
+    'cl_crosshair_screen_height "960"'=$true;'cl_crosshair_dynamic_spread_limit "226"'=$true
+    'cl_crosshairoutline_a "255"'=$true
+}.Keys){Assert-True ($syncedFabCfg.Contains($expected)) ('Current CS2 crosshair setting did not sync to fab.cfg: '+$expected)}
+Assert-True ($script:FakeWrites[0] -eq 'fab.cfg') 'Captured crosshair values did not update the selected CFG first.'
+Remove-Item -LiteralPath (Split-Path -Parent $script:FakeConvarsPath) -Recurse -Force
+
 # Ensure per-profile voice binding reaches only the requested CFG and survives JSON sync.
 $script:FakeFiles['arli.cfg']='bind "V" "+voicerecord"'+$lf+'bind "r" "+reload"'+$lf
 $script:GamingProfiles['ArliMode'].VoicePushToTalkKey='MOUSE4'
