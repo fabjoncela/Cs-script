@@ -410,7 +410,7 @@ if($graphicsRefreshAt -lt 0 -or $routineStartAt -le $graphicsRefreshAt -or
 if($dashboardSource -match "New-CafeLabel -Text 'v\d{4}\.\d{2}\.\d{2}\.\d+'" -or
    $dashboardSource -notmatch "New-CafeLabel -Text \('v'\+\(Get-CafeLauncherRelease\)\)" -or
    $psSource -notmatch 'Check-CafeLauncherUpdates -Manual'){
-    throw 'Version badge must use the active CAFE_RELEASE marker and startup/manual update checks must remain wired.'
+    throw 'Version badge must use the active CAFE_RELEASE marker and manual update checks must remain wired.'
 }
 if($psSource -match 'CAFE_PREVIEW_BRANCH|\$script:PreviewBranch|UI PREVIEW' -or
    $definitions['Check-CafeLauncherUpdates'] -notmatch 'Test-LauncherIsCurrent -CurrentPath \$source -RemoteBlobSha \$remote\.sha' -or
@@ -426,11 +426,11 @@ if($definitions['Check-CafeLauncherUpdates'] -notmatch '\$runningReleaseText=Get
    $definitions['Restart-CafeLauncherAfterUpdate'] -notmatch '\[System\.Windows\.Forms\.Application\]::Exit\(\)'){
     throw 'Update confirmation must relaunch the installed BAT and close the old launcher.'
 }
-$startupSource=$psSource.Substring($psSource.IndexOf('$startupTimer.Add_Tick({'))
-$updateCheckAt=$startupSource.IndexOf('Check-CafeLauncherUpdates')
-$inventoryAt=$startupSource.IndexOf('Get-PCDiagnostics')
-if($updateCheckAt -lt 0 -or $inventoryAt -lt 0 -or $updateCheckAt -gt $inventoryAt){
-    throw 'Startup must check for updates before hardware/game inventory can delay a newer-build prompt.'
+$startupAt=$psSource.IndexOf('$startupTimer.Add_Tick({')
+if($startupAt -lt 0){throw 'Startup inventory timer is missing.'}
+$startupSource=$psSource.Substring($startupAt)
+if($startupSource -match 'Check-CafeLauncherUpdates' -or $startupSource -notmatch 'Get-PCDiagnostics'){
+    throw 'Startup must inventory the PC without checking GitHub for launcher updates.'
 }
 if($editorSource -notmatch 'Sync-ProfileToGitHub -ProfileName \$ProfileName -Token \$token' -or
    $editorSource -notmatch 'Confirm GitHub sync'){
@@ -440,7 +440,7 @@ if($editorSource -notmatch 'Sync-ProfileToGitHub -ProfileName \$ProfileName -Tok
 # Construct the production dashboard in memory. No GUI is shown and none
 # of the profile / tool button actions are clicked, so no devices are changed.
 $dashboardStart=$psSource.IndexOf('# Modern CafeLauncher dashboard.')
-$dashboardEnd=$psSource.IndexOf('# On first display, automatically inventory the machine',$dashboardStart)
+$dashboardEnd=$psSource.IndexOf('# On first display, inventory the machine',$dashboardStart)
 if($dashboardStart -lt 0 -or $dashboardEnd -le $dashboardStart){
     throw 'Production dashboard code region not found.'
 }
