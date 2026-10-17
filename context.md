@@ -3,7 +3,7 @@
 This file gives Codex and maintainers the operational context needed to work safely in this repository. **Always follow the checked-out source tree.** The generated state block below reports the launcher release marker, not whether that code has shipped to `main`.
 
 <!-- BEGIN GENERATED LAUNCHER STATE -->
-- Launcher release: `2026.10.17.15`
+- Launcher release: `2026.10.17.16`
 - Generated from the unique `# CAFE_RELEASE` marker in `cafe.bat` by `tools/Update-Context.ps1`.
 <!-- END GENERATED LAUNCHER STATE -->
 
@@ -69,6 +69,7 @@ Dashboard **Apply Graphics** is a separate action from the normal profile Apply 
 - A partial upload reports the files confirmed saved and the files not confirmed. Local settings remain pending until the profile and graphics uploads have both passed read-back verification.
 - GitHub profile reads and the sync target are configured in `cafe.bat` (`$script:GithubBranch`). Check this before any claim about which remote branch receives profile data.
 - The launcher captures its running `CAFE_RELEASE` at startup; **Check for Updates** compares that version with GitHub `main`, avoiding confusion between the currently running PowerShell UI and a newer BAT that replaced its file on disk. If the newer BAT is already installed, the updater says to close and reopen it; otherwise it offers the verified download. Update checks run only when the user presses **Check for Updates**; startup does not contact GitHub for updates. Manual checks report current or failed checks too, with failures written to LIVE LOGS.
+- After the dashboard first renders, its read-only PC inventory runs locally. The header shows a lightweight animated status with the current scan phase, and the UI processes timer updates between scan steps; this inventory does not refresh GitHub profiles or check for launcher updates.
 - The updater classifies a GitHub HTTP 403/429 as quota exhaustion only when the response body identifies rate limiting or `X-RateLimit-Remaining` is zero; a confirmed quota failure says to wait and retry. Other 403 errors remain generic access failures. The status is presentation/logging only and never bypasses the updater's GitHub SHA, size, and syntax verification.
 - The dashboard's top-right GitHub API allowance indicator reads the remaining/limit headers from requests the launcher already makes; it must not make a separate polling request. It shows the count and when that response was received. This is a display only and does not affect profile selection or settings.
 - **Windows PowerShell 5.1 event-handler compile regression:** avoid `[void]` casts around .NET methods inside WinForms click-handler `try/catch` blocks. They can throw `Argument type cannot be System.Void` when the user clicks, before the handler runs. Discard dialog results with `$null = [System.Windows.Forms.MessageBox]::Show(...)` instead. This affected the CS2 graphics capture error dialog; the CS2 graphics capture test guards against reintroducing the pattern.

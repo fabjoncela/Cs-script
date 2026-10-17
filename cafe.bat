@@ -4,7 +4,7 @@ start "" powershell.exe -NoProfile -ExecutionPolicy Bypass -STA -WindowStyle Hid
 exit /b
 
 # POWERSHELL_GUI
-# CAFE_RELEASE=2026.10.17.15
+# CAFE_RELEASE=2026.10.17.16
 
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
@@ -1920,6 +1920,7 @@ function Get-NvidiaCompatibilityScan {
     param([int]$Width=1920,[int]$Height=1080,[int]$RefreshHz=360)
     $report=New-Object 'System.Collections.Generic.List[string]'
     $result=[ordered]@{NVAPI=$false;DisplayHelper=$false;ExactMode=$false;Vibrance=$false;Hue=$false;DriverProfile=$false;GpuScaling=$false;Report=$report}
+    Set-CafeStartupStatus 'Checking NVIDIA hardware...'
     try {
         $adapters=@(Get-CimInstance Win32_VideoController -ErrorAction Stop | Where-Object {$_.Name -match 'NVIDIA'})
         if($adapters.Count -eq 0){$report.Add('No NVIDIA GPU reported by Windows.')}
@@ -1927,6 +1928,7 @@ function Get-NvidiaCompatibilityScan {
     }catch{$report.Add('GPU / driver version inventory unavailable: '+$_.Exception.Message)}
     $result.DisplayHelper=[bool]('FabDisplayNative' -as [type])
     if($result.DisplayHelper){
+        Set-CafeStartupStatus 'Reading available monitor modes...'
         try {
             $result.ExactMode=[FabDisplayNative]::IsAdvertisedMode($Width,$Height,$RefreshHz)
             $report.Add(('Requested '+$Width+'x'+$Height+' @'+$RefreshHz+'Hz: '+
@@ -1941,6 +1943,7 @@ function Get-NvidiaCompatibilityScan {
     $apiFile=Test-Path -LiteralPath $apiDll -PathType Leaf
     $nvapiType=[bool]('FabNvApi' -as [type])
     if($nvapiType){
+        Set-CafeStartupStatus 'Checking NVIDIA driver support...'
         try{
             $nvapiInitializationReport=''
             $result.NVAPI=[FabNvApi]::TryCheckNvApiSupport([ref]$nvapiInitializationReport)
@@ -1955,24 +1958,28 @@ function Get-NvidiaCompatibilityScan {
         catch{$report.Add('NVAPI DLL version unavailable')}
     }
     if($result.NVAPI){
+        Set-CafeStartupStatus 'Checking NVIDIA color support...'
         try{
             $vibranceCapabilityReport=''
             $result.Vibrance=[FabNvApi]::TryCheckDigitalVibranceSupport([ref]$vibranceCapabilityReport)
             if($result.Vibrance){$report.Add('NVIDIA Digital Vibrance capability: available. '+$vibranceCapabilityReport)}
             else{$report.Add('NVIDIA Digital Vibrance capability: unavailable; profile value will be skipped. '+$vibranceCapabilityReport)}
         }catch{$result.Vibrance=$false;$report.Add('NVIDIA Digital Vibrance capability check failed; profile value will be skipped: '+$_.Exception.Message)}
+        Set-CafeStartupStatus 'Checking NVIDIA hue support...'
         try{
             [uint32]$hueCurrent=0;[uint32]$hueDefault=0;$hueCapabilityReport=''
             $result.Hue=[FabNvApi]::TryCheckHueSupport([ref]$hueCurrent,[ref]$hueDefault,[ref]$hueCapabilityReport)
             if($result.Hue){$report.Add('NVIDIA Hue capability: available. '+$hueCapabilityReport)}
             else{$report.Add('NVIDIA Hue capability: unavailable; profile Hue settings will be skipped. '+$hueCapabilityReport)}
         }catch{$result.Hue=$false;$report.Add('NVIDIA Hue capability check failed; profile Hue settings will be skipped: '+$_.Exception.Message)}
+        Set-CafeStartupStatus 'Checking NVIDIA profile support...'
         try{
             $driverProfileReport=''
             $result.DriverProfile=[FabNvApi]::TryCheckDriverProfileSupport([ref]$driverProfileReport)
             if($result.DriverProfile){$report.Add('NVIDIA driver-profile capability: available. '+$driverProfileReport)}
             else{$report.Add('NVIDIA driver-profile capability: unavailable; performance and G-SYNC profile values will be skipped. '+$driverProfileReport)}
         }catch{$result.DriverProfile=$false;$report.Add('NVIDIA driver-profile capability check failed; settings will be skipped: '+$_.Exception.Message)}
+        Set-CafeStartupStatus 'Checking NVIDIA scaling support...'
         try{
             $scalingCapabilityReport=''
             $result.GpuScaling=[FabNvApi]::TryCheckGpuScalingSupport([ref]$scalingCapabilityReport)
@@ -1985,6 +1992,7 @@ function Get-NvidiaCompatibilityScan {
         $report.Add('NVIDIA driver-profile capability: not checked because NVAPI is unavailable; settings will be skipped.')
         $report.Add('NVIDIA GPU-scaling capability: not checked because NVAPI is unavailable; profile scaling value will be skipped.')
     }
+    Set-CafeStartupStatus 'Checking NVIDIA Control Panel...'
     try {
         $paths=@(
             (Join-Path $env:ProgramFiles 'NVIDIA Corporation\Control Panel Client\nvcplui.exe'),
@@ -2758,16 +2766,29 @@ function Start-DetectedSteam {
     } else { Write-Log 'Steam executable not found.' 'WARN' }
 }
 
+function Set-CafeStartupStatus {
+    param([Parameter(Mandatory=$true)][string]$Message)
+    $script:StartupStatusMessage=$Message
+    $script:StartupStatusDots=0
+    if($script:StartupStatusLabel -and -not $script:StartupStatusLabel.IsDisposed){
+        $script:StartupStatusLabel.Text=$Message
+        if($script:StartupInventoryRunning){[System.Windows.Forms.Application]::DoEvents()}
+    }
+}
+
 function Get-PCDiagnostics {
     $lines = New-Object 'System.Collections.Generic.List[string]'
+    Set-CafeStartupStatus 'Checking NVIDIA and display...'
     try{$scan=Get-NvidiaCompatibilityScan;foreach($line in $scan.Report){$lines.Add('NVIDIA: '+$line)}}
     catch{$lines.Add('NVIDIA compatibility scan unavailable: '+$_.Exception.Message)}
     $lines.Add("Machine: $env:COMPUTERNAME")
+    Set-CafeStartupStatus 'Reading graphics hardware...'
     try {
         $gpus = @(Get-CimInstance -ClassName Win32_VideoController -ErrorAction Stop |
             Where-Object { $_.Name } | Select-Object -ExpandProperty Name)
         $lines.Add('Graphics: ' + ($(if ($gpus.Count) { $gpus -join '; ' } else { 'Unavailable' })))
     } catch { $lines.Add('Graphics: Could not query GPU details') }
+    Set-CafeStartupStatus 'Checking monitor modes...'
     try {
         if ('FabDisplayNative' -as [type]) {
             $lines.Add([FabDisplayNative]::GetDisplayModesReport())
@@ -2776,6 +2797,7 @@ function Get-PCDiagnostics {
             $lines.Add("Monitor $($screen.DeviceName): $($screen.Bounds.Width)x$($screen.Bounds.Height), primary=$($screen.Primary)")
         }
     } catch { $lines.Add('Display inventory could not be read') }
+    Set-CafeStartupStatus 'Reading mouse settings...'
     try {
         $ptr = [Runtime.InteropServices.Marshal]::AllocHGlobal(4)
         try {
@@ -2786,12 +2808,14 @@ function Get-PCDiagnostics {
         $m = Get-ItemProperty -Path 'HKCU:\Control Panel\Mouse' -ErrorAction Stop
         $lines.Add("Mouse registry: speed=$($m.MouseSensitivity), acceleration=$($m.MouseSpeed), thresholds=$($m.MouseThreshold1)/$($m.MouseThreshold2)")
     } catch { $lines.Add('Mouse settings could not be read') }
+    Set-CafeStartupStatus 'Finding Steam and CS2...'
     $steam = Get-SteamExecutable
     $lines.Add('Steam: ' + $(if ($steam) { $steam } else { 'not detected' }))
     $roots = @(Get-SteamLibraryRoots)
     $lines.Add('Steam libraries: ' + $(if ($roots.Count) { $roots -join '; ' } else { 'not detected' }))
     $cs2 = Find-CS2ConfigFolder -NoPrompt
     $lines.Add('CS2 config: ' + $(if ($cs2) { $cs2 } else { 'not detected' }))
+    Set-CafeStartupStatus 'Checking installed apps...'
     $faceit = Find-App -Paths @("$env:ProgramFiles\FACEIT AC\faceitclient.exe", "${env:ProgramFiles(x86)}\FACEIT AC\faceitclient.exe")
     $lines.Add('FACEIT AC: ' + $(if ($faceit) { $faceit } else { 'not detected' }))
     $ghub = Find-App -Paths @("$env:ProgramFiles\LGHUB\lghub.exe", "$env:ProgramFiles\LGHUB\lghub_system_tray.exe")
@@ -6834,6 +6858,9 @@ $subtitle=New-CafeLabel -Text 'CS2 Setup Center   |   Profiles / Graphics / DPI'
 $subtitle.Dock='None'
 $subtitle.Location=New-Object System.Drawing.Point(28,49)
 $subtitle.Size=New-Object System.Drawing.Size(600,25)
+$script:StartupStatusLabel=$subtitle
+$script:StartupStatusMessage='Starting CafeLauncher'
+$script:StartupStatusDots=0
 $header.Controls.Add($subtitle)
 $headerStatus=New-Object System.Windows.Forms.Panel
 $headerStatus.Dock='Right'
@@ -7243,11 +7270,22 @@ $form.Add_FormClosed({
 })
 # On first display, inventory the machine after Windows has rendered the UI.
 # Update checks are user-triggered through the Check for Updates tile.
+$script:StartupInventoryRunning=$false
+$startupStatusTimer=New-Object System.Windows.Forms.Timer
+$startupStatusTimer.Interval=250
+$startupStatusTimer.Add_Tick({
+    if(-not $script:StartupInventoryRunning -or -not $script:StartupStatusLabel -or $script:StartupStatusLabel.IsDisposed){return}
+    $script:StartupStatusDots=($script:StartupStatusDots+1)%4
+    $script:StartupStatusLabel.Text=$script:StartupStatusMessage+('.'*$script:StartupStatusDots)
+})
 $startupTimer = New-Object System.Windows.Forms.Timer
 $startupTimer.Interval=350
 $startupTimer.Add_Tick({
     $startupTimer.Stop()
     $startupTimer.Dispose()
+    $script:StartupInventoryRunning=$true
+    Set-CafeStartupStatus 'Getting CafeLauncher ready...'
+    $startupStatusTimer.Start()
     # Profile and graphics settings refresh only when their profile is opened
     # or applied, instead of spending requests on every profile at startup.
     try {
@@ -7255,6 +7293,15 @@ $startupTimer.Add_Tick({
         $summary = Get-PCDiagnostics
         foreach ($line in ($summary -split '\r?\n')) { if ($line) { Write-Log ('PC: ' + $line) } }
     } catch { Write-Log "Startup inventory failed: $($_.Exception.Message)" 'WARN' }
+    finally {
+        $script:StartupInventoryRunning=$false
+        $startupStatusTimer.Stop()
+        $startupStatusTimer.Dispose()
+        if($script:StartupStatusLabel -and -not $script:StartupStatusLabel.IsDisposed){
+            $script:StartupStatusLabel.Text='CS2 Setup Center   |   Profiles / Graphics / DPI'
+        }
+        $script:StartupStatusLabel=$null
+    }
 })
-$form.Add_Shown({ $startupTimer.Start() })
+$form.Add_Shown({ $startupStatusTimer.Start(); $startupTimer.Start() })
 [void]$form.ShowDialog()
