@@ -5,7 +5,7 @@ CafeLauncher is a portable Windows setup launcher for CS2 internet cafés. It ru
 [Technical architecture and maintenance notes](./context.md)
 
 <!-- BEGIN GENERATED LAUNCHER RELEASE -->
-> Launcher release: **2026.10.17.11**. Features depend on the PC's hardware, installed programs and user permissions.
+> Launcher release: **2026.10.17.12**. Features depend on the PC's hardware, installed programs and user permissions.
 <!-- END GENERATED LAUNCHER RELEASE -->
 
 ## Download and start
@@ -72,6 +72,8 @@ The **Tools & Apps** tab contains less-used shortcuts, and the dashboard can lau
 - **Workshop Cleanup** previews locally installed CS2 Workshop items against the signed-in Steam account's Steamworks subscription list. It shows item names and descriptions when available, protects subscribed items, and removes only selected safe local folders after confirmation. Steam must be running and signed in, CS2 must be closed, and Steam's local manifest/download state must be readable and stable. It does not unsubscribe Workshop items.
 
 The dashboard reports profile-step outcomes and includes an API allowance indicator based on responses it already receives; the indicator does not make a separate polling request. LIVE LOGS keeps all entries from the current session and shows available retained history when it opens; use its horizontal scrollbar to read long messages. Statuses and key values are color-coded. `%TEMP%\CafeLauncher.log` retains the last 2,000 lines across launches, including detailed errors and stack traces. Startup errors are also written to `%TEMP%\CafeLauncher-startup-error.log`.
+
+**Send Logs** uploads the current `CafeLauncher.log` to the configured Sentry project only when pressed. It needs no player login and shows a report ID when Sentry accepts the upload. The log remains on the PC. During testing, the launcher sends the raw file without filtering local paths or usernames or applying its own size limit; Sentry may still reject an oversized report. Sentry email alerts link to the report and its log attachment.
 
 ## Launcher updates
 

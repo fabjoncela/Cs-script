@@ -4,7 +4,7 @@ start "" powershell.exe -NoProfile -ExecutionPolicy Bypass -STA -WindowStyle Hid
 exit /b
 
 # POWERSHELL_GUI
-# CAFE_RELEASE=2026.10.17.11
+# CAFE_RELEASE=2026.10.17.12
 
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
@@ -29,6 +29,10 @@ $MUTED = [System.Drawing.Color]::FromArgb(160,170,185)
 
 $script:LogPath = Join-Path $env:TEMP "CafeLauncher.log"
 $script:LogBox = $null
+# A Sentry project DSN is a public, send-only identifier. Fill this in after
+# creating the CafeLauncher Sentry project; no user login is needed to report.
+$script:SentryDsn = ''
+$script:SentryLogWorker = $null
 try {
     # Keep recent entries from the previous launch so failed automatic restarts
     # remain visible after the user opens CafeLauncher manually.
@@ -143,6 +147,111 @@ function Write-Log {
             }
         } catch {}
     }
+}
+
+function New-CafeSentryLogWorker {
+    # Compile the transport only when Send Logs is pressed. The launcher does
+    # not load an SDK, open a connection, or run a Sentry worker at startup.
+    if(-not ('CafeSentryLogWorker' -as [type])){
+        Add-Type -Language CSharp -TypeDefinition @'
+using System;
+using System.ComponentModel;
+using System.Globalization;
+using System.IO;
+using System.Net;
+using System.Text;
+
+public sealed class CafeSentryLogWorker : BackgroundWorker {
+    private readonly string dsn;
+    private readonly string logPath;
+    private readonly string release;
+    public string ReportId { get; private set; }
+    public string ErrorText { get; private set; }
+
+    public CafeSentryLogWorker(string dsn, string logPath, string release) {
+        this.dsn = dsn;
+        this.logPath = logPath;
+        this.release = release;
+        DoWork += delegate(object sender, DoWorkEventArgs e) {
+            try { Send(); }
+            catch (WebException error) {
+                var response = error.Response as HttpWebResponse;
+                if (response != null) {
+                    using (response) {
+                        ErrorText = "Sentry returned HTTP " + (int)response.StatusCode + " (" + response.StatusDescription + ").";
+                    }
+                } else { ErrorText = error.Message; }
+            }
+            catch (Exception error) { ErrorText = error.Message; }
+        };
+    }
+
+    private static byte[] Utf8(string value) { return new UTF8Encoding(false).GetBytes(value); }
+
+    private static byte[] ReadLog(string path) {
+        using (var file = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
+        using (var copy = new MemoryStream()) {
+            file.CopyTo(copy);
+            return copy.ToArray();
+        }
+    }
+
+    private void Send() {
+        Uri uri;
+        if (!Uri.TryCreate(dsn, UriKind.Absolute, out uri) || uri.Scheme != Uri.UriSchemeHttps)
+            throw new InvalidOperationException("The Sentry DSN must be a valid HTTPS URL.");
+        string path = uri.AbsolutePath.TrimEnd('/');
+        int lastSlash = path.LastIndexOf('/');
+        string projectId = path.Substring(lastSlash + 1);
+        if (String.IsNullOrEmpty(projectId) || String.IsNullOrEmpty(uri.UserInfo))
+            throw new InvalidOperationException("The Sentry DSN is missing its project ID or public key.");
+        string publicKey = uri.UserInfo.Split(':')[0];
+        string prefix = path.Substring(0, lastSlash);
+        var endpoint = new UriBuilder(uri.Scheme, uri.Host, uri.IsDefaultPort ? -1 : uri.Port);
+        endpoint.Path = prefix + "/api/" + projectId + "/envelope/";
+
+        byte[] log = ReadLog(logPath);
+        string id = Guid.NewGuid().ToString("N");
+        string sentAt = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ss.fffZ", CultureInfo.InvariantCulture);
+        byte[] envelopeHeader = Utf8("{\"event_id\":\"" + id + "\",\"sent_at\":\"" + sentAt + "\"}\n");
+        byte[] eventBody = Utf8("{\"event_id\":\"" + id + "\",\"timestamp\":\"" + sentAt +
+            "\",\"platform\":\"other\",\"level\":\"error\",\"logger\":\"CafeLauncher\",\"message\":\"User sent CafeLauncher logs\",\"release\":\"" +
+            release + "\",\"fingerprint\":[\"cafelauncher-log-report\",\"" + id + "\"]}");
+        byte[] eventHeader = Utf8("{\"type\":\"event\",\"length\":" + eventBody.Length.ToString(CultureInfo.InvariantCulture) +
+            ",\"content_type\":\"application/json\"}\n");
+        byte[] attachmentHeader = Utf8("{\"type\":\"attachment\",\"length\":" + log.Length.ToString(CultureInfo.InvariantCulture) +
+            ",\"filename\":\"CafeLauncher.log\",\"content_type\":\"text/plain\"}\n");
+        byte[] newline = new byte[] { 10 };
+
+        var request = (HttpWebRequest)WebRequest.Create(endpoint.Uri);
+        request.Method = "POST";
+        request.ContentType = "application/x-sentry-envelope";
+        request.UserAgent = "CafeLauncher-Log-Report";
+        request.Headers["X-Sentry-Auth"] = "Sentry sentry_version=7, sentry_client=cafelauncher/1.0, sentry_key=" + publicKey;
+        request.AllowAutoRedirect = false;
+        request.Timeout = 30000;
+        request.ReadWriteTimeout = 30000;
+        request.ContentLength = (long)envelopeHeader.Length + eventHeader.Length + eventBody.Length +
+            newline.Length + attachmentHeader.Length + log.Length + newline.Length;
+        using (var stream = request.GetRequestStream()) {
+            stream.Write(envelopeHeader, 0, envelopeHeader.Length);
+            stream.Write(eventHeader, 0, eventHeader.Length);
+            stream.Write(eventBody, 0, eventBody.Length);
+            stream.Write(newline, 0, newline.Length);
+            stream.Write(attachmentHeader, 0, attachmentHeader.Length);
+            stream.Write(log, 0, log.Length);
+            stream.Write(newline, 0, newline.Length);
+        }
+        using (var response = (HttpWebResponse)request.GetResponse()) {
+            if ((int)response.StatusCode < 200 || (int)response.StatusCode >= 300)
+                throw new InvalidOperationException("Sentry returned HTTP " + (int)response.StatusCode + ".");
+        }
+        ReportId = id;
+    }
+}
+'@
+    }
+    return (New-Object CafeSentryLogWorker($script:SentryDsn,$script:LogPath,$script:LauncherRunningRelease))
 }
 
 # Track the primary REST quota from responses the launcher already receives.
@@ -6857,11 +6966,12 @@ $script:ManualDpiInput.Add_KeyDown({
 
 $logPane=New-Object System.Windows.Forms.TableLayoutPanel
 $logPane.Dock='Fill'
-$logPane.ColumnCount=3
+$logPane.ColumnCount=4
 $logPane.RowCount=2
 $logPane.BackColor=$PANEL
 $logPane.Margin=New-Object System.Windows.Forms.Padding(15,0,15,0)
 [void]$logPane.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle('Percent',100)))
+[void]$logPane.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle('Absolute',110)))
 [void]$logPane.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle('Absolute',110)))
 [void]$logPane.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle('Absolute',110)))
 [void]$logPane.RowStyles.Add((New-Object System.Windows.Forms.RowStyle('Absolute',42)))
@@ -6880,6 +6990,11 @@ $clearLogs.Text='Clear Logs'
 Style-CafeButton -Button $clearLogs
 $clearLogs.Dock='Fill'
 $logPane.Controls.Add($clearLogs,2,0)
+$sendLogs=New-Object System.Windows.Forms.Button
+$sendLogs.Text='Send Logs'
+Style-CafeButton -Button $sendLogs
+$sendLogs.Dock='Fill'
+$logPane.Controls.Add($sendLogs,3,0)
 $script:LogBox=New-Object System.Windows.Forms.RichTextBox
 $script:LogBox.Dock='Fill'
 $script:LogBox.Multiline=$true
@@ -6894,7 +7009,7 @@ $script:LogBaseColor=$script:LogBox.ForeColor
 $script:LogBaseFont=$script:LogBox.Font
 $script:LogBoldFont=New-Object System.Drawing.Font($script:LogBox.Font,[System.Drawing.FontStyle]::Bold)
 $logPane.Controls.Add($script:LogBox,0,1)
-$logPane.SetColumnSpan($script:LogBox,3)
+$logPane.SetColumnSpan($script:LogBox,4)
 $script:LogBox.Visible=$false
 $script:LogsExpanded=$false
 $logToggle.Add_Click({
@@ -6907,6 +7022,41 @@ $clearLogs.Add_Click({
     if($script:LogBox){$script:LogBox.Clear()}
     try{Set-Content -LiteralPath $script:LogPath -Value '' -Encoding UTF8}catch{}
     Write-Log 'Logs cleared.'
+})
+$sendLogs.Add_Click({
+    if($script:SentryLogWorker -and $script:SentryLogWorker.IsBusy){return}
+    if([string]::IsNullOrWhiteSpace($script:SentryDsn)){
+        Write-Log 'Send Logs is not configured: add the Sentry project DSN to cafe.bat.' 'ERROR'
+        $null=[System.Windows.Forms.MessageBox]::Show('Send Logs needs the CafeLauncher Sentry project DSN.','Send Logs','OK','Warning')
+        return
+    }
+    try{
+        $sendLogs.Enabled=$false
+        Write-Log 'Sending CafeLauncher.log to Sentry...' 'INFO'
+        $script:SentryLogWorker=New-CafeSentryLogWorker
+        $script:SentryLogWorker.Add_RunWorkerCompleted({
+            $sendLogs.Enabled=$true
+            $worker=$script:SentryLogWorker
+            $script:SentryLogWorker=$null
+            if($worker.ErrorText){
+                Write-Log ('Send Logs failed: '+$worker.ErrorText) 'ERROR'
+                if(-not $form.IsDisposed){$null=[System.Windows.Forms.MessageBox]::Show($worker.ErrorText,'Send Logs Failed','OK','Error')}
+            }elseif($worker.ReportId){
+                Write-Log ('Logs sent to Sentry. Report ID: '+$worker.ReportId) 'RESULT'
+                if(-not $form.IsDisposed){$null=[System.Windows.Forms.MessageBox]::Show(('Logs sent. Report ID: '+$worker.ReportId),'Send Logs','OK','Information')}
+            }else{
+                Write-Log 'Send Logs failed without a report ID.' 'ERROR'
+                if(-not $form.IsDisposed){$null=[System.Windows.Forms.MessageBox]::Show('The report was not accepted. Try again.','Send Logs Failed','OK','Error')}
+            }
+            $worker.Dispose()
+        })
+        $script:SentryLogWorker.RunWorkerAsync()
+    }catch{
+        $sendLogs.Enabled=$true
+        $script:SentryLogWorker=$null
+        Write-Log ('Send Logs could not start: '+$_.Exception.Message) 'ERROR'
+        $null=[System.Windows.Forms.MessageBox]::Show($_.Exception.Message,'Send Logs Failed','OK','Error')
+    }
 })
 try {
     $recentEntries=New-Object 'System.Collections.Generic.List[string]'
