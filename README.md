@@ -5,7 +5,7 @@ CafeLauncher is a portable Windows setup launcher for CS2 internet cafés. It ru
 [Technical architecture and maintenance notes](./context.md)
 
 <!-- BEGIN GENERATED LAUNCHER RELEASE -->
-> Launcher release: **2026.10.15.36**. Features depend on the PC's hardware, installed programs and user permissions.
+> Launcher release: **2026.10.17.2**. Features depend on the PC's hardware, installed programs and user permissions.
 <!-- END GENERATED LAUNCHER RELEASE -->
 
 ## Download and start
@@ -32,7 +32,7 @@ The dashboard keeps separate settings for five profiles:
 ### Apply and launch
 
 - **Apply** refreshes the selected profile, then applies its mouse settings, any enabled display settings, its CS2 config, and configured app actions. It does not start CS2 or change Steam's saved launch options.
-- **Play + Exec** installs the selected profile's current CS2 config and asks Steam to launch CS2 with a one-time `+exec <profile>.cfg` argument. It does not apply mouse or display settings, modify persistent launch options, or restart Steam.
+- **Play + Exec** installs a CafeLauncher baseline containing the CS2 reset values captured for profile-managed binds, radar, sensitivity, and crosshair settings, with the developer console enabled; then it installs the selected profile CFG and launches with `+exec cafelauncher_profile_baseline.cfg +exec <profile>.cfg`. The profile CFG runs last, and GitHub remains the preferred CFG source. This clears profile leftovers such as ArliMode's CapsLock bind or another profile's MWHEELDOWN jump before applying the selection. It does not apply mouse or display settings, modify persistent launch options, or restart Steam.
 - **Apply Graphics** is a separate action for the selected profile's CS2 video settings.
 - A failed step is reported in the result summary and LIVE LOGS. Other profile steps can continue where appropriate.
 

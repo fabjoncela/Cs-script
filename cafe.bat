@@ -4,7 +4,7 @@ start "" powershell.exe -NoProfile -ExecutionPolicy Bypass -STA -WindowStyle Hid
 exit /b
 
 # POWERSHELL_GUI
-# CAFE_RELEASE=2026.10.15.36
+# CAFE_RELEASE=2026.10.17.2
 
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
@@ -5664,35 +5664,117 @@ function Invoke-GamingProfile {
     Write-Log "$ProfileName full routine finished. Review logs for individual results."
 }
 
-# The separate Play + Exec action launches CS2 with a one-time +exec argument.
-# No writes to Steam userdata/config/localconfig.vdf and no Steam restart.
+# Reset only the profile-managed settings to the values captured after CS2's
+# in-game Reset to Default action. The selected profile CFG runs immediately
+# after this file and remains the final authority for its explicit settings.
+function Get-CS2ProfileBaselineCfgText {
+    $lines=@(
+        '// CafeLauncher profile baseline captured after CS2 Reset to Default.'
+        '// r_low_latency was not saved by the reset; every profile CFG sets it explicitly.'
+        'con_enable "1"'
+        'bind "`" "toggleconsole"'
+        'bind "SPACE" "+jump"'
+        'bind "MWHEELUP" "invprev"'
+        'bind "MWHEELDOWN" "invnext"'
+        'bind "r" "+reload"'
+        'bind "f" "+lookatweapon"'
+        'bind "x" "slot12"'
+        'bind "t" "+spray_menu"'
+        'bind "c" "+radialradio"'
+        'bind "v" "+radialradio2"'
+        'unbind "CAPSLOCK"'
+        'unbind "ALT"'
+        'unbind "n"'
+        'unbind "MOUSE5"'
+        'sensitivity "1.25"'
+        'zoom_sensitivity_ratio "1"'
+        'cl_hud_radar_scale "1"'
+        'cl_radar_scale "0.7"'
+        'cl_mute_enemy_team "false"'
+        'cl_crosshair_drawoutline "1"'
+        'cl_crosshair_dynamic_maxdist_splitratio "1"'
+        'cl_crosshair_dynamic_splitalpha_innermod "0"'
+        'cl_crosshair_dynamic_splitalpha_outermod "1"'
+        'cl_crosshair_dynamic_splitdist "3"'
+        'cl_crosshair_dynamic_spread_limit "255"'
+        'cl_crosshair_gap "4"'
+        'cl_crosshair_length "8"'
+        'cl_crosshair_recoil "true"'
+        'cl_crosshair_sniper_width "1"'
+        'cl_crosshair_t "false"'
+        'cl_crosshair_thickness "2"'
+        'cl_crosshairalpha "200"'
+        'cl_crosshaircolor_a "255"'
+        'cl_crosshaircolor_b "0"'
+        'cl_crosshaircolor_g "255"'
+        'cl_crosshaircolor_r "0"'
+        'cl_crosshairdot "false"'
+        'cl_crosshairoutline_a "255"'
+        'cl_crosshairoutline_b "0"'
+        'cl_crosshairoutline_g "0"'
+        'cl_crosshairoutline_r "0"'
+        'cl_crosshairsize "2"'
+        'cl_crosshairstyle "7"'
+        'cl_crosshairthickness "1"'
+        'fps_max "400"'
+        'r_player_visibility_mode "1"'
+    )
+    return (($lines -join "`r`n")+"`r`n")
+}
+
+function Install-CS2ProfileBaselineCfg {
+    $cfgName='cafelauncher_profile_baseline.cfg'
+    $staged=$null
+    try {
+        $cfgDirectory=Find-CS2ConfigFolder -NoPrompt
+        if(-not $cfgDirectory){Write-Log 'CS2 profile baseline install skipped; no unique validated config folder was found.' 'ERROR';return $false}
+        $destination=Join-Path $cfgDirectory $cfgName
+        $staged=Join-Path $cfgDirectory ($cfgName+'.cafe-'+[Guid]::NewGuid().ToString('N')+'.tmp')
+        $encoding=New-Object System.Text.UTF8Encoding($false)
+        [IO.File]::WriteAllBytes($staged,$encoding.GetBytes((Get-CS2ProfileBaselineCfgText)))
+        $expected=(Get-FileHash -LiteralPath $staged -Algorithm SHA256 -ErrorAction Stop).Hash
+        $previousHash=if(Test-Path -LiteralPath $destination -PathType Leaf){(Get-FileHash -LiteralPath $destination -Algorithm SHA256 -ErrorAction Stop).Hash}else{$null}
+        if($previousHash -eq $expected){Write-Log "$cfgName already matches the captured reset baseline.";return $true}
+        if($previousHash){
+            $stamp=Get-Date -Format 'yyyyMMdd-HHmmss-fff'
+            $backup=Join-Path $cfgDirectory ($cfgName+'.backup-'+$stamp)
+            Copy-Item -LiteralPath $destination -Destination $backup -ErrorAction Stop
+            if((Get-FileHash -LiteralPath $backup -Algorithm SHA256 -ErrorAction Stop).Hash -ne $previousHash){throw 'Baseline CFG backup verification failed.'}
+            Write-Log "Backed up previous $cfgName to $backup"
+        }
+        Copy-Item -LiteralPath $staged -Destination $destination -Force -ErrorAction Stop
+        if((Get-FileHash -LiteralPath $destination -Algorithm SHA256 -ErrorAction Stop).Hash -ne $expected){throw 'Baseline CFG SHA-256 verification failed.'}
+        Write-Log "CS2 profile baseline installed and verified: $destination"
+        return $true
+    }catch{Write-Log ('CS2 profile baseline install failed: '+$_.Exception.Message) 'ERROR';return $false}
+    finally{if($staged -and (Test-Path -LiteralPath $staged -PathType Leaf)){Remove-Item -LiteralPath $staged -Force -ErrorAction SilentlyContinue}}
+}
+
+# Play + Exec runs the reset baseline first, then the selected current profile
+# CFG. It never changes Steam's persistent launch options or restarts Steam.
 function Get-CS2SteamLaunchArguments {
     param([Parameter(Mandatory=$true)][string]$CfgName)
     if ($CfgName -notmatch '^[A-Za-z0-9_-]+\.cfg$') { throw 'Invalid CFG filename for CS2.' }
-    return @('-applaunch', '730', '+exec', $CfgName)
+    return @('-applaunch', '730', '+exec', 'cafelauncher_profile_baseline.cfg', '+exec', $CfgName)
 }
 
 function Start-CS2WithProfileCfg {
     param([Parameter(Mandatory=$true)][string]$ProfileName)
     if (-not $script:GamingProfiles.Contains($ProfileName)) { throw "Unknown CS2 profile: $ProfileName" }
-    if (Get-Process -Name 'cs2' -ErrorAction SilentlyContinue) {
-        $runningCfg = [string]$script:GamingProfiles[$ProfileName].ConfigFile
-        Write-Log "$ProfileName Play + Exec skipped; CS2 is already running. Use developer console: exec $runningCfg" 'WARN'
-        [System.Windows.Forms.MessageBox]::Show(
-            "CS2 is already running. Steam launch arguments work only when starting the game." +
-            [Environment]::NewLine + [Environment]::NewLine +
-            "In CS2, open the developer console and type: exec $runningCfg" +
-            [Environment]::NewLine + "Or close CS2 and click Play + Exec again.",
-            'CS2 Already Running', 'OK', 'Information'
-        ) | Out-Null
-        return
-    }
+    $cs2Running=[bool](Get-Process -Name 'cs2' -ErrorAction SilentlyContinue)
     if(-not (Resolve-PendingProfileChanges -ProfileName $ProfileName)){return}
     $profileSource=Refresh-ProfileFromGitHub -ProfileName $ProfileName
     if(-not (Confirm-LocalProfileApply -ProfileName $ProfileName -Source $profileSource)){return}
     $profile = $script:GamingProfiles[$ProfileName]
     $cfgName = [string]$profile.ConfigFile
     if ($cfgName -notmatch '^[A-Za-z0-9_-]+\.cfg$') { throw "Invalid CFG filename for $ProfileName." }
+    Write-Log "$ProfileName Play + Exec: installing the CS2 reset baseline before the selected profile CFG."
+    $baselineInstalled=Install-CS2ProfileBaselineCfg
+    if($baselineInstalled -ne $true){
+        Write-Log "$ProfileName Play + Exec cancelled: the CS2 reset baseline could not be installed." 'ERROR'
+        [System.Windows.Forms.MessageBox]::Show('Unable to install the CS2 profile reset baseline. CS2 was not started. Check LIVE LOGS.','CS2 Baseline Installation Failed','OK','Warning') | Out-Null
+        return
+    }
     $url = [string]$profile.CfgDownloadUrl
     if ($ProfileName -eq 'FabMode' -and [string]::IsNullOrWhiteSpace($url)) {
         $url = $script:FabCfgCloudUrl
@@ -5707,6 +5789,19 @@ function Start-CS2WithProfileCfg {
         ) | Out-Null
         return
     }
+    if($cs2Running){
+        Write-Log "$ProfileName Play + Exec installed the reset baseline and current $cfgName; CS2 is already running, so it was not relaunched." 'WARN'
+        [System.Windows.Forms.MessageBox]::Show(
+            "The reset baseline and current profile CFG are installed. CS2 is already running, so Steam could not execute them at startup." +
+            [Environment]::NewLine + [Environment]::NewLine +
+            "If the developer console is off, enable it in Settings > Game first. Then run these commands in the console in order:" + [Environment]::NewLine +
+            'exec cafelauncher_profile_baseline.cfg' + [Environment]::NewLine +
+            "exec $cfgName" +
+            [Environment]::NewLine + "Or close CS2 and click Play + Exec again.",
+            'CS2 Already Running', 'OK', 'Information'
+        ) | Out-Null
+        return
+    }
     $steamExe = Get-SteamExecutable
     if (-not $steamExe) {
         Write-Log 'Steam was not detected. CFG installed, but CS2 not launched.' 'ERROR'
@@ -5715,7 +5810,7 @@ function Start-CS2WithProfileCfg {
     }
     $args = @(Get-CS2SteamLaunchArguments -CfgName $cfgName)
     Start-Process -FilePath $steamExe -ArgumentList $args -ErrorAction Stop
-    Write-Log "$ProfileName requested CS2 launch via Steam: -applaunch 730 +exec $cfgName. Persistent Steam launch options unchanged."
+    Write-Log "$ProfileName requested CS2 launch via Steam: -applaunch 730 +exec cafelauncher_profile_baseline.cfg +exec $cfgName. Persistent Steam launch options unchanged."
 }
 
 # Independent CS2 graphics module; loaded ONLY when Apply Graphics is clicked.
