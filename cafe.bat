@@ -4,7 +4,7 @@ start "" powershell.exe -NoProfile -ExecutionPolicy Bypass -STA -WindowStyle Hid
 exit /b
 
 # POWERSHELL_GUI
-# CAFE_RELEASE=2026.10.17.12
+# CAFE_RELEASE=2026.10.17.13
 
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
@@ -7085,17 +7085,13 @@ $form.Add_FormClosed({
     }
     if($script:LogBoldFont){$script:LogBoldFont.Dispose();$script:LogBoldFont=$null}
 })
-# On first display, automatically inventory the machine and check GitHub for
-# an update. One-shot timer lets Windows render the UI before network access.
+# On first display, inventory the machine after Windows has rendered the UI.
+# Update checks are user-triggered through the Check for Updates tile.
 $startupTimer = New-Object System.Windows.Forms.Timer
 $startupTimer.Interval=350
 $startupTimer.Add_Tick({
     $startupTimer.Stop()
     $startupTimer.Dispose()
-    # Check for a newer build before slower hardware/game discovery so startup
-    # inventory cannot delay the update prompt. The updater only prompts when
-    # GitHub reports a newer release; failures remain in LIVE LOGS.
-    Check-CafeLauncherUpdates
     # Profile and graphics settings refresh only when their profile is opened
     # or applied, instead of spending requests on every profile at startup.
     try {
