@@ -5,7 +5,7 @@ CafeLauncher is a portable Windows setup launcher for CS2 internet cafés. It ru
 [Technical architecture and maintenance notes](./context.md)
 
 <!-- BEGIN GENERATED LAUNCHER RELEASE -->
-> Launcher release: **2026.10.17.12**. Features depend on the PC's hardware, installed programs and user permissions.
+> Launcher release: **2026.10.17.13**. Features depend on the PC's hardware, installed programs and user permissions.
 <!-- END GENERATED LAUNCHER RELEASE -->
 
 ## Download and start
@@ -77,7 +77,7 @@ The dashboard reports profile-step outcomes and includes an API allowance indica
 
 ## Launcher updates
 
-The launcher checks for a newer release at startup and through **Check for Updates**. It compares the running release with `main/cafe.bat`, validates the downloaded file's size, Git blob hash, and PowerShell syntax, normalizes Windows line endings, and keeps a backup before replacing the local BAT. If the newer file is already installed, close and reopen the launcher. Updating the local BAT does not change a Google Drive copy; a Deep Freeze reboot may also remove local updates and cached files.
+The launcher checks for a newer release when you press **Check for Updates**. It compares the running release with `main/cafe.bat`, validates the downloaded file's size, Git blob hash, and PowerShell syntax, normalizes Windows line endings, and keeps a backup before replacing the local BAT. If the newer file is already installed, close and reopen the launcher. Updating the local BAT does not change a Google Drive copy; a Deep Freeze reboot may also remove local updates and cached files.
 
 Backups are stored under `%LOCALAPPDATA%\CafeLauncher\backups`. If the original BAT cannot be replaced, the updated file may be saved to Downloads instead.
 
