@@ -21,6 +21,8 @@ foreach($name in $wanted){if(-not $definitions.ContainsKey($name)){throw ('Missi
 $script:GamingProfiles=@{FabMode=@{ScalingMode=2};BrileMode=@{ScalingMode=5}}
 $base=Get-Content -LiteralPath (Join-Path $repo 'graphics\FabMode.json') -Raw|ConvertFrom-Json
 $base=ConvertTo-CafeGraphicsPreset -ProfileName FabMode -Preset $base
+$base.RefreshPolicy='Highest'
+if($base.Settings.Contains('RefreshHz')){[void]$base.Settings.Remove('RefreshHz')}
 
 $video=@'
 "video.cfg"
