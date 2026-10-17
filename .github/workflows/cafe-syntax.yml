@@ -80,7 +80,7 @@ jobs:
     timeout-minutes: 5
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
       - name: Check README and project context match launcher release
         shell: powershell
         run: |
@@ -99,7 +99,7 @@ jobs:
     timeout-minutes: 5
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
       - name: Test profile save closure and local JSON roundtrip
         shell: powershell
         run: |
@@ -118,7 +118,7 @@ jobs:
     timeout-minutes: 5
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
       - name: Test CS2 Steam launch option VDF updater
         shell: powershell
         run: |
@@ -153,7 +153,7 @@ jobs:
     timeout-minutes: 5
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
       - name: Test Logitech DPI controls and safety
         shell: powershell
         run: |
@@ -176,7 +176,7 @@ jobs:
     timeout-minutes: 5
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
       - name: Test editor dropdown scroll behavior
         shell: powershell
         run: |
@@ -192,7 +192,7 @@ jobs:
     if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
     steps:
       - name: Checkout full history for change detection
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
       - name: Replace the existing Drive file
