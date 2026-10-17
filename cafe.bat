@@ -4,7 +4,7 @@ start "" powershell.exe -NoProfile -ExecutionPolicy Bypass -STA -WindowStyle Hid
 exit /b
 
 # POWERSHELL_GUI
-# CAFE_RELEASE=2026.10.17.14
+# CAFE_RELEASE=2026.10.17.15
 
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
@@ -3315,7 +3315,8 @@ function Get-CafeWorkshopManifestSnapshot {
             $item=$app.WorkshopItemsInstalled[$id]
             if($item -isnot [hashtable]){throw ('installed entry '+$idText+' is malformed')}
             [long]$size=0
-            if($item.ContainsKey('size') -and [long]::TryParse([string]$item.size,[ref]$size) -and $size -ge 0){$installed[$idText]=$size}
+            if(-not $item.ContainsKey('size') -or -not [long]::TryParse([string]$item.size,[ref]$size) -or $size -lt 0){throw ('installed entry '+$idText+' has an invalid size')}
+            $installed[$idText]=$size
         }
         $snapshot.Installed=$installed
         $snapshot.ManifestHash=$hash
@@ -3381,10 +3382,12 @@ function Get-CafeWorkshopCleanupSnapshot {
             continue
         }
         try{$folders=@(Get-ChildItem -LiteralPath $library.ContentRoot -Directory -Force -ErrorAction Stop)}catch{continue}
+        $folderIDs=New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::Ordinal)
         foreach($folder in $folders){
             $id=[string]$folder.Name
             [UInt64]$parsedId=0
             if($id -notmatch '^\d{1,20}$' -or -not [UInt64]::TryParse($id,[ref]$parsedId) -or $parsedId -eq 0){continue}
+            [void]$folderIDs.Add($id)
             $full=[IO.Path]::GetFullPath($folder.FullName)
             $prefix=[IO.Path]::GetFullPath($library.ContentRoot).TrimEnd('\')+[IO.Path]::DirectorySeparatorChar
             if(-not $full.StartsWith($prefix,[StringComparison]::OrdinalIgnoreCase)){continue}
@@ -3394,7 +3397,18 @@ function Get-CafeWorkshopCleanupSnapshot {
             $canRemove=$subscriptionStateComplete -and $trusted -and -not $subscribed -and $size.Safe
             $status=if($subscribed){'Keep — subscribed'}elseif(-not $subscriptionStateComplete){'Unknown — local Workshop state incomplete'}elseif(-not $trusted){'Unknown — local Workshop state unverified'}elseif(-not $size.Safe){'Unknown — unsafe or unreadable item'}else{'Removable — not subscribed to by this account'}
             $reason=if($subscribed){'Steamworks reports this item subscribed by the active Steam account.'}elseif(-not $subscriptionStateComplete){'At least one library containing CS2 Workshop state has an unavailable or unverified manifest.'}elseif(-not $trusted){$library.Reason}else{$size.Reason}
-            $entries.Add([pscustomobject]@{WorkshopID=$id;LibraryRoot=$root;Path=$full;Bytes=$size.Bytes;Status=$status;IsSubscribed=$subscribed;CanRemove=$canRemove;Reason=$reason})
+            $entries.Add([pscustomobject]@{WorkshopID=$id;LibraryRoot=$root;Path=$full;Bytes=$size.Bytes;Status=$status;IsSubscribed=$subscribed;IsStaleManifest=$false;CanRemove=$canRemove;Reason=$reason})
+        }
+        if($library.Trusted){
+            foreach($id in $library.Installed.Keys){
+                if($folderIDs.Contains([string]$id)){continue}
+                $subscribed=$subscriptions.Contains([string]$id)
+                $canRemove=$subscriptionStateComplete -and -not $subscribed
+                $status=if($subscribed){'Keep — subscribed'}elseif(-not $subscriptionStateComplete){'Unknown — subscription state incomplete'}else{'Manifest only — local folder missing'}
+                $reason=if($subscribed){'Steamworks reports this item subscribed by the active Steam account.'}elseif(-not $subscriptionStateComplete){'At least one library containing CS2 Workshop state has an unavailable or unverified manifest.'}else{'The local folder is gone, but Steam still has this item in its Workshop manifest.'}
+                $missingPath=Join-Path $library.ContentRoot ([string]$id)
+                $entries.Add([pscustomobject]@{WorkshopID=[string]$id;LibraryRoot=$root;Path=$missingPath;Bytes=0L;Status=$status;IsSubscribed=$subscribed;IsStaleManifest=$true;CanRemove=$canRemove;Reason=$reason})
+            }
         }
     }
     foreach($entry in $entries){
@@ -3585,6 +3599,127 @@ function Get-CafeWorkshopSelectionEntries {
     return @($Entries|Where-Object{$_.CanRemove})
 }
 
+function Remove-CafeWorkshopManifestEntries {
+    param([Parameter(Mandatory=$true)][string]$Text,[Parameter(Mandatory=$true)][string[]]$WorkshopIDs)
+    $parsed=ConvertFrom-CafeSteamVdfText -Text $Text
+    if(-not $parsed.ContainsKey('AppWorkshop') -or $parsed.AppWorkshop -isnot [hashtable] -or [string]$parsed.AppWorkshop.appid -cne '730'){
+        throw 'Refusing to edit a manifest that is not a valid CS2 Workshop manifest.'
+    }
+    $wanted=New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::Ordinal)
+    foreach($id in $WorkshopIDs){
+        [UInt64]$parsedId=0
+        if([string]$id -notmatch '^\d{1,20}$' -or -not [UInt64]::TryParse([string]$id,[ref]$parsedId) -or $parsedId -eq 0){throw 'Refusing to edit a manifest using an invalid Workshop ID.'}
+        [void]$wanted.Add([string]$id)
+    }
+    if(-not $wanted.Count){throw 'No Workshop IDs were provided for manifest cleanup.'}
+
+    # Tokenize with source offsets so only the selected object blocks are removed;
+    # preserve every other Steam-owned value, comment, and formatting byte.
+    $tokens=New-Object 'System.Collections.Generic.List[object]'
+    $i=0
+    while($i -lt $Text.Length){
+        while($i -lt $Text.Length){
+            if([char]::IsWhiteSpace($Text[$i])){$i++;continue}
+            if($Text[$i] -eq '/' -and $i+1 -lt $Text.Length -and $Text[$i+1] -eq '/'){
+                while($i -lt $Text.Length -and $Text[$i] -ne "`n"){$i++}
+                continue
+            }
+            break
+        }
+        if($i -ge $Text.Length){break}
+        $start=$i;$c=$Text[$i]
+        if($c -eq '{' -or $c -eq '}'){
+            $tokens.Add([pscustomobject]@{Kind=$(if($c -eq '{'){'Open'}else{'Close'});Value=[string]$c;Start=$start;End=($i+1)})
+            $i++
+        }elseif($c -eq '"'){
+            $i++;$builder=New-Object System.Text.StringBuilder;$closed=$false
+            while($i -lt $Text.Length){
+                $c=$Text[$i]
+                if($c -eq '"'){$closed=$true;$i++;break}
+                if($c -eq '\' -and $i+1 -lt $Text.Length -and ($Text[$i+1] -eq '\' -or $Text[$i+1] -eq '"')){[void]$builder.Append($Text[$i+1]);$i+=2;continue}
+                [void]$builder.Append($c);$i++
+            }
+            if(-not $closed){throw 'Steam Workshop manifest contains an unterminated quoted value.'}
+            $tokens.Add([pscustomobject]@{Kind='Text';Value=$builder.ToString();Start=$start;End=$i})
+        }else{
+            while($i -lt $Text.Length -and -not [char]::IsWhiteSpace($Text[$i]) -and $Text[$i] -ne '{' -and $Text[$i] -ne '}'){
+                if($Text[$i] -eq '/' -and $i+1 -lt $Text.Length -and $Text[$i+1] -eq '/') {break}
+                $i++
+            }
+            if($i -eq $start){throw 'Steam Workshop manifest contains an invalid token.'}
+            $tokens.Add([pscustomobject]@{Kind='Text';Value=$Text.Substring($start,$i-$start);Start=$start;End=$i})
+        }
+        if($tokens.Count -gt 200000){throw 'Steam Workshop manifest contains too many tokens.'}
+    }
+    $stack=New-Object 'System.Collections.Generic.List[object]'
+    $stack.Add([pscustomobject]@{Path='';Pending=$null;PendingStart=-1;KeyStart=-1;TargetID=$null})
+    $ranges=New-Object 'System.Collections.Generic.List[object]'
+    foreach($token in $tokens){
+        $frame=$stack[$stack.Count-1]
+        if($token.Kind -eq 'Close'){
+            if($stack.Count -le 1){throw 'Steam Workshop manifest has an unexpected closing brace.'}
+            if($null -ne $frame.Pending){throw 'Steam Workshop manifest has a key without a value.'}
+            if($frame.TargetID){$ranges.Add([pscustomobject]@{ID=$frame.TargetID;Start=$frame.KeyStart;End=$token.End})}
+            $stack.RemoveAt($stack.Count-1)
+        }elseif($token.Kind -eq 'Open'){
+            if($null -eq $frame.Pending){throw 'Steam Workshop manifest has an object without a key.'}
+            $name=[string]$frame.Pending
+            $parentPath=[string]$frame.Path
+            $path=if($parentPath){$parentPath+'/'+$name}else{$name}
+            $targetID=$null
+            if($parentPath -in @('AppWorkshop/WorkshopItemsInstalled','AppWorkshop/WorkshopItemDetails') -and $wanted.Contains($name)){$targetID=$name}
+            $keyStart=[int]$frame.PendingStart
+            $frame.Pending=$null;$frame.PendingStart=-1
+            $stack.Add([pscustomobject]@{Path=$path;Pending=$null;PendingStart=-1;KeyStart=$keyStart;TargetID=$targetID})
+        }else{
+            if($null -eq $frame.Pending){$frame.Pending=[string]$token.Value;$frame.PendingStart=[int]$token.Start}
+            else{$frame.Pending=$null;$frame.PendingStart=-1}
+        }
+    }
+    if($stack.Count -ne 1 -or $null -ne $stack[0].Pending){throw 'Steam Workshop manifest has an unclosed object or incomplete key.'}
+    if(-not $ranges.Count){return [pscustomobject]@{Text=$Text;Changed=$false;RemovedIDs=@()}}
+    $result=[System.Text.StringBuilder]::new($Text)
+    foreach($range in @($ranges|Sort-Object Start -Descending)){$result.Remove([int]$range.Start,[int]($range.End-$range.Start))|Out-Null}
+    return [pscustomobject]@{Text=$result.ToString();Changed=$true;RemovedIDs=@($ranges|Select-Object -ExpandProperty ID -Unique)}
+}
+
+function Update-CafeWorkshopManifest {
+    param([Parameter(Mandatory=$true)][string]$ManifestPath,[Parameter(Mandatory=$true)][string]$ExpectedHash,
+        [Parameter(Mandatory=$true)][string[]]$WorkshopIDs)
+    if(-not (Test-Path -LiteralPath $ManifestPath -PathType Leaf)){throw 'Steam Workshop manifest disappeared before cleanup.'}
+    $bytes=[IO.File]::ReadAllBytes($ManifestPath)
+    $sha=[Security.Cryptography.SHA256]::Create()
+    try{$currentHash=([BitConverter]::ToString($sha.ComputeHash($bytes))).Replace('-','').ToLowerInvariant()}finally{$sha.Dispose()}
+    if($currentHash -cne $ExpectedHash){throw 'Steam Workshop manifest changed during cleanup. Nothing else was removed; scan again.'}
+    $hasBom=$bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF
+    $text=[Text.Encoding]::UTF8.GetString($bytes)
+    if($hasBom){$text=$text.Substring(1)}
+    $edit=Remove-CafeWorkshopManifestEntries -Text $text -WorkshopIDs $WorkshopIDs
+    if(-not $edit.Changed){return [pscustomobject]@{Changed=$false;Hash=$currentHash;BackupPath=$null;RemovedIDs=@()}}
+    $backup=$ManifestPath+'.cafelauncher-'+[DateTime]::UtcNow.ToString('yyyyMMddTHHmmssfffZ')+'-'+[Guid]::NewGuid().ToString('N').Substring(0,8)+'.bak'
+    $temporary=$ManifestPath+'.cafelauncher-'+[Guid]::NewGuid().ToString('N')+'.tmp'
+    $replaced=$false
+    try{
+        $encoding=New-Object Text.UTF8Encoding($hasBom)
+        [IO.File]::WriteAllText($temporary,[string]$edit.Text,$encoding)
+        $parsedAfter=ConvertFrom-CafeSteamVdfText -Text ([string]$edit.Text)
+        if(-not $parsedAfter.ContainsKey('AppWorkshop') -or [string]$parsedAfter.AppWorkshop.appid -cne '730'){
+            throw 'Updated Steam Workshop manifest did not pass validation; original is unchanged.'
+        }
+        [IO.File]::Replace($temporary,$ManifestPath,$backup)
+        $replaced=$true
+        $updated=[IO.File]::ReadAllBytes($ManifestPath)
+        $sha=[Security.Cryptography.SHA256]::Create()
+        try{$updatedHash=([BitConverter]::ToString($sha.ComputeHash($updated))).Replace('-','').ToLowerInvariant()}finally{$sha.Dispose()}
+        return [pscustomobject]@{Changed=$true;Hash=$updatedHash;BackupPath=$backup;RemovedIDs=@($edit.RemovedIDs)}
+    }catch{
+        if(-not $replaced -and (Test-Path -LiteralPath $backup -PathType Leaf)){Remove-Item -LiteralPath $backup -Force -ErrorAction SilentlyContinue}
+        throw
+    }finally{
+        if(Test-Path -LiteralPath $temporary -PathType Leaf){Remove-Item -LiteralPath $temporary -Force -ErrorAction SilentlyContinue}
+    }
+}
+
 function Get-CafeActiveWorkshopContext {
     $active=Get-CafeActiveSteamVideoFile
     $steamProcesses=@(Get-Process -Name 'steam' -ErrorAction SilentlyContinue | Where-Object {$_.Path -and (Test-Path -LiteralPath $_.Path -PathType Leaf)})
@@ -3603,6 +3738,7 @@ function Remove-CafeWorkshopItems {
     if(@(Get-Process -Name 'cs2' -ErrorAction SilentlyContinue).Count){throw 'Close CS2 before removing Workshop files.'}
     $results=New-Object 'System.Collections.Generic.List[object]'
     $seenPaths=New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+    $manifestHashes=@{}
     foreach($selection in $SelectedEntries){
         $id=[string]$selection.WorkshopID
         $selectedPath=[string]$selection.Path
@@ -3610,19 +3746,37 @@ function Remove-CafeWorkshopItems {
         $previewEntry=@($Preview.Entries|Where-Object{$_.WorkshopID -ceq $id -and $_.CanRemove -and [string]::Equals([string]$_.Path,$selectedPath,[StringComparison]::OrdinalIgnoreCase)})|Select-Object -First 1
         $freshEntry=@($FreshSnapshot.Entries|Where-Object{$_.WorkshopID -ceq $id -and $_.CanRemove -and [string]::Equals([string]$_.Path,$selectedPath,[StringComparison]::OrdinalIgnoreCase)})|Select-Object -First 1
         if(-not $previewEntry -or -not $freshEntry){throw ('Workshop item '+$id+' is no longer a safe cleanup candidate. Nothing further was removed.')}
+        if(@($FreshSnapshot.Subscriptions|Where-Object{[string]$_ -ceq $id}).Count){throw ('Workshop item '+$id+' is currently subscribed and cannot be cleaned up.')}
         $path=[IO.Path]::GetFullPath([string]$freshEntry.Path)
-        $base=[IO.Path]::GetFullPath((Join-Path $freshEntry.LibraryRoot 'steamapps\workshop\content\730')).TrimEnd('\')+[IO.Path]::DirectorySeparatorChar
-        if(-not $path.StartsWith($base,[StringComparison]::OrdinalIgnoreCase) -or (Split-Path -Leaf $path) -cne $id){throw ('Refusing to remove a path outside the expected CS2 Workshop item directory: '+$id)}
-        $item=Get-Item -LiteralPath $path -Force -ErrorAction Stop
-        if(-not $item.PSIsContainer -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0){throw ('Workshop item is no longer a safe normal directory: '+$id)}
-        $check=Get-CafeWorkshopDirectorySize -Path $path
-        if(-not $check.Safe){throw ('Workshop item became unsafe after the preview: '+$id+' ('+$check.Reason+')')}
+        $libraryRoot=[string]$freshEntry.LibraryRoot
+        $contentRoot=[IO.Path]::GetFullPath((Join-Path $libraryRoot 'steamapps\workshop\content\730')).TrimEnd('\')
+        $expectedPath=[IO.Path]::GetFullPath((Join-Path $contentRoot $id))
+        if(-not [string]::Equals($path,$expectedPath,[StringComparison]::OrdinalIgnoreCase) -or (Split-Path -Leaf $path) -cne $id){throw ('Refusing to change a path outside the expected CS2 Workshop item directory: '+$id)}
+        $isStaleManifest=($freshEntry.IsStaleManifest -eq $true)
+        if($isStaleManifest){
+            if(Test-Path -LiteralPath $path){throw ('The local folder for stale Workshop manifest entry '+$id+' reappeared. Scan again.')}
+        }else{
+            $item=Get-Item -LiteralPath $path -Force -ErrorAction Stop
+            if(-not $item.PSIsContainer -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0){throw ('Workshop item is no longer a safe normal directory: '+$id)}
+            $check=Get-CafeWorkshopDirectorySize -Path $path
+            if(-not $check.Safe){throw ('Workshop item became unsafe after the preview: '+$id+' ('+$check.Reason+')')}
+        }
+        $libraryState=@($FreshSnapshot.Libraries|Where-Object{[string]::Equals([string]$_.LibraryRoot,$libraryRoot,[StringComparison]::OrdinalIgnoreCase)}|Select-Object -First 1)
+        if(-not $libraryState -or -not $libraryState[0].Trusted){throw ('Steam Workshop manifest is no longer verified for '+$id+'.')}
+        $manifestPath=[string]$libraryState[0].ManifestPath
+        $manifestKey=$libraryRoot.ToLowerInvariant()
+        $expectedHash=if($manifestHashes.ContainsKey($manifestKey)){[string]$manifestHashes[$manifestKey]}else{[string]$libraryState[0].ManifestHash}
+        $manifestBackup=$null
         try{
-            Remove-Item -LiteralPath $path -Recurse -Force -ErrorAction Stop
-            $results.Add([pscustomobject]@{WorkshopID=$id;Status='Removed';Bytes=[long]$freshEntry.Bytes;Path=$path})
-            Write-Log ('Workshop cleanup removed item '+$id+' from '+$freshEntry.LibraryRoot)
+            $manifestUpdate=Update-CafeWorkshopManifest -ManifestPath $manifestPath -ExpectedHash $expectedHash -WorkshopIDs @($id)
+            $manifestHashes[$manifestKey]=[string]$manifestUpdate.Hash
+            $manifestBackup=$manifestUpdate.BackupPath
+            if(-not $isStaleManifest){Remove-Item -LiteralPath $path -Recurse -Force -ErrorAction Stop}
+            $results.Add([pscustomobject]@{WorkshopID=$id;Status='Removed';Bytes=[long]$freshEntry.Bytes;Path=$path;ManifestBackup=$manifestBackup})
+            Write-Log ('Workshop cleanup removed local item and stale manifest entry '+$id+' from '+$libraryRoot)
         }catch{
-            $results.Add([pscustomobject]@{WorkshopID=$id;Status='Failed';Bytes=0L;Path=$path;Error=$_.Exception.Message})
+            $message=$_.Exception.Message
+            $results.Add([pscustomobject]@{WorkshopID=$id;Status='Failed';Bytes=0L;Path=$path;Error=$message;ManifestBackup=$manifestBackup})
             Write-Log ('Workshop cleanup failed for item '+$id+': '+$_.Exception.Message) 'ERROR'
         }
     }
@@ -3638,7 +3792,7 @@ function Show-CafeWorkshopCleanupDialog {
     $dialog.BackColor=$BG
     $dialog.ForeColor=$WHITE
     $dialog.Font=New-Object System.Drawing.Font('Segoe UI',9)
-    $intro=New-CafeLabel -Text 'Subscriptions come from the signed-in Steam account. Select only safe local items that account is not subscribed to.' -FontSize 9
+    $intro=New-CafeLabel -Text 'Subscriptions come from the signed-in Steam account. Select safe unsubscribed items or stale manifest entries; manifest edits get a timestamped backup.' -FontSize 9
     $intro.Location=[System.Drawing.Point]::new(14,12);$intro.Size=[System.Drawing.Size]::new(1000,38);$intro.Anchor='Top,Left,Right'
     $dialog.Controls.Add($intro)
     $status=New-CafeLabel -Text 'Scan requires Steam to be running and signed in.' -FontSize 9
@@ -3709,7 +3863,7 @@ function Show-CafeWorkshopCleanupDialog {
         [long]$total=0;foreach($entry in $selected){if($null -ne $entry.Bytes){$total+=[long]$entry.Bytes}}
         $idSummary=($ids|Select-Object -First 12) -join ', '
         if($ids.Count -gt 12){$idSummary+=' ...'}
-        $message='Permanently remove '+$selected.Count+' selected local CS2 Workshop folder(s)?'+[Environment]::NewLine+[Environment]::NewLine+'IDs: '+$idSummary+[Environment]::NewLine+'Estimated space: '+('{0:N1} MB' -f ([double]$total/1MB))+[Environment]::NewLine+[Environment]::NewLine+'Steam subscriptions and other files will not be changed.'
+        $message='Remove '+$selected.Count+' selected CS2 Workshop item(s) from local content and Steam''s installed-item manifest?'+[Environment]::NewLine+[Environment]::NewLine+'IDs: '+$idSummary+[Environment]::NewLine+'Estimated space: '+('{0:N1} MB' -f ([double]$total/1MB))+[Environment]::NewLine+[Environment]::NewLine+'A timestamped backup will be created for any manifest edits. Steam subscriptions and other items will not be changed.'
         $answer=[System.Windows.Forms.MessageBox]::Show($message,'Confirm Workshop Cleanup','YesNo','Warning')
         if($answer -ne [System.Windows.Forms.DialogResult]::Yes){return}
         $removeButton.Enabled=$false
@@ -3719,7 +3873,9 @@ function Show-CafeWorkshopCleanupDialog {
             $result=@(Remove-CafeWorkshopItems -Preview $state.Snapshot -FreshSnapshot $fresh -SelectedEntries $selected -Confirmed)
             $removed=@($result|Where-Object{$_.Status -eq 'Removed'}).Count
             $failed=@($result|Where-Object{$_.Status -eq 'Failed'}).Count
-            [void][System.Windows.Forms.MessageBox]::Show(('Removed '+$removed+' item(s); '+$failed+' failed. Estimated space freed: '+('{0:N1} MB' -f ([double](($result|Where-Object{$_.Status -eq 'Removed'}|Measure-Object -Property Bytes -Sum).Sum)/1MB))+'.'),'Workshop Cleanup','OK',$(if($failed){'Warning'}else{'Information'}))
+            $backupPaths=@($result|Where-Object{$_.ManifestBackup}|ForEach-Object{$_.ManifestBackup}|Sort-Object -Unique)
+            $backupText=if($backupPaths.Count){[Environment]::NewLine+[Environment]::NewLine+'Manifest backup: '+($backupPaths -join [Environment]::NewLine+'Manifest backup: ')}else{''}
+            [void][System.Windows.Forms.MessageBox]::Show(('Removed '+$removed+' item(s); '+$failed+' failed. Estimated space freed: '+('{0:N1} MB' -f ([double](($result|Where-Object{$_.Status -eq 'Removed'}|Measure-Object -Property Bytes -Sum).Sum)/1MB))+'.'+$backupText),'Workshop Cleanup','OK',$(if($failed){'Warning'}else{'Information'}))
             & $scanAction
         }catch{
             Write-Log ('Workshop cleanup stopped safely: '+$_.Exception.Message) 'WARN'
