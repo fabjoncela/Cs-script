@@ -61,7 +61,7 @@ foreach($functionName in $rateLimitFunctionNames){
     if($functionAst.Count -ne 1){throw ('Missing or duplicate GitHub rate-limit function: '+$functionName)}
     Invoke-Expression $functionAst[0].Extent.Text
 }
-if($psSource -match '(?i)Invoke-RestMethod\s+-Uri'){
+if($psSource -match '(?i)Invoke-RestMethod\s+-Uri\s+(?!''https://api\.steampowered\.com/ISteamRemoteStorage/GetPublishedFileDetails/v1/''|"https://api\.steampowered\.com/ISteamRemoteStorage/GetPublishedFileDetails/v1/")'){
     throw 'GitHub REST requests must use the response-header tracking wrapper.'
 }
 
@@ -93,7 +93,7 @@ foreach($requiredEditorFeature in @(
     '$pointerSpeedSelectionState.UserChanged',
     '$p.PointerSpeed=$pointerSpeedOriginalValue',
     '$cs2Page.Text=''CS2 / Apps''',
-    '$cs2Grid=New-EditorTabGrid -Page $cs2Page -Rows 19',
+    '$cs2Grid=New-EditorTabGrid -Page $cs2Page -Rows 20',
     '$captureGraphics.Text=''Capture from CS2''',
     'Get-CafeCS2GraphicsCapture -ProfileName $ProfileName -BasePreset $graphicsPreset',
     'New-EditorTabNumber -Grid $cs2Grid -Title ''CS2 resolution width''',
@@ -321,8 +321,11 @@ foreach($tabLabel in @('Mouse','NVIDIA / Display','CS2 / Apps')){
     }
 }
 foreach($field in @('Resolution width','Resolution height','Refresh rate (Hz)',
-    'Logitech DPI (live, per profile)','GitHub .cfg URL')){
+    'Logitech DPI (live, per profile)')){
     if(-not $editorSource.Contains($field)){throw ('Editor field missing: '+$field)}
+}
+if($editorSource -match 'CfgDownloadUrl|CFG URL|\.cfg URL'){
+    throw 'CFG download URL must remain hidden from the profile editor.'
 }
 if($editorSource -notmatch 'New-EditorTabGrid' -or
    $editorSource -notmatch 'New-EditorTabNumber' -or
@@ -410,7 +413,8 @@ if($dashboardSource -match "New-CafeLabel -Text 'v\d{4}\.\d{2}\.\d{2}\.\d+'" -or
     throw 'Version badge must use the active CAFE_RELEASE marker and startup/manual update checks must remain wired.'
 }
 if($psSource -match 'CAFE_PREVIEW_BRANCH|\$script:PreviewBranch|UI PREVIEW' -or
-   $definitions['Check-CafeLauncherUpdates'] -notmatch 'GitHub main release is' -or
+   $definitions['Check-CafeLauncherUpdates'] -notmatch 'Test-LauncherIsCurrent -CurrentPath \$source -RemoteBlobSha \$remote\.sha' -or
+    $definitions['Check-CafeLauncherUpdates'] -notmatch '\$remoteRelease -lt \$runningRelease' -or
    $definitions['Check-CafeLauncherUpdates'] -notmatch 'CafeLauncher Update Available'){
     throw 'Production dashboard must use normal verified main-branch updates without preview restrictions.'
 }

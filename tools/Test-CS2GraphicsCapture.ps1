@@ -111,15 +111,11 @@ if(-not $failed){throw 'Capture was allowed to continue after the active Steam a
 $editor=$definitions= $null
 $editorAst=$ast.FindAll({param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Show-ProfileEditor'},$true)|Select-Object -First 1
 $editor=$editorAst.Extent.Text
-foreach($required in @('$cs2Grid=New-EditorTabGrid -Page $cs2Page -Rows 19','$captureGraphics.Text=''Capture from CS2''','Get-CafeCS2GraphicsCapture -ProfileName $ProfileName -BasePreset $graphicsPreset','Save & Sync to publish')){
+foreach($required in @('$cs2Grid=New-EditorTabGrid -Page $cs2Page -Rows 20','$captureGraphics.Text=''Capture from CS2''','Get-CafeCS2GraphicsCapture -ProfileName $ProfileName -BasePreset $graphicsPreset','Save & Sync to publish')){
     if($editor -notmatch [regex]::Escape($required)){throw ('Profile editor capture workflow is missing: '+$required)}
 }
-$captureStart=$editor.IndexOf('$captureGraphics.Add_Click({',[StringComparison]::Ordinal)
-$captureEnd=$editor.IndexOf('$saveLocal=New-Object',[StringComparison]::Ordinal)
-if($captureStart -lt 0 -or $captureEnd -le $captureStart){throw 'Could not isolate the CS2 capture click handler.'}
-$captureHandler=$editor.Substring($captureStart,$captureEnd-$captureStart)
-if($captureHandler -match '\[void\]\s*\[System\.Windows\.Forms\.MessageBox\]::Show'){
-    throw 'CS2 capture click handler must not void-cast MessageBox.Show inside its try/catch; this crashes Windows PowerShell 5.1 handler compilation.'
+foreach($required in @('$invokeCS2Capture={','$captureGraphics.Add_Click($invokeCS2Capture)','if($CaptureOnOpen)','$dialog.Add_Shown({ & $invokeCS2Capture }')){
+    if($editor -notmatch [regex]::Escape($required)){throw ('Shared CS2 capture action is missing: '+$required)}
 }
 
 Remove-Item -LiteralPath $script:CaptureTestSteamRoot -Recurse -Force

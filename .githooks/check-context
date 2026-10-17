@@ -19,5 +19,5 @@ if "$ps_host" -NoProfile -ExecutionPolicy Bypass -File "$context_script" -Check 
 fi
 
 "$ps_host" -NoProfile -ExecutionPolicy Bypass -File "$context_script"
-echo "Git operation stopped: review and commit context.md, then retry." >&2
+echo "Git operation stopped: review and commit the generated release metadata changes, then retry." >&2
 exit 1

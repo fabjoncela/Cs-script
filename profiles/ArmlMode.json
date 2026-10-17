@@ -2,7 +2,7 @@
     "SchemaVersion":  1,
     "ProfileName":  "ArmlMode",
     "PointerSpeed":  8,
-    "LogitechDPI":  400,
+    "LogitechDPI":  800,
     "DisableAcceleration":  true,
     "ApplyNvidia":  true,
     "Width":  1920,
@@ -12,6 +12,7 @@
     "Hue":  -1,
     "ScalingMode":  2,
     "CS2Sensitivity":  "",
+    "VoicePushToTalkKey":  "MOUSE4",
     "CfgDownloadUrl":  "https://raw.githubusercontent.com/fabjoncela/Cs-script/main/arml.cfg",
     "LaunchApps":  true
 }

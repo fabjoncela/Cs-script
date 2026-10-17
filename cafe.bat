@@ -4,7 +4,7 @@ start "" powershell.exe -NoProfile -ExecutionPolicy Bypass -STA -WindowStyle Hid
 exit /b
 
 # POWERSHELL_GUI
-# CAFE_RELEASE=2026.10.14.34
+# CAFE_RELEASE=2026.10.17.4
 
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
@@ -2738,8 +2738,7 @@ function Check-CafeLauncherUpdates {
         $remote=Invoke-CafeGitHubRestMethod -Uri $uri -Headers @{'User-Agent'='CafeLauncher-Updater'; 'Accept'='application/vnd.github+json'} -TimeoutSec 8
         if ($remote.path -ne 'cafe.bat' -or $remote.sha -notmatch '^[a-fA-F0-9]{40}$' -or
             [int64]$remote.size -lt 10000 -or [int64]$remote.size -gt 1000000) { throw 'Unexpected update metadata from GitHub.' }
-        # Ignore older/unversioned GitHub builds. A new release must increment
-        # its CAFE_RELEASE marker, rather than merely have different line endings.
+        # Ignore older/unversioned GitHub builds; the SHA handles same-version changes.
         if ($remote.encoding -ne 'base64' -or [string]::IsNullOrWhiteSpace($remote.content)) {
             throw 'GitHub did not include update version metadata.'
         }
@@ -2756,12 +2755,19 @@ function Check-CafeLauncherUpdates {
         $runningReleaseText=Get-CafeLauncherRelease
         $runningRelease=if($runningReleaseText -match '^\d{4}\.\d{1,2}\.\d{1,2}\.\d+$'){[version]::Parse($runningReleaseText)}else{[version]'0.0.0.0'}
         $diskRelease=if ($localMatch.Success) { [version]::Parse($localMatch.Groups[1].Value) } else { [version]'0.0.0.0' }
-        if ($remoteRelease -le $runningRelease) {
-            Write-Log "CafeLauncher running release $runningRelease is current; GitHub main release is $remoteRelease."
-            if ($Manual) { [System.Windows.Forms.MessageBox]::Show("CafeLauncher is current (running $runningRelease; GitHub $remoteRelease).", 'Update Check', 'OK', 'Information') | Out-Null }
+        # Version prevents downgrades; Git blob SHA detects builds that forgot a version bump.
+        if ($remoteRelease -lt $runningRelease) {
+            Write-Log "GitHub release $remoteRelease is older than running release $runningRelease; skipping downgrade."
+            if ($Manual) { [System.Windows.Forms.MessageBox]::Show("Your running CafeLauncher ($runningRelease) is newer than GitHub ($remoteRelease).", 'Update Check', 'OK', 'Information') | Out-Null }
             return
         }
-        if (Test-LauncherIsCurrent -CurrentPath $source -RemoteBlobSha $remote.sha) {
+        $diskCurrent=Test-LauncherIsCurrent -CurrentPath $source -RemoteBlobSha $remote.sha
+        if ($diskCurrent -and $remoteRelease -eq $runningRelease) {
+            Write-Log "CafeLauncher release $runningRelease matches GitHub main (file SHA verified)."
+            if ($Manual) { [System.Windows.Forms.MessageBox]::Show("CafeLauncher is up to date ($runningRelease).", 'Update Check', 'OK', 'Information') | Out-Null }
+            return
+        }
+        if ($diskCurrent) {
             Write-Log "A newer release $remoteRelease is already installed at $source; this open launcher is still running $runningRelease."
             [System.Windows.Forms.MessageBox]::Show(
                 "CafeLauncher release $remoteRelease is already installed at:`n$source`n`nClick OK to restart into the newer build.",
@@ -2901,27 +2907,27 @@ $script:GamingProfiles = [ordered]@{
     FabMode = @{
         PointerSpeed=10; LogitechDPI=800; DisableAcceleration=$true; ApplyNvidia=$true; ScalingMode=2
         Width=1920; Height=1080; RefreshHz=360; Vibrance=75; Hue=-1
-        CS2Sensitivity=''; ConfigFile='fab.cfg'; CfgDownloadUrl=$script:FabCfgCloudUrl; LaunchApps=$true
+        CS2Sensitivity=''; VoicePushToTalkKey=''; ConfigFile='fab.cfg'; CfgDownloadUrl=$script:FabCfgCloudUrl; LaunchApps=$true
     }
     ArliMode = @{
         PointerSpeed=10; LogitechDPI=800; DisableAcceleration=$true; ApplyNvidia=$true; ScalingMode=2
         Width=1920; Height=1080; RefreshHz=360; Vibrance=75; Hue=-1
-        CS2Sensitivity=''; ConfigFile='arli.cfg'; CfgDownloadUrl='https://raw.githubusercontent.com/fabjoncela/Cs-script/main/arli.cfg'; LaunchApps=$true
+        CS2Sensitivity=''; VoicePushToTalkKey=''; ConfigFile='arli.cfg'; CfgDownloadUrl='https://raw.githubusercontent.com/fabjoncela/Cs-script/main/arli.cfg'; LaunchApps=$true
     }
     BrileMode = @{
         PointerSpeed=10; LogitechDPI=800; DisableAcceleration=$true; ApplyNvidia=$true; ScalingMode=2
         Width=1920; Height=1080; RefreshHz=360; Vibrance=75; Hue=-1
-        CS2Sensitivity=''; ConfigFile='brile.cfg'; CfgDownloadUrl='https://raw.githubusercontent.com/fabjoncela/Cs-script/main/brile.cfg'; LaunchApps=$true
+        CS2Sensitivity=''; VoicePushToTalkKey=''; ConfigFile='brile.cfg'; CfgDownloadUrl='https://raw.githubusercontent.com/fabjoncela/Cs-script/main/brile.cfg'; LaunchApps=$true
     }
     ArmlMode = @{
         PointerSpeed=10; LogitechDPI=800; DisableAcceleration=$true; ApplyNvidia=$true; ScalingMode=2
         Width=1920; Height=1080; RefreshHz=360; Vibrance=75; Hue=-1
-        CS2Sensitivity=''; ConfigFile='arml.cfg'; CfgDownloadUrl='https://raw.githubusercontent.com/fabjoncela/Cs-script/main/arml.cfg'; LaunchApps=$true
+        CS2Sensitivity=''; VoicePushToTalkKey=''; ConfigFile='arml.cfg'; CfgDownloadUrl='https://raw.githubusercontent.com/fabjoncela/Cs-script/main/arml.cfg'; LaunchApps=$true
     }
     OliMode = @{
         PointerSpeed=10; LogitechDPI=800; DisableAcceleration=$true; ApplyNvidia=$true; ScalingMode=2
         Width=1920; Height=1080; RefreshHz=360; Vibrance=75; Hue=-1
-        CS2Sensitivity=''; ConfigFile='oli.cfg'; CfgDownloadUrl='https://raw.githubusercontent.com/fabjoncela/Cs-script/main/oli.cfg'; LaunchApps=$true
+        CS2Sensitivity=''; VoicePushToTalkKey=''; ConfigFile='oli.cfg'; CfgDownloadUrl='https://raw.githubusercontent.com/fabjoncela/Cs-script/main/oli.cfg'; LaunchApps=$true
     }
 }
 $script:ProfileSettingsPath = Join-Path $env:LOCALAPPDATA 'CafeLauncher\profiles.json'
@@ -2998,6 +3004,495 @@ function Get-CafeActiveSteamVideoFile {
     $accountId=$accountNumber.ToString([Globalization.CultureInfo]::InvariantCulture)
     $videoPath=Join-Path $steamRoot ('userdata\'+$accountId+'\730\local\cfg\cs2_video.txt')
     return [pscustomobject]@{Path=$videoPath;AccountID=$accountId;SteamRoot=$steamRoot}
+}
+
+function ConvertFrom-CafeSteamVdfText {
+    param([Parameter(Mandatory=$true)][string]$Text)
+    if([string]::IsNullOrWhiteSpace($Text) -or $Text.Length -gt 8388608){throw 'Steam Workshop manifest is empty or exceeds the 8 MB safety limit.'}
+    $tokens=New-Object 'System.Collections.Generic.List[object]'
+    $i=0
+    while($i -lt $Text.Length){
+        while($i -lt $Text.Length){
+            if([char]::IsWhiteSpace($Text[$i])){$i++;continue}
+            if($Text[$i] -eq '/' -and $i+1 -lt $Text.Length -and $Text[$i+1] -eq '/'){
+                while($i -lt $Text.Length -and $Text[$i] -ne "`n"){$i++}
+                continue
+            }
+            break
+        }
+        if($i -ge $Text.Length){break}
+        $c=$Text[$i]
+        if($c -eq '{' -or $c -eq '}'){
+            $tokens.Add([pscustomobject]@{Kind=$(if($c -eq '{'){'Open'}else{'Close'});Value=[string]$c})
+            $i++
+        }elseif($c -eq '"'){
+            $i++
+            $builder=New-Object System.Text.StringBuilder
+            $closed=$false
+            while($i -lt $Text.Length){
+                $c=$Text[$i]
+                if($c -eq '"'){$closed=$true;$i++;break}
+                if($c -eq '\' -and $i+1 -lt $Text.Length -and ($Text[$i+1] -eq '\' -or $Text[$i+1] -eq '"')){
+                    [void]$builder.Append($Text[$i+1]);$i+=2;continue
+                }
+                [void]$builder.Append($c);$i++
+            }
+            if(-not $closed){throw 'Steam Workshop manifest contains an unterminated quoted value.'}
+            $tokens.Add([pscustomobject]@{Kind='Text';Value=$builder.ToString()})
+        }else{
+            $start=$i
+            while($i -lt $Text.Length -and -not [char]::IsWhiteSpace($Text[$i]) -and $Text[$i] -ne '{' -and $Text[$i] -ne '}'){
+                if($Text[$i] -eq '/' -and $i+1 -lt $Text.Length -and $Text[$i+1] -eq '/') {break}
+                $i++
+            }
+            if($i -eq $start){throw 'Steam Workshop manifest contains an invalid token.'}
+            $tokens.Add([pscustomobject]@{Kind='Text';Value=$Text.Substring($start,$i-$start)})
+        }
+        if($tokens.Count -gt 200000){throw 'Steam Workshop manifest contains too many tokens.'}
+    }
+    $root=@{}
+    $frames=New-Object 'System.Collections.Generic.List[object]'
+    $frames.Add([pscustomobject]@{Node=$root;Pending=$null})
+    foreach($token in $tokens){
+        $frame=$frames[$frames.Count-1]
+        if($token.Kind -eq 'Close'){
+            if($frames.Count -le 1){throw 'Steam Workshop manifest has an unexpected closing brace.'}
+            if($null -ne $frame.Pending){throw 'Steam Workshop manifest has a key without a value.'}
+            $frames.RemoveAt($frames.Count-1)
+            continue
+        }
+        if($token.Kind -eq 'Open'){
+            if($null -eq $frame.Pending){throw 'Steam Workshop manifest has an object without a key.'}
+            if($frames.Count -ge 65){throw 'Steam Workshop manifest nesting exceeds the safety limit.'}
+            $child=@{}
+            if($frame.Node.ContainsKey([string]$frame.Pending)){throw ('Steam Workshop manifest repeats a key: '+$frame.Pending)}
+            $frame.Node.Add([string]$frame.Pending,$child)
+            $frame.Pending=$null
+            $frames.Add([pscustomobject]@{Node=$child;Pending=$null})
+            continue
+        }
+        if($token.Kind -ne 'Text'){throw 'Steam Workshop manifest expected text.'}
+        if($null -eq $frame.Pending){$frame.Pending=[string]$token.Value;continue}
+        if($frame.Node.ContainsKey([string]$frame.Pending)){throw ('Steam Workshop manifest repeats a key: '+$frame.Pending)}
+        $frame.Node.Add([string]$frame.Pending,[string]$token.Value)
+        $frame.Pending=$null
+    }
+    if($frames.Count -ne 1){throw 'Steam Workshop manifest has an unclosed object.'}
+    if($null -ne $frames[0].Pending){throw 'Steam Workshop manifest has a key without a value.'}
+    return ,$root
+}
+
+function Get-CafeWorkshopManifestSnapshot {
+    param([Parameter(Mandatory=$true)][string]$LibraryRoot,[Parameter(Mandatory=$true)][string]$ActiveAccountID)
+    $rootText=$LibraryRoot.Replace('/','\').TrimEnd('\')
+    if($rootText.StartsWith('\\?\',[StringComparison]::OrdinalIgnoreCase)){$rootText=$rootText.Substring(4)}
+    $root=[IO.Path]::GetFullPath($rootText).TrimEnd('\')
+    $manifestPath=Join-Path $root 'steamapps\workshop\appworkshop_730.acf'
+    $contentRoot=Join-Path $root 'steamapps\workshop\content\730'
+    $snapshot=[ordered]@{LibraryRoot=$root;ManifestPath=$manifestPath;ContentRoot=$contentRoot;ManifestHash=$null;Installed=@{};Trusted=$false;Reason='Workshop manifest is unavailable.'}
+    if(-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)){
+        if(Test-Path -LiteralPath $contentRoot -PathType Container){$snapshot.Reason='Workshop content exists but the Steam manifest is missing.'}
+        return [pscustomobject]$snapshot
+    }
+    try{
+        $file=Get-Item -LiteralPath $manifestPath -ErrorAction Stop
+        if($file.Length -lt 1 -or $file.Length -gt 8388608){throw 'manifest size is outside the allowed range'}
+        $bytes=[IO.File]::ReadAllBytes($manifestPath)
+        $sha=[Security.Cryptography.SHA256]::Create()
+        try{$hash=([BitConverter]::ToString($sha.ComputeHash($bytes))).Replace('-','').ToLowerInvariant()}finally{$sha.Dispose()}
+        $text=[Text.Encoding]::UTF8.GetString($bytes)
+        if($text.Length -gt 0 -and [int]$text[0] -eq 0xFEFF){$text=$text.Substring(1)}
+        $parsed=ConvertFrom-CafeSteamVdfText -Text $text
+        if(-not $parsed.ContainsKey('AppWorkshop') -or $parsed.AppWorkshop -isnot [hashtable]){throw 'AppWorkshop section is missing or malformed'}
+        $app=$parsed.AppWorkshop
+        if([string]$app.appid -cne '730'){throw 'manifest appid is not CS2 (730)'}
+        foreach($flag in @('NeedsDownload','NeedsUpdate')){
+            $flagValue=0
+            if(-not $app.ContainsKey($flag) -or -not [int]::TryParse([string]$app[$flag],[ref]$flagValue)){
+                throw ('manifest '+$flag+' state is missing or invalid')
+            }
+            if($flagValue -ne 0){throw ('Steam reports Workshop '+$(if($flag -eq 'NeedsDownload'){'downloads'}else{'updates'})+' are pending')}
+        }
+        foreach($relative in @('steamapps\downloading\730','steamapps\workshop\downloads\730','steamapps\workshop\temp\730')){
+            $pendingPath=Join-Path $root $relative
+            if(Test-Path -LiteralPath $pendingPath -PathType Container){
+                try{$pendingItems=@(Get-ChildItem -LiteralPath $pendingPath -Force -ErrorAction Stop)}catch{throw 'Steam download state could not be checked safely'}
+                if($pendingItems.Count){throw 'Steam Workshop/game downloads appear to be in progress'}
+            }
+        }
+        if(-not $app.ContainsKey('WorkshopItemsInstalled') -or $app.WorkshopItemsInstalled -isnot [hashtable]){throw 'WorkshopItemsInstalled section is missing or malformed'}
+        $installed=@{}
+        foreach($id in $app.WorkshopItemsInstalled.Keys){
+            $idText=[string]$id
+            [UInt64]$parsedId=0
+            if($idText -notmatch '^\d{1,20}$' -or -not [UInt64]::TryParse($idText,[ref]$parsedId) -or $parsedId -eq 0){throw 'manifest contains an invalid installed Workshop ID'}
+            $item=$app.WorkshopItemsInstalled[$id]
+            if($item -isnot [hashtable]){throw ('installed entry '+$idText+' is malformed')}
+            [long]$size=0
+            if($item.ContainsKey('size') -and [long]::TryParse([string]$item.size,[ref]$size) -and $size -ge 0){$installed[$idText]=$size}
+        }
+        $snapshot.Installed=$installed
+        $snapshot.ManifestHash=$hash
+        $snapshot.Trusted=$true
+        $snapshot.Reason='Steam Workshop manifest was parsed and reports no pending downloads or updates.'
+    }catch{
+        $snapshot.Reason=$_.Exception.Message
+    }
+    return [pscustomobject]$snapshot
+}
+
+function Get-CafeWorkshopDirectorySize {
+    param([Parameter(Mandatory=$true)][string]$Path)
+    $stack=New-Object 'System.Collections.Generic.Stack[string]'
+    $stack.Push($Path)
+    [long]$bytes=0
+    $visited=0
+    while($stack.Count -gt 0){
+        $current=$stack.Pop()
+        try{$children=@(Get-ChildItem -LiteralPath $current -Force -ErrorAction Stop)}catch{return [pscustomobject]@{Safe=$false;Bytes=$null;Reason='Item files could not be read.'}}
+        foreach($child in $children){
+            $visited++
+            if($visited -gt 50000){return [pscustomobject]@{Safe=$false;Bytes=$null;Reason='Item exceeds the safe scan limit.'}}
+            if(($child.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0){return [pscustomobject]@{Safe=$false;Bytes=$null;Reason='Item contains a reparse point.'}}
+            if($child.PSIsContainer){$stack.Push($child.FullName)}else{
+                try{$bytes+=[long]$child.Length}catch{return [pscustomobject]@{Safe=$false;Bytes=$null;Reason='Item size could not be read.'}}
+            }
+        }
+    }
+    return [pscustomobject]@{Safe=$true;Bytes=$bytes;Reason=$null}
+}
+
+function Get-CafeWorkshopCleanupSnapshot {
+    param([Parameter(Mandatory=$true)][string[]]$LibraryRoots,[Parameter(Mandatory=$true)][string]$ActiveAccountID,
+        [Parameter(Mandatory=$true)][AllowEmptyCollection()][string[]]$SubscribedWorkshopIDs)
+    [long]$account=0
+    if(-not [long]::TryParse($ActiveAccountID,[ref]$account) -or $account -le 0){throw 'Steam has no verifiable signed-in account. Sign in to Steam, then scan again.'}
+    $snapshots=New-Object 'System.Collections.Generic.List[object]'
+    $subscriptions=New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::Ordinal)
+    foreach($id in $SubscribedWorkshopIDs){
+        [UInt64]$parsedId=0
+        if([string]$id -notmatch '^\d{1,20}$' -or -not [UInt64]::TryParse([string]$id,[ref]$parsedId) -or $parsedId -eq 0){throw 'Steam returned an invalid subscribed Workshop ID.'}
+        [void]$subscriptions.Add([string]$id)
+    }
+    $entries=New-Object 'System.Collections.Generic.List[object]'
+    $seenRoots=New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+    $subscriptionStateComplete=$true
+    foreach($libraryRoot in $LibraryRoots){
+        if([string]::IsNullOrWhiteSpace($libraryRoot)){continue}
+        try{
+            $rootText=$libraryRoot.Replace('/','\').TrimEnd('\')
+            if($rootText.StartsWith('\\?\',[StringComparison]::OrdinalIgnoreCase)){$rootText=$rootText.Substring(4)}
+            $root=[IO.Path]::GetFullPath($rootText).TrimEnd('\')
+        }catch{continue}
+        if(-not $seenRoots.Add($root)){continue}
+        $library=Get-CafeWorkshopManifestSnapshot -LibraryRoot $root -ActiveAccountID $ActiveAccountID
+        $snapshots.Add($library)
+        if(-not $library.Trusted -and ((Test-Path -LiteralPath $library.ManifestPath -PathType Leaf) -or (Test-Path -LiteralPath $library.ContentRoot -PathType Container))){$subscriptionStateComplete=$false}
+        if(-not (Test-Path -LiteralPath $library.ContentRoot -PathType Container)){continue}
+        try{$contentRootInfo=Get-Item -LiteralPath $library.ContentRoot -Force -ErrorAction Stop}catch{continue}
+        if(($contentRootInfo.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0){
+            $entries.Add([pscustomobject]@{WorkshopID='';LibraryRoot=$root;Path=$library.ContentRoot;Bytes=$null;Status='Unknown — content path is a reparse point';CanRemove=$false;Reason='Content root is not a normal directory.'})
+            continue
+        }
+        try{$folders=@(Get-ChildItem -LiteralPath $library.ContentRoot -Directory -Force -ErrorAction Stop)}catch{continue}
+        foreach($folder in $folders){
+            $id=[string]$folder.Name
+            [UInt64]$parsedId=0
+            if($id -notmatch '^\d{1,20}$' -or -not [UInt64]::TryParse($id,[ref]$parsedId) -or $parsedId -eq 0){continue}
+            $full=[IO.Path]::GetFullPath($folder.FullName)
+            $prefix=[IO.Path]::GetFullPath($library.ContentRoot).TrimEnd('\')+[IO.Path]::DirectorySeparatorChar
+            if(-not $full.StartsWith($prefix,[StringComparison]::OrdinalIgnoreCase)){continue}
+            $size=Get-CafeWorkshopDirectorySize -Path $full
+            $trusted=$library.Trusted
+            $subscribed=$subscriptions.Contains($id)
+            $canRemove=$subscriptionStateComplete -and $trusted -and -not $subscribed -and $size.Safe
+            $status=if($subscribed){'Keep — subscribed'}elseif(-not $subscriptionStateComplete){'Unknown — local Workshop state incomplete'}elseif(-not $trusted){'Unknown — local Workshop state unverified'}elseif(-not $size.Safe){'Unknown — unsafe or unreadable item'}else{'Removable — not subscribed to by this account'}
+            $reason=if($subscribed){'Steamworks reports this item subscribed by the active Steam account.'}elseif(-not $subscriptionStateComplete){'At least one library containing CS2 Workshop state has an unavailable or unverified manifest.'}elseif(-not $trusted){$library.Reason}else{$size.Reason}
+            $entries.Add([pscustomobject]@{WorkshopID=$id;LibraryRoot=$root;Path=$full;Bytes=$size.Bytes;Status=$status;IsSubscribed=$subscribed;CanRemove=$canRemove;Reason=$reason})
+        }
+    }
+    foreach($entry in $entries){
+        if($entry.WorkshopID -and $subscriptions.Contains([string]$entry.WorkshopID)){
+            $entry.CanRemove=$false
+            $entry.Status='Keep — subscribed'
+            $entry.Reason='Steamworks reports this item subscribed by the active Steam account.'
+        }elseif(-not $subscriptionStateComplete -and $entry.CanRemove){
+            $entry.CanRemove=$false
+            $entry.Status='Unknown — subscription state incomplete'
+            $entry.Reason='At least one library containing CS2 Workshop state has an unavailable or unverified manifest.'
+        }
+    }
+    $signature=New-Object 'System.Collections.Generic.List[string]'
+    foreach($library in @($snapshots|Sort-Object LibraryRoot)){$signature.Add(([string]$library.LibraryRoot)+'|'+[string]$library.ManifestHash+'|'+[string]$library.Trusted)}
+    $signature.Add('SteamUGCSubscriptions='+(@($subscriptions|Sort-Object) -join ','))
+    $signatureText=$signature -join "`n"
+    $signatureHash=[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($signatureText))
+    return [pscustomobject]@{AccountID=$ActiveAccountID;Libraries=@($snapshots.ToArray());Subscriptions=@($subscriptions|Sort-Object);Entries=@($entries.ToArray());ManifestSignature=$signatureHash;ScannedAt=[DateTime]::UtcNow}
+}
+
+function Get-CafeSteamSubscribedWorkshopIDs {
+    param([Parameter(Mandatory=$true)][string[]]$LibraryRoots,[Parameter(Mandatory=$true)][string]$ActiveAccountID)
+    if(-not ('CafeSteamWorkshopNative' -as [type])){
+        Add-Type -TypeDefinition @'
+using System;
+using System.Text;
+using System.Runtime.InteropServices;
+public static class CafeSteamWorkshopNative {
+    [DllImport("kernel32.dll", SetLastError=true, CharSet=CharSet.Unicode)] public static extern bool SetDllDirectory(string path);
+    [DllImport("kernel32.dll", SetLastError=true, CharSet=CharSet.Unicode)] public static extern uint GetDllDirectory(uint size, StringBuilder path);
+    [DllImport("steam_api64.dll", CallingConvention=CallingConvention.Cdecl, ExactSpelling=true)] public static extern int SteamAPI_InitFlat(IntPtr errorMessage);
+    [DllImport("steam_api64.dll", CallingConvention=CallingConvention.Cdecl, ExactSpelling=true)] public static extern void SteamAPI_Shutdown();
+    [DllImport("steam_api64.dll", CallingConvention=CallingConvention.Cdecl, ExactSpelling=true)] public static extern int SteamAPI_GetHSteamUser();
+    [DllImport("steam_api64.dll", CallingConvention=CallingConvention.Cdecl, ExactSpelling=true, CharSet=CharSet.Ansi)] public static extern IntPtr SteamInternal_FindOrCreateUserInterface(int user, string version);
+    [DllImport("steam_api64.dll", CallingConvention=CallingConvention.Cdecl, ExactSpelling=true)] public static extern uint SteamAPI_ISteamUGC_GetNumSubscribedItems(IntPtr ugc, [MarshalAs(UnmanagedType.I1)] bool includeLocallyDisabled);
+    [DllImport("steam_api64.dll", CallingConvention=CallingConvention.Cdecl, ExactSpelling=true)] public static extern uint SteamAPI_ISteamUGC_GetSubscribedItems(IntPtr ugc, [Out] ulong[] ids, uint maxEntries, [MarshalAs(UnmanagedType.I1)] bool includeLocallyDisabled);
+}
+'@
+    }
+    $active=Get-CafeActiveSteamVideoFile
+    if([string]$active.AccountID -cne $ActiveAccountID){throw 'The active Steam account changed before the Workshop subscription scan.'}
+    $dllPaths=New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+    foreach($root in $LibraryRoots){
+        $install=Get-CS2InstallFromManifest -LibraryRoot $root
+        if(-not $install){continue}
+        $path=Join-Path $install.InstallRoot 'game\bin\win64\steam_api64.dll'
+        if(Test-Path -LiteralPath $path -PathType Leaf){[void]$dllPaths.Add([IO.Path]::GetFullPath($path))}
+    }
+    if($dllPaths.Count -ne 1){throw 'Could not identify one installed CS2 Steamworks API library for reading the signed-in account subscriptions.'}
+    $dllPath=@($dllPaths)[0]
+    $previousDirectory=New-Object System.Text.StringBuilder 1024
+    $previousLength=[CafeSteamWorkshopNative]::GetDllDirectory([uint32]$previousDirectory.Capacity,$previousDirectory)
+    if($previousLength -ge $previousDirectory.Capacity){throw 'Could not safely preserve the current DLL search directory.'}
+    $restoreDirectory=if($previousLength -gt 0){$previousDirectory.ToString()}else{$null}
+    $oldAppId=$env:SteamAppId;$oldGameId=$env:SteamGameId
+    $initialized=$false
+    try{
+        if(-not [CafeSteamWorkshopNative]::SetDllDirectory((Split-Path -Parent $dllPath))){throw 'Could not load the installed CS2 Steamworks API safely.'}
+        $env:SteamAppId='730';$env:SteamGameId='730'
+        $errorBuffer=[Runtime.InteropServices.Marshal]::AllocHGlobal(1024)
+        try{
+            for($i=0;$i -lt 1024;$i++){[Runtime.InteropServices.Marshal]::WriteByte($errorBuffer,$i,0)}
+            $initResult=[CafeSteamWorkshopNative]::SteamAPI_InitFlat($errorBuffer)
+            $nativeMessage=[Runtime.InteropServices.Marshal]::PtrToStringAnsi($errorBuffer)
+        }finally{[Runtime.InteropServices.Marshal]::FreeHGlobal($errorBuffer)}
+        if($initResult -ne 0){throw ('Steam could not provide the signed-in account Workshop list'+$(if($nativeMessage){': '+$nativeMessage}else{'.'}))}
+        $initialized=$true
+        $user=[CafeSteamWorkshopNative]::SteamAPI_GetHSteamUser()
+        if($user -le 0){throw 'Steamworks did not return a signed-in Steam user handle.'}
+        $ugc=[IntPtr]::Zero
+        foreach($version in 21..14){
+            $candidate=[CafeSteamWorkshopNative]::SteamInternal_FindOrCreateUserInterface($user,('STEAMUGC_INTERFACE_VERSION{0:d3}' -f $version))
+            if($candidate -ne [IntPtr]::Zero){$ugc=$candidate;break}
+        }
+        if($ugc -eq [IntPtr]::Zero){throw 'The installed Steamworks runtime does not expose a compatible Workshop interface.'}
+        $count=[CafeSteamWorkshopNative]::SteamAPI_ISteamUGC_GetNumSubscribedItems($ugc,$true)
+        if($count -gt 200000){throw 'Steam returned an unexpected number of subscribed Workshop items.'}
+        $ids=New-Object 'UInt64[]' ([int]$count)
+        $returned=[CafeSteamWorkshopNative]::SteamAPI_ISteamUGC_GetSubscribedItems($ugc,$ids,$count,$true)
+        if($returned -ne $count){throw 'Steam subscription data changed while it was being read; scan again.'}
+        $after=Get-CafeActiveSteamVideoFile
+        if([string]$after.AccountID -cne $ActiveAccountID){throw 'The active Steam account changed during the Workshop subscription scan.'}
+        return @($ids|ForEach-Object{([UInt64]$_).ToString([Globalization.CultureInfo]::InvariantCulture)}|Sort-Object -Unique)
+    }finally{
+        if($initialized){[CafeSteamWorkshopNative]::SteamAPI_Shutdown()}
+        if($null -eq $oldAppId){Remove-Item Env:SteamAppId -ErrorAction SilentlyContinue}else{$env:SteamAppId=$oldAppId}
+        if($null -eq $oldGameId){Remove-Item Env:SteamGameId -ErrorAction SilentlyContinue}else{$env:SteamGameId=$oldGameId}
+        [void][CafeSteamWorkshopNative]::SetDllDirectory($restoreDirectory)
+    }
+}
+
+function ConvertFrom-CafeWorkshopPublishedDetails {
+    param([Parameter(Mandatory=$true)]$Response,[Parameter(Mandatory=$true)][string[]]$WorkshopIDs)
+    $wanted=New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::Ordinal)
+    foreach($id in $WorkshopIDs){[void]$wanted.Add([string]$id)}
+    $details=@{}
+    foreach($item in @($Response.response.publishedfiledetails)){
+        $id=[string]$item.publishedfileid
+        if(-not $wanted.Contains($id) -or [string]$item.consumer_appid -cne '730'){continue}
+        $title=[Net.WebUtility]::HtmlDecode([string]$item.title)
+        if([string]::IsNullOrWhiteSpace($title)){$title='Workshop item '+$id}
+        $description=[Net.WebUtility]::HtmlDecode([string]$item.description)
+        $description=$description -replace '(?is)<[^>]*>',' ' -replace '\[/?[A-Za-z]+(?:=[^\]]*)?\]',' '
+        $description=[regex]::Replace($description,'\s+',' ').Trim()
+        if($description.Length -gt 1200){$description=$description.Substring(0,1197)+'...'}
+        $details[$id]=[pscustomobject]@{Title=$title;Description=$description}
+    }
+    return ,$details
+}
+
+function Get-CafeWorkshopPublishedDetails {
+    param([Parameter(Mandatory=$true)][AllowEmptyCollection()][string[]]$WorkshopIDs)
+    $ids=@($WorkshopIDs|Where-Object{$_ -match '^\d{1,20}$'}|Sort-Object -Unique)
+    if(-not $ids.Count){return @{}}
+    $allDetails=@{}
+    for($offset=0;$offset -lt $ids.Count;$offset+=100){
+        $end=[Math]::Min($offset+99,$ids.Count-1)
+        $batch=@($ids[$offset..$end])
+        $pairs=New-Object 'System.Collections.Generic.List[string]'
+        $pairs.Add('itemcount='+[uri]::EscapeDataString([string]$batch.Count))
+        for($i=0;$i -lt $batch.Count;$i++){$pairs.Add('publishedfileids['+$i+']='+[uri]::EscapeDataString([string]$batch[$i]))}
+        try{
+            $response=Invoke-RestMethod -Uri 'https://api.steampowered.com/ISteamRemoteStorage/GetPublishedFileDetails/v1/' -Method Post -ContentType 'application/x-www-form-urlencoded' -Body ($pairs -join '&') -TimeoutSec 8 -ErrorAction Stop
+            $batchDetails=ConvertFrom-CafeWorkshopPublishedDetails -Response $response -WorkshopIDs $batch
+            foreach($id in $batchDetails.Keys){$allDetails[$id]=$batchDetails[$id]}
+        }catch{
+            Write-Log ('Steam Workshop names and descriptions were unavailable for one metadata batch: '+$_.Exception.Message) 'WARN'
+        }
+    }
+    return ,$allDetails
+}
+
+function Get-CafeWorkshopSelectionEntries {
+    param([Parameter(Mandatory=$true)][object[]]$Entries,[switch]$OnlyUnsubscribed)
+    if($OnlyUnsubscribed){return @($Entries|Where-Object{$_.CanRemove -and -not $_.IsSubscribed})}
+    return @($Entries|Where-Object{$_.CanRemove})
+}
+
+function Get-CafeActiveWorkshopContext {
+    $active=Get-CafeActiveSteamVideoFile
+    $steamProcesses=@(Get-Process -Name 'steam' -ErrorAction SilentlyContinue | Where-Object {$_.Path -and (Test-Path -LiteralPath $_.Path -PathType Leaf)})
+    if($steamProcesses.Count -ne 1){throw 'Could not identify exactly one running Steam client. Keep Steam open and retry.'}
+    $libraryRoots=@(Get-SteamLibraryRoots)
+    $subscriptions=@(Get-CafeSteamSubscribedWorkshopIDs -LibraryRoots $libraryRoots -ActiveAccountID ([string]$active.AccountID))
+    return [pscustomobject]@{AccountID=[string]$active.AccountID;SteamRoot=[string]$active.SteamRoot;LibraryRoots=$libraryRoots;SubscriptionIDs=$subscriptions}
+}
+
+function Remove-CafeWorkshopItems {
+    param([Parameter(Mandatory=$true)]$Preview,[Parameter(Mandatory=$true)]$FreshSnapshot,
+        [Parameter(Mandatory=$true)][object[]]$SelectedEntries,[switch]$Confirmed)
+    if(-not $Confirmed){throw 'Workshop removal requires an explicit confirmation.'}
+    if($Preview.AccountID -cne $FreshSnapshot.AccountID){throw 'The active Steam account changed after the scan. Nothing was removed; scan again.'}
+    if($Preview.ManifestSignature -cne $FreshSnapshot.ManifestSignature){throw 'Steam Workshop subscription data changed after the scan. Nothing was removed; scan again.'}
+    if(@(Get-Process -Name 'cs2' -ErrorAction SilentlyContinue).Count){throw 'Close CS2 before removing Workshop files.'}
+    $results=New-Object 'System.Collections.Generic.List[object]'
+    $seenPaths=New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+    foreach($selection in $SelectedEntries){
+        $id=[string]$selection.WorkshopID
+        $selectedPath=[string]$selection.Path
+        if(-not $seenPaths.Add($selectedPath)){continue}
+        $previewEntry=@($Preview.Entries|Where-Object{$_.WorkshopID -ceq $id -and $_.CanRemove -and [string]::Equals([string]$_.Path,$selectedPath,[StringComparison]::OrdinalIgnoreCase)})|Select-Object -First 1
+        $freshEntry=@($FreshSnapshot.Entries|Where-Object{$_.WorkshopID -ceq $id -and $_.CanRemove -and [string]::Equals([string]$_.Path,$selectedPath,[StringComparison]::OrdinalIgnoreCase)})|Select-Object -First 1
+        if(-not $previewEntry -or -not $freshEntry){throw ('Workshop item '+$id+' is no longer a safe cleanup candidate. Nothing further was removed.')}
+        $path=[IO.Path]::GetFullPath([string]$freshEntry.Path)
+        $base=[IO.Path]::GetFullPath((Join-Path $freshEntry.LibraryRoot 'steamapps\workshop\content\730')).TrimEnd('\')+[IO.Path]::DirectorySeparatorChar
+        if(-not $path.StartsWith($base,[StringComparison]::OrdinalIgnoreCase) -or (Split-Path -Leaf $path) -cne $id){throw ('Refusing to remove a path outside the expected CS2 Workshop item directory: '+$id)}
+        $item=Get-Item -LiteralPath $path -Force -ErrorAction Stop
+        if(-not $item.PSIsContainer -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0){throw ('Workshop item is no longer a safe normal directory: '+$id)}
+        $check=Get-CafeWorkshopDirectorySize -Path $path
+        if(-not $check.Safe){throw ('Workshop item became unsafe after the preview: '+$id+' ('+$check.Reason+')')}
+        try{
+            Remove-Item -LiteralPath $path -Recurse -Force -ErrorAction Stop
+            $results.Add([pscustomobject]@{WorkshopID=$id;Status='Removed';Bytes=[long]$freshEntry.Bytes;Path=$path})
+            Write-Log ('Workshop cleanup removed item '+$id+' from '+$freshEntry.LibraryRoot)
+        }catch{
+            $results.Add([pscustomobject]@{WorkshopID=$id;Status='Failed';Bytes=0L;Path=$path;Error=$_.Exception.Message})
+            Write-Log ('Workshop cleanup failed for item '+$id+': '+$_.Exception.Message) 'ERROR'
+        }
+    }
+    return $results.ToArray()
+}
+
+function Show-CafeWorkshopCleanupDialog {
+    $dialog=New-Object System.Windows.Forms.Form
+    $dialog.Text='CS2 Workshop Cleanup - CafeLauncher'
+    $dialog.ClientSize=[System.Drawing.Size]::new(1040,650)
+    $dialog.MinimumSize=[System.Drawing.Size]::new(900,540)
+    $dialog.StartPosition='CenterParent'
+    $dialog.BackColor=$BG
+    $dialog.ForeColor=$WHITE
+    $dialog.Font=New-Object System.Drawing.Font('Segoe UI',9)
+    $intro=New-CafeLabel -Text 'Subscriptions come from the signed-in Steam account. Select only safe local items that account is not subscribed to.' -FontSize 9
+    $intro.Location=[System.Drawing.Point]::new(14,12);$intro.Size=[System.Drawing.Size]::new(1000,38);$intro.Anchor='Top,Left,Right'
+    $dialog.Controls.Add($intro)
+    $status=New-CafeLabel -Text 'Scan requires Steam to be running and signed in.' -FontSize 9
+    $status.Location=[System.Drawing.Point]::new(14,51);$status.Size=[System.Drawing.Size]::new(1000,28);$status.Anchor='Top,Left,Right'
+    $dialog.Controls.Add($status)
+    $list=New-Object System.Windows.Forms.ListView
+    $list.Location=[System.Drawing.Point]::new(14,84);$list.Size=[System.Drawing.Size]::new(1000,475);$list.Anchor='Top,Bottom,Left,Right'
+    $list.View='Details';$list.CheckBoxes=$true;$list.FullRowSelect=$true;$list.GridLines=$true;$list.ShowItemToolTips=$true
+    $list.BackColor=$PANEL;$list.ForeColor=$WHITE
+    [void]$list.Columns.Add('Workshop name',220)
+    [void]$list.Columns.Add('Workshop ID',115)
+    [void]$list.Columns.Add('Estimated size',110)
+    [void]$list.Columns.Add('Status',250)
+    [void]$list.Columns.Add('Description',300)
+    $dialog.Controls.Add($list)
+    $scanButton=New-Object System.Windows.Forms.Button;$scanButton.Text='Scan again';$scanButton.Location=[System.Drawing.Point]::new(14,585);$scanButton.Size=[System.Drawing.Size]::new(120,38);Style-CafeButton -Button $scanButton;$scanButton.Anchor='Bottom,Left';$dialog.Controls.Add($scanButton)
+    $selectAllButton=New-Object System.Windows.Forms.Button;$selectAllButton.Text='Select all';$selectAllButton.Location=[System.Drawing.Point]::new(145,585);$selectAllButton.Size=[System.Drawing.Size]::new(130,38);Style-CafeButton -Button $selectAllButton;$selectAllButton.Anchor='Bottom,Left';$dialog.Controls.Add($selectAllButton)
+    $selectUnsubscribedButton=New-Object System.Windows.Forms.Button;$selectUnsubscribedButton.Text='Select unsubscribed';$selectUnsubscribedButton.Location=[System.Drawing.Point]::new(286,585);$selectUnsubscribedButton.Size=[System.Drawing.Size]::new(190,38);Style-CafeButton -Button $selectUnsubscribedButton;$selectUnsubscribedButton.Anchor='Bottom,Left';$dialog.Controls.Add($selectUnsubscribedButton)
+    $removeButton=New-Object System.Windows.Forms.Button;$removeButton.Text='Remove selected';$removeButton.Location=[System.Drawing.Point]::new(685,585);$removeButton.Size=[System.Drawing.Size]::new(160,38);Style-CafeButton -Button $removeButton;$removeButton.BackColor=[System.Drawing.Color]::FromArgb(150,62,62);$removeButton.Anchor='Bottom,Right';$dialog.Controls.Add($removeButton)
+    $closeButton=New-Object System.Windows.Forms.Button;$closeButton.Text='Close';$closeButton.Location=[System.Drawing.Point]::new(865,585);$closeButton.Size=[System.Drawing.Size]::new(149,38);Style-CafeButton -Button $closeButton;$closeButton.Anchor='Bottom,Right';$closeButton.Add_Click({$dialog.Close()}.GetNewClosure());$dialog.Controls.Add($closeButton)
+    $state=[pscustomobject]@{Snapshot=$null}
+    $list.Add_ItemCheck({param($sender,$eventArgs)
+        if($eventArgs.Index -ge 0 -and $eventArgs.Index -lt $sender.Items.Count -and -not $sender.Items[$eventArgs.Index].Tag.CanRemove){$eventArgs.NewValue=$eventArgs.CurrentValue}
+    }.GetNewClosure())
+    $selectAllButton.Add_Click({
+        foreach($item in $list.Items){$item.Checked=($item.Tag.CanRemove -eq $true)}
+    }.GetNewClosure())
+    $selectUnsubscribedButton.Add_Click({
+        foreach($item in $list.Items){$item.Checked=($item.Tag.CanRemove -eq $true -and -not $item.Tag.IsSubscribed)}
+    }.GetNewClosure())
+    $scanAction={
+        $scanButton.Enabled=$false;$removeButton.Enabled=$false;$status.Text='Scanning Steam Workshop manifests and local CS2 content...'
+        try{
+            $context=Get-CafeActiveWorkshopContext
+            $scan=Get-CafeWorkshopCleanupSnapshot -LibraryRoots $context.LibraryRoots -ActiveAccountID $context.AccountID -SubscribedWorkshopIDs $context.SubscriptionIDs
+            $metadata=Get-CafeWorkshopPublishedDetails -WorkshopIDs @($scan.Entries|Where-Object{$_.WorkshopID}|ForEach-Object{$_.WorkshopID}|Sort-Object -Unique)
+            $state.Snapshot=$scan
+            $list.BeginUpdate();$list.Items.Clear()
+            foreach($entry in $scan.Entries){
+                $sizeText=if($null -eq $entry.Bytes){'Unknown'}else{('{0:N1} MB' -f ([double]$entry.Bytes/1MB))}
+                $details=$metadata[[string]$entry.WorkshopID]
+                $title=if($details){[string]$details.Title}else{'Workshop item '+[string]$entry.WorkshopID}
+                $description=if($details){[string]$details.Description}else{'Description unavailable'}
+                $item=New-Object System.Windows.Forms.ListViewItem($title)
+                [void]$item.SubItems.Add([string]$entry.WorkshopID);[void]$item.SubItems.Add($sizeText);[void]$item.SubItems.Add([string]$entry.Status);[void]$item.SubItems.Add($description);$item.Tag=$entry
+                $item.ToolTipText=$title+' ('+[string]$entry.WorkshopID+')'+[Environment]::NewLine+$description
+                if($entry.CanRemove){$item.ForeColor=$WHITE}else{$item.ForeColor=$MUTED}
+                [void]$list.Items.Add($item)
+            }
+            $list.EndUpdate()
+            $candidateCount=@($scan.Entries|Where-Object{$_.CanRemove}).Count
+            $keepCount=@($scan.Entries|Where-Object{$_.Status -like 'Keep*'}).Count
+            $unknownCount=@($scan.Entries|Where-Object{$_.Status -like 'Unknown*'}).Count
+            $status.Text=('Account verified for this scan. '+$keepCount+' subscribed item(s) protected; '+$candidateCount+' removable; '+$unknownCount+' unknown/protected.')
+            $removeButton.Enabled=($candidateCount -gt 0)
+            Write-Log ('Workshop cleanup scan completed: keep='+$keepCount+'; candidates='+$candidateCount+'; protected/unknown='+$unknownCount)
+        }catch{
+            $state.Snapshot=$null;$list.Items.Clear();$status.Text='Scan unavailable: '+$_.Exception.Message
+            Write-Log ('Workshop cleanup scan refused: '+$_.Exception.Message) 'WARN'
+        }finally{$scanButton.Enabled=$true}
+    }.GetNewClosure()
+    $scanButton.Add_Click({& $scanAction}.GetNewClosure())
+    $removeButton.Add_Click({
+        if(-not $state.Snapshot){[void][System.Windows.Forms.MessageBox]::Show('Scan first; no verified preview is available.','Workshop Cleanup','OK','Warning');return}
+        $selected=@($list.CheckedItems|ForEach-Object{$_.Tag}|Where-Object{$_.CanRemove})
+        if(-not $selected.Count){[void][System.Windows.Forms.MessageBox]::Show('Select one or more removable Workshop items first.','Workshop Cleanup','OK','Information');return}
+        $ids=@($selected|ForEach-Object{$_.WorkshopID}|Sort-Object -Unique)
+        [long]$total=0;foreach($entry in $selected){if($null -ne $entry.Bytes){$total+=[long]$entry.Bytes}}
+        $idSummary=($ids|Select-Object -First 12) -join ', '
+        if($ids.Count -gt 12){$idSummary+=' ...'}
+        $message='Permanently remove '+$selected.Count+' selected local CS2 Workshop folder(s)?'+[Environment]::NewLine+[Environment]::NewLine+'IDs: '+$idSummary+[Environment]::NewLine+'Estimated space: '+('{0:N1} MB' -f ([double]$total/1MB))+[Environment]::NewLine+[Environment]::NewLine+'Steam subscriptions and other files will not be changed.'
+        $answer=[System.Windows.Forms.MessageBox]::Show($message,'Confirm Workshop Cleanup','YesNo','Warning')
+        if($answer -ne [System.Windows.Forms.DialogResult]::Yes){return}
+        $removeButton.Enabled=$false
+        try{
+            $context=Get-CafeActiveWorkshopContext
+            $fresh=Get-CafeWorkshopCleanupSnapshot -LibraryRoots $context.LibraryRoots -ActiveAccountID $context.AccountID -SubscribedWorkshopIDs $context.SubscriptionIDs
+            $result=@(Remove-CafeWorkshopItems -Preview $state.Snapshot -FreshSnapshot $fresh -SelectedEntries $selected -Confirmed)
+            $removed=@($result|Where-Object{$_.Status -eq 'Removed'}).Count
+            $failed=@($result|Where-Object{$_.Status -eq 'Failed'}).Count
+            [void][System.Windows.Forms.MessageBox]::Show(('Removed '+$removed+' item(s); '+$failed+' failed. Estimated space freed: '+('{0:N1} MB' -f ([double](($result|Where-Object{$_.Status -eq 'Removed'}|Measure-Object -Property Bytes -Sum).Sum)/1MB))+'.'),'Workshop Cleanup','OK',$(if($failed){'Warning'}else{'Information'}))
+            & $scanAction
+        }catch{
+            Write-Log ('Workshop cleanup stopped safely: '+$_.Exception.Message) 'WARN'
+            [void][System.Windows.Forms.MessageBox]::Show($_.Exception.Message,'Workshop Cleanup','OK','Warning')
+            & $scanAction
+        }
+    }.GetNewClosure())
+    & $scanAction
+    [void]$dialog.ShowDialog($form)
+    $dialog.Dispose()
 }
 
 function ConvertFrom-CafeCS2VideoText {
@@ -3335,7 +3830,7 @@ function Get-ProfileGraphicsVersion {
 function Import-ProfileValues {
     param([string]$ProfileName, $SavedProfile, [string]$SourceLabel = 'local')
     if (-not $script:GamingProfiles.Contains($ProfileName) -or -not $SavedProfile) { return }
-    foreach ($setting in @('PointerSpeed','LogitechDPI','DisableAcceleration','ApplyNvidia','Width','Height','RefreshHz','Vibrance','Hue','ScalingMode','CS2Sensitivity','CfgDownloadUrl','LaunchApps')) {
+    foreach ($setting in @('PointerSpeed','LogitechDPI','DisableAcceleration','ApplyNvidia','Width','Height','RefreshHz','Vibrance','Hue','ScalingMode','CS2Sensitivity','VoicePushToTalkKey','CfgDownloadUrl','LaunchApps')) {
         $saved = $SavedProfile.PSObject.Properties[$setting]
         if (-not $saved) { continue }
         $value = $saved.Value
@@ -3349,6 +3844,10 @@ function Import-ProfileValues {
                 'ScalingMode'  { $value=[int]$value; if ($value -notin @(2,3,5)) { throw 'unsupported NVIDIA scaling mode' } }
                 'Vibrance'     { $value=[int]$value; if ($value -lt 0 -or $value -gt 100) { throw 'range' } }
                 'Hue'           { $value=[int]$value; if ($value -lt -1 -or $value -gt 359) { throw 'range' } }
+                'VoicePushToTalkKey' {
+                    $value=[string]$value
+                    if($value -and $value -notmatch '^(?:[A-Z]|[0-9]|F(?:[1-9]|1[0-2])|MOUSE[1-5]|CAPSLOCK|ALT|SHIFT|CTRL|SPACE|TAB)$'){throw 'invalid voice key'}
+                }
                 'CS2Sensitivity' {
                     $value=[string]$value
                     if ($value -and $value -notmatch '^(?:[0-9]+(?:\.[0-9]+)?)$') { throw 'invalid sensitivity' }
@@ -3414,7 +3913,7 @@ function Export-ProfileValues {
         PointerSpeed=[int]$p.PointerSpeed; LogitechDPI=[int]$p.LogitechDPI; DisableAcceleration=[bool]$p.DisableAcceleration
         ApplyNvidia=[bool]$p.ApplyNvidia; Width=[int]$p.Width; Height=[int]$p.Height
         RefreshHz=[int]$p.RefreshHz; Vibrance=[int]$p.Vibrance; Hue=[int]$p.Hue; ScalingMode=[int]$p.ScalingMode
-        CS2Sensitivity=[string]$p.CS2Sensitivity; CfgDownloadUrl=[string]$p.CfgDownloadUrl
+        CS2Sensitivity=[string]$p.CS2Sensitivity; VoicePushToTalkKey=$(if($p.Contains('VoicePushToTalkKey')){[string]$p['VoicePushToTalkKey']}else{''}); CfgDownloadUrl=[string]$p.CfgDownloadUrl
         LaunchApps=[bool]$p.LaunchApps
     }
     # Preserve the dictionary as ONE pipeline object on Windows PowerShell 5.1.
@@ -3556,7 +4055,7 @@ function Refresh-ProfileFromGitHub {
         if($verifiedState -and $latestCommit -cne $verifiedState.CommitSha){
             $commitOrder=Compare-GitHubCommitOrder -Repo $script:GithubRepo -BaseSha $verifiedState.CommitSha -HeadSha $latestCommit
             if($commitOrder -eq 'behind'){
-                Write-Log "$ProfileName profile refresh: decision=ignore-stale-ancestor; repo=$script:GithubRepo; branch=$script:GithubBranch; path=$path; latestCommit=$latestCommit; verifiedCommit=$($verifiedState.CommitSha); comparison=$commitOrder; pointer=$priorPointer. Keeping verified settings." 'WARN'
+                Write-Log "$ProfileName profile refresh: settings are already verified. GitHub returned an older file-history commit, so they were kept unchanged (pointer=$priorPointer). No action needed. decision=ignore-stale-ancestor; repo=$script:GithubRepo; branch=$script:GithubBranch; path=$path; latestCommit=$latestCommit; verifiedCommit=$($verifiedState.CommitSha); comparison=$commitOrder." 'INFO'
                 return 'VerifiedGitHub'
             }
             if($commitOrder -eq 'diverged'){
@@ -4062,6 +4561,35 @@ function Get-GitHubSyncAuthorization {
     }finally{$chooser.Dispose()}
 }
 
+function Get-CafeVoiceBindingFromCfg {
+    param([string]$Content)
+    $matches=[regex]::Matches($Content,'(?im)^[ \t]*bind[ \t]+"?(?<key>[A-Z0-9_]+)"?[ \t]+"?\+voicerecord"?[ \t]*(?://[^\r\n]*)?(?=\r?$)')
+    if($matches.Count -gt 1){throw 'Multiple voice binds in CFG. Resolve manually.'}
+    if($matches.Count -eq 0){return ''}
+    return [string]$matches[0].Groups['key'].Value.ToUpperInvariant()
+}
+function Set-CafeVoiceBindingInCfg {
+    param([string]$Content,[string]$Key)
+    $key=$Key.Trim().ToUpperInvariant()
+    if($key -notmatch '^(?:[A-Z]|[0-9]|F(?:[1-9]|1[0-2])|MOUSE[1-5]|CAPSLOCK|ALT|SHIFT|CTRL|SPACE|TAB)$'){throw 'Unsupported voice key.'}
+    $old=Get-CafeVoiceBindingFromCfg -Content $Content
+    if($old -ceq $key){return $Content}
+    $collision=[regex]::Matches($Content,'(?im)^[ \t]*bind[ \t]+"?'+[regex]::Escape($key)+'"?[ \t]+(?:"[^"\r\n]*"|[^\r\n]+)(?=\r?$)')
+    if($collision.Count){throw ('New voice key '+$key+' is already bound in CFG. Choose another key.')}
+    $rx='(?im)^[ \t]*bind[ \t]+"?[A-Z0-9_]+"?[ \t]+"?\+voicerecord"?[ \t]*(?://[^\r\n]*)?(?=\r?$)'
+    $line='bind "'+$key+'" "+voicerecord"'
+    if($old){$m=[regex]::Match($Content,$rx);return $Content.Substring(0,$m.Index)+$line+$Content.Substring($m.Index+$m.Length)}
+    $nl=if($Content.Contains(([string][char]13+[string][char]10))){[string][char]13+[string][char]10}else{[string][char]10}
+    return $Content+$(if($Content.EndsWith([string][char]10)){''}else{$nl})+$line+$nl
+}
+function Get-CafeGitHubVoiceBinding {
+    param([string]$CfgName)
+    $url="https://api.github.com/repos/$($script:GithubRepo)/contents/$CfgName"+'?ref='+[Uri]::EscapeDataString([string]$script:GithubBranch)
+    $remote=Invoke-CafeGitHubRestMethod -Uri $url -Method Get -Headers @{'Accept'='application/vnd.github+json';'User-Agent'='CafeLauncher-VoiceBinding'} -TimeoutSec 12 -MaximumRedirection 0
+    if($remote.type -ne 'file' -or $remote.path -cne $CfgName -or $remote.encoding -ne 'base64' -or [int64]$remote.size -gt 2097152){throw 'Invalid CFG metadata.'}
+    $text=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String(([string]$remote.content -replace '\s','')))
+    return Get-CafeVoiceBindingFromCfg -Content $text
+}
 # Replace the active CS2 sensitivity command without changing binds or comments.
 function Set-CS2CfgSensitivityText {
     param([Parameter(Mandatory=$true)][string]$Content,
@@ -4190,7 +4718,8 @@ function Sync-ProfileToGitHub {
     # Stage a matching CFG update after validating its path, blob metadata, and SHA.
     # Empty sensitivity means "use the CFG's value" and does not edit the CFG.
     $sensValue=[string]$values['CS2Sensitivity']
-    if(-not [string]::IsNullOrWhiteSpace($sensValue) -or ($capturedConvars -and $capturedConvars.Count -gt 0)){
+    $voiceKey=[string]$values['VoicePushToTalkKey']
+    if(-not [string]::IsNullOrWhiteSpace($sensValue) -or $voiceKey -or ($capturedConvars -and $capturedConvars.Count -gt 0)){
         $cfgUri="https://api.github.com/repos/$($script:GithubRepo)/contents/$cfgName"
         $cfgRemote=Invoke-CafeGitHubRestMethod -Uri ($cfgUri+'?ref='+$script:GithubBranch) -Method Get -Headers $headers -TimeoutSec 20 -MaximumRedirection 0
         if($cfgRemote.type -ne 'file' -or $cfgRemote.path -ne $cfgName -or
@@ -4204,9 +4733,10 @@ function Sync-ProfileToGitHub {
         $newCfgText=$cfgText
         if($capturedConvars -and $capturedConvars.Count -gt 0){$newCfgText=Set-CafeCapturedConvarsInCfg -Content $newCfgText -Values $capturedConvars}
         if(-not [string]::IsNullOrWhiteSpace($sensValue)){$newCfgText=Set-CS2CfgSensitivityText -Content $newCfgText -Sensitivity $sensValue}
+        if($voiceKey){$newCfgText=Set-CafeVoiceBindingInCfg -Content $newCfgText -Key $voiceKey}
         if($newCfgText -cne $cfgText){
             $cfgBody=@{
-                message="Sync $cfgName CS2 sensitivity and crosshair from CafeLauncher"
+                message="Sync $cfgName voice, sensitivity and crosshair from CafeLauncher"
                 content=[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($newCfgText))
                 branch=$script:GithubBranch
                 sha=[string]$cfgRemote.sha
@@ -4218,8 +4748,15 @@ function Sync-ProfileToGitHub {
             $cfgResponse=Invoke-CafeGitHubRestMethod -Uri $cfgUri -Method Put -Headers $headers -ContentType 'application/json' -Body ($cfgBody | ConvertTo-Json -Depth 5 -Compress) -TimeoutSec 25 -MaximumRedirection 0
             if(-not $cfgResponse.commit.sha){throw ('CFG write was not confirmed for '+$cfgName)}
             $cfgUploaded=$true
-            $cfgStatus="updated CS2 sensitivity/crosshair"
-            Write-Log ("GitHub CFG sensitivity saved to "+$cfgName+"; commit="+$cfgResponse.commit.sha)
+            if($voiceKey){
+                $voiceReadUrl=$cfgUri+'?ref='+[Uri]::EscapeDataString([string]$script:GithubBranch)+'&fresh='+[guid]::NewGuid().ToString('N')
+                $voiceRead=Invoke-CafeGitHubRestMethod -Uri $voiceReadUrl -Method Get -Headers $headers -TimeoutSec 20 -MaximumRedirection 0
+                if($voiceRead.type -ne 'file' -or $voiceRead.path -cne $cfgName -or $voiceRead.encoding -ne 'base64' -or [int64]$voiceRead.size -gt 2097152){throw 'GitHub voice binding read-back metadata was invalid.'}
+                $voiceText=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String(([string]$voiceRead.content -replace '\s','')))
+                if((Get-CafeVoiceBindingFromCfg -Content $voiceText) -cne $voiceKey){throw 'GitHub did not confirm the requested push-to-talk binding.'}
+            }
+            $cfgStatus="updated selected CS2 voice/sensitivity/crosshair"
+            Write-Log ("GitHub CFG settings saved to "+$cfgName+"; commit="+$cfgResponse.commit.sha)
         }
         $result = Invoke-CafeGitHubRestMethod -Uri $uri -Method Put -Headers $headers -ContentType 'application/json' -Body ($body | ConvertTo-Json -Depth 5 -Compress) -TimeoutSec 25 -MaximumRedirection 0
         if (-not $result.commit.sha) { throw 'GitHub did not return a successful commit.' }
@@ -4596,7 +5133,7 @@ function Show-ProfileEditor {
     $nv.Checked=[bool]$p.ApplyNvidia
     Add-EditorTabWide -Grid $displayGrid -Control $nv -Row 4
 
-    $cs2Grid=New-EditorTabGrid -Page $cs2Page -Rows 19
+    $cs2Grid=New-EditorTabGrid -Page $cs2Page -Rows 20
     $cfgFile=New-Object System.Windows.Forms.TextBox
     $cfgFile.Text=[string]$p.ConfigFile
     $cfgFile.ReadOnly=$true
@@ -4604,87 +5141,135 @@ function Show-ProfileEditor {
     $sens=New-Object System.Windows.Forms.TextBox
     $sens.Text=[string]$p.CS2Sensitivity
     Add-EditorTabField -Grid $cs2Grid -Title 'CS2 sensitivity (sync updates .cfg)' -Control $sens -Column 1 -Row 0
-    $url=New-Object System.Windows.Forms.TextBox
-    $url.Text=[string]$p.CfgDownloadUrl
-    $urlCell=Add-EditorTabField -Grid $cs2Grid -Title 'GitHub .cfg URL (FabMode default: fab.cfg)' -Control $url -Column 0 -Row 1
-    $cs2Grid.SetColumnSpan($urlCell,2)
+    # CFG remains authoritative unless this profile has unsynced local edits.
+    $voiceSelected=[string]$p.VoicePushToTalkKey
+    if(-not $pendingSyncState[$ProfileName]){
+        try{$voiceSelected=Get-CafeGitHubVoiceBinding -CfgName ([string]$p.ConfigFile)}catch{Write-Log ('Voice key lookup unavailable: '+$_.Exception.Message) 'WARN'}
+    }
+    $voiceOptions=@('','V','MOUSE4','MOUSE5','CAPSLOCK','ALT','K','SPACE','SHIFT','CTRL','TAB')+
+        @('A','B','C','D','E','F','G','H','I','J','L','M','N','O','P','Q','R','S','T','U','W','X','Y','Z')+
+        @('0','1','2','3','4','5','6','7','8','9')+
+        @('F1','F2','F3','F4','F5','F6','F7','F8','F9','F10','F11','F12')+
+        @('MOUSE1','MOUSE2','MOUSE3')
+    $voiceLabels=@('(Keep existing CFG binding)')+@($voiceOptions|Select-Object -Skip 1)
+    $voiceBox=New-EditorTabChoice -Grid $cs2Grid -Title 'Push-to-talk key (CFG)' -Column 1 -Row 1 -Labels $voiceLabels -Values $voiceOptions -SelectedValue $voiceSelected
+    $voiceCapture=New-Object System.Windows.Forms.Button
+    $voiceCapture.Text='Press a key to bind voice'
+    $voiceCapture.BackColor=[System.Drawing.Color]::FromArgb(58,67,83)
+    $voiceCapture.ForeColor=$WHITE
+    $voiceCapture.FlatStyle='Flat'
+    [void](Add-EditorTabField -Grid $cs2Grid -Title 'Optional: keyboard / side mouse buttons' -Control $voiceCapture -Column 1 -Row 2)
+    $voiceCapture.Add_Click({
+        $voiceCapture.Text='Press a key (Esc cancels)'
+        [void]$voiceCapture.Focus()
+    }.GetNewClosure())
+    $voiceCapture.Add_KeyDown({
+        param($sender,$eventArgs)
+        $raw=$eventArgs.KeyCode.ToString().ToUpperInvariant()
+        if($raw -eq 'ESCAPE'){$voiceCapture.Text='Press a key to bind voice';return}
+        $candidate=switch -Regex ($raw){
+            '^D([0-9])$' {$Matches[1];break}
+            '^NUMPAD([0-9])$' {$Matches[1];break}
+            '^CAPITAL$' {'CAPSLOCK';break}
+            '^CONTROLKEY$' {'CTRL';break}
+            '^SHIFTKEY$' {'SHIFT';break}
+            '^MENU$' {'ALT';break}
+            default {$raw}
+        }
+        if($voiceOptions -contains $candidate){
+            Set-EditorTabChoiceValue -Choice $voiceBox -Value $candidate
+            $voiceCapture.Text=('Selected '+$candidate)
+            $eventArgs.SuppressKeyPress=$true
+        }else{
+            $voiceCapture.Text='Unsupported key; choose from dropdown'
+        }
+    }.GetNewClosure())
+    $voiceCapture.Add_MouseDown({
+        param($sender,$eventArgs)
+        $candidate=if($eventArgs.Button -eq [System.Windows.Forms.MouseButtons]::XButton1){'MOUSE4'}elseif($eventArgs.Button -eq [System.Windows.Forms.MouseButtons]::XButton2){'MOUSE5'}else{''}
+        if($candidate){
+            Set-EditorTabChoiceValue -Choice $voiceBox -Value $candidate
+            $voiceCapture.Text=('Selected '+$candidate)
+        }
+    }.GetNewClosure())
+
     $apps=New-Object System.Windows.Forms.CheckBox
     $apps.Text='Launch Steam, FACEIT, Spotify, Mouse Options (no G HUB)'
     $apps.Checked=[bool]$p.LaunchApps
-    Add-EditorTabWide -Grid $cs2Grid -Control $apps -Row 2
+    Add-EditorTabWide -Grid $cs2Grid -Control $apps -Row 3
     $cs2Hint=New-Object System.Windows.Forms.Label
     $cs2Hint.Text='Apply Graphics and Play + Exec remain separate actions on the dashboard.'
     $cs2Hint.ForeColor=$MUTED
-    Add-EditorTabWide -Grid $cs2Grid -Control $cs2Hint -Row 3
+    Add-EditorTabWide -Grid $cs2Grid -Control $cs2Hint -Row 4
 
     $graphicsHint=New-Object System.Windows.Forms.Label
     $graphicsHint.Text='CS2 video settings: highest supported refresh is recommended; stretch mode uses NVIDIA scaling.'
     $graphicsHint.ForeColor=$MUTED
-    Add-EditorTabWide -Grid $cs2Grid -Control $graphicsHint -Row 4
+    Add-EditorTabWide -Grid $cs2Grid -Control $graphicsHint -Row 5
     $gs=$graphicsPreset.Settings
     $copyOptions=@($script:GamingProfiles.Keys|Where-Object{$_ -cne $ProfileName})
-    $copyFromChoice=New-EditorTabChoice -Grid $cs2Grid -Title 'Copy CS2 graphics from profile' -Column 0 -Row 5 -Labels $copyOptions -Values $copyOptions -SelectedValue $copyOptions[0]
+    $copyFromChoice=New-EditorTabChoice -Grid $cs2Grid -Title 'Copy CS2 graphics from profile' -Column 0 -Row 6 -Labels $copyOptions -Values $copyOptions -SelectedValue $copyOptions[0]
     $copyGraphics=New-Object System.Windows.Forms.Button
     $copyGraphics.Text='Copy graphics'
     $copyGraphics.BackColor=[System.Drawing.Color]::FromArgb(58,67,83)
     $copyGraphics.ForeColor=$WHITE
     $copyGraphics.FlatStyle='Flat'
-    [void](Add-EditorTabField -Grid $cs2Grid -Title 'Copy selected profile settings' -Control $copyGraphics -Column 1 -Row 5)
-    $gameWidth=New-EditorTabNumber -Grid $cs2Grid -Title 'CS2 resolution width' -Column 0 -Row 6 -Min 640 -Max 7680 -Value ([int]$gs.Width)
-    $gameHeight=New-EditorTabNumber -Grid $cs2Grid -Title 'CS2 resolution height' -Column 1 -Row 6 -Min 480 -Max 4320 -Value ([int]$gs.Height)
-    $aspectChoice=New-EditorTabChoice -Grid $cs2Grid -Title 'CS2 aspect ratio' -Column 0 -Row 7 -Labels @('4:3','16:9','16:10') -Values @('0','1','2') -SelectedValue ([string]$gs.AspectRatioMode)
-    $fullscreenChoice=New-EditorTabChoice -Grid $cs2Grid -Title 'Display mode' -Column 1 -Row 7 -Labels @('Fullscreen','Windowed') -Values @('1','0') -SelectedValue ([string]$gs.Fullscreen)
-    $refreshPolicyChoice=New-EditorTabChoice -Grid $cs2Grid -Title 'CS2 refresh selection' -Column 0 -Row 8 -Labels @('Highest supported (recommended)','Use specific Hz') -Values @('Highest','Exact') -SelectedValue ([string]$graphicsPreset.RefreshPolicy)
-    $gameRefresh=New-EditorTabNumber -Grid $cs2Grid -Title 'Specific CS2 refresh (Hz)' -Column 1 -Row 8 -Min 24 -Max 600 -Value ([int]$(if($gs.RefreshHz){$gs.RefreshHz}else{360}))
+    [void](Add-EditorTabField -Grid $cs2Grid -Title 'Copy selected profile settings' -Control $copyGraphics -Column 1 -Row 6)
+    $gameWidth=New-EditorTabNumber -Grid $cs2Grid -Title 'CS2 resolution width' -Column 0 -Row 7 -Min 640 -Max 7680 -Value ([int]$gs.Width)
+    $gameHeight=New-EditorTabNumber -Grid $cs2Grid -Title 'CS2 resolution height' -Column 1 -Row 7 -Min 480 -Max 4320 -Value ([int]$gs.Height)
+    $aspectChoice=New-EditorTabChoice -Grid $cs2Grid -Title 'CS2 aspect ratio' -Column 0 -Row 8 -Labels @('4:3','16:9','16:10') -Values @('0','1','2') -SelectedValue ([string]$gs.AspectRatioMode)
+    $fullscreenChoice=New-EditorTabChoice -Grid $cs2Grid -Title 'Display mode' -Column 1 -Row 8 -Labels @('Fullscreen','Windowed') -Values @('1','0') -SelectedValue ([string]$gs.Fullscreen)
+    $refreshPolicyChoice=New-EditorTabChoice -Grid $cs2Grid -Title 'CS2 refresh selection' -Column 0 -Row 9 -Labels @('Highest supported (recommended)','Use specific Hz') -Values @('Highest','Exact') -SelectedValue ([string]$graphicsPreset.RefreshPolicy)
+    $gameRefresh=New-EditorTabNumber -Grid $cs2Grid -Title 'Specific CS2 refresh (Hz)' -Column 1 -Row 9 -Min 24 -Max 600 -Value ([int]$(if($gs.RefreshHz){$gs.RefreshHz}else{360}))
     $gameRefresh.Enabled=([string]$graphicsPreset.RefreshPolicy -eq 'Exact')
     $refreshPolicyChoice.Add_SelectedIndexChanged({
         $gameRefresh.Enabled=([string]$refreshPolicyChoice.Tag[$refreshPolicyChoice.SelectedIndex] -eq 'Exact')
     }.GetNewClosure())
-    $scalingChoice=New-EditorTabChoice -Grid $cs2Grid -Title 'Stretch / scaling' -Column 0 -Row 9 -Labels @('Stretch to fill','Keep aspect ratio','Center without scaling') -Values @('2','5','3') -SelectedValue ([string]$graphicsPreset.ScalingMode)
-    $msaaChoice=New-EditorTabChoice -Grid $cs2Grid -Title 'Anti-aliasing (MSAA)' -Column 1 -Row 9 -Labels @('Off','2×','4×','8×','16×') -Values @('0','2','4','8','16') -SelectedValue ([string]$gs.MSAASamples)
-    $shadowChoice=New-EditorTabChoice -Grid $cs2Grid -Title 'Shadow quality' -Column 0 -Row 10 -Labels @('Low','Medium','High','Very high') -Values @('0','1','2','3') -SelectedValue ([string]$gs.ShadowQuality)
-    $dynamicShadowChoice=New-EditorTabChoice -Grid $cs2Grid -Title 'Dynamic shadows' -Column 1 -Row 10 -Labels @('Off','On') -Values @('0','1') -SelectedValue ([string]$gs.DynamicShadows)
-    $textureChoice=New-EditorTabChoice -Grid $cs2Grid -Title 'Texture detail' -Column 0 -Row 11 -Labels @('Low','Medium','High','Very high') -Values @('0','1','2','3') -SelectedValue ([string]$gs.TextureDetail)
-    $shaderChoice=New-EditorTabChoice -Grid $cs2Grid -Title 'Shader quality' -Column 1 -Row 11 -Labels @('Low','Medium','High') -Values @('0','1','2') -SelectedValue ([string]$gs.ShaderQuality)
-    $particleChoice=New-EditorTabChoice -Grid $cs2Grid -Title 'Particle detail' -Column 0 -Row 12 -Labels @('Low','Medium','High','Very high') -Values @('0','1','2','3') -SelectedValue ([string]$gs.ParticleDetail)
-    $aoChoice=New-EditorTabChoice -Grid $cs2Grid -Title 'Ambient occlusion' -Column 1 -Row 12 -Labels @('Off','Low','Medium','High') -Values @('0','1','2','3') -SelectedValue ([string]$gs.AmbientOcclusion)
-    $hdrChoice=New-EditorTabChoice -Grid $cs2Grid -Title 'HDR detail' -Column 0 -Row 13 -Labels @('Game default','Level 0','Level 1','Level 2','Level 3') -Values @('-1','0','1','2','3') -SelectedValue ([string]$gs.HDRDetail)
-    $reflexChoice=New-EditorTabChoice -Grid $cs2Grid -Title 'NVIDIA Reflex' -Column 1 -Row 13 -Labels @('Off','On','On + Boost') -Values @('0','1','2') -SelectedValue ([string]$gs.NvidiaReflex)
-    $filterChoice=New-EditorTabChoice -Grid $cs2Grid -Title 'Texture filtering level' -Column 0 -Row 14 -Labels @('Level 0','Level 1','Level 2','Level 3','Level 4','Level 5') -Values @('0','1','2','3','4','5') -SelectedValue ([string]$gs.TextureFiltering)
-    $fsrChoice=New-EditorTabChoice -Grid $cs2Grid -Title 'FSR level' -Column 1 -Row 14 -Labels @('Off','Level 1','Level 2','Level 3','Level 4') -Values @('0','1','2','3','4') -SelectedValue ([string]$gs.FSRDetail)
-    $vsyncChoice=New-EditorTabChoice -Grid $cs2Grid -Title 'Vertical sync' -Column 0 -Row 15 -Labels @('Off','On') -Values @('0','1') -SelectedValue ([string]$gs.VSync)
-    $cmaaChoice=New-EditorTabChoice -Grid $cs2Grid -Title 'CMAA' -Column 1 -Row 15 -Labels @('Off','On') -Values @('0','1') -SelectedValue ([string]$gs.CMAA)
+    $scalingChoice=New-EditorTabChoice -Grid $cs2Grid -Title 'Stretch / scaling' -Column 0 -Row 10 -Labels @('Stretch to fill','Keep aspect ratio','Center without scaling') -Values @('2','5','3') -SelectedValue ([string]$graphicsPreset.ScalingMode)
+    $msaaChoice=New-EditorTabChoice -Grid $cs2Grid -Title 'Anti-aliasing (MSAA)' -Column 1 -Row 10 -Labels @('Off','2×','4×','8×','16×') -Values @('0','2','4','8','16') -SelectedValue ([string]$gs.MSAASamples)
+    $shadowChoice=New-EditorTabChoice -Grid $cs2Grid -Title 'Shadow quality' -Column 0 -Row 11 -Labels @('Low','Medium','High','Very high') -Values @('0','1','2','3') -SelectedValue ([string]$gs.ShadowQuality)
+    $dynamicShadowChoice=New-EditorTabChoice -Grid $cs2Grid -Title 'Dynamic shadows' -Column 1 -Row 11 -Labels @('Off','On') -Values @('0','1') -SelectedValue ([string]$gs.DynamicShadows)
+    $textureChoice=New-EditorTabChoice -Grid $cs2Grid -Title 'Texture detail' -Column 0 -Row 12 -Labels @('Low','Medium','High','Very high') -Values @('0','1','2','3') -SelectedValue ([string]$gs.TextureDetail)
+    $shaderChoice=New-EditorTabChoice -Grid $cs2Grid -Title 'Shader quality' -Column 1 -Row 12 -Labels @('Low','Medium','High') -Values @('0','1','2') -SelectedValue ([string]$gs.ShaderQuality)
+    $particleChoice=New-EditorTabChoice -Grid $cs2Grid -Title 'Particle detail' -Column 0 -Row 13 -Labels @('Low','Medium','High','Very high') -Values @('0','1','2','3') -SelectedValue ([string]$gs.ParticleDetail)
+    $aoChoice=New-EditorTabChoice -Grid $cs2Grid -Title 'Ambient occlusion' -Column 1 -Row 13 -Labels @('Off','Low','Medium','High') -Values @('0','1','2','3') -SelectedValue ([string]$gs.AmbientOcclusion)
+    $hdrChoice=New-EditorTabChoice -Grid $cs2Grid -Title 'HDR detail' -Column 0 -Row 14 -Labels @('Game default','Level 0','Level 1','Level 2','Level 3') -Values @('-1','0','1','2','3') -SelectedValue ([string]$gs.HDRDetail)
+    $reflexChoice=New-EditorTabChoice -Grid $cs2Grid -Title 'NVIDIA Reflex' -Column 1 -Row 14 -Labels @('Off','On','On + Boost') -Values @('0','1','2') -SelectedValue ([string]$gs.NvidiaReflex)
+    $filterChoice=New-EditorTabChoice -Grid $cs2Grid -Title 'Texture filtering level' -Column 0 -Row 15 -Labels @('Level 0','Level 1','Level 2','Level 3','Level 4','Level 5') -Values @('0','1','2','3','4','5') -SelectedValue ([string]$gs.TextureFiltering)
+    $fsrChoice=New-EditorTabChoice -Grid $cs2Grid -Title 'FSR level' -Column 1 -Row 15 -Labels @('Off','Level 1','Level 2','Level 3','Level 4') -Values @('0','1','2','3','4') -SelectedValue ([string]$gs.FSRDetail)
+    $vsyncChoice=New-EditorTabChoice -Grid $cs2Grid -Title 'Vertical sync' -Column 0 -Row 16 -Labels @('Off','On') -Values @('0','1') -SelectedValue ([string]$gs.VSync)
+    $cmaaChoice=New-EditorTabChoice -Grid $cs2Grid -Title 'CMAA' -Column 1 -Row 16 -Labels @('Off','On') -Values @('0','1') -SelectedValue ([string]$gs.CMAA)
     $historyChoice=New-Object System.Windows.Forms.ComboBox
     $historyChoice.DropDownStyle='DropDownList'
     [void]$historyChoice.Items.Add('Load history first')
     $historyChoice.SelectedIndex=0
     $historyChoice.Enabled=$false
-    [void](Add-EditorTabField -Grid $cs2Grid -Title 'Earlier GitHub file revisions (commit ID shown)' -Control $historyChoice -Column 0 -Row 16)
+    [void](Add-EditorTabField -Grid $cs2Grid -Title 'Earlier GitHub file revisions (commit ID shown)' -Control $historyChoice -Column 0 -Row 17)
     $loadHistory=New-Object System.Windows.Forms.Button
     $loadHistory.Text='Load history'
     $loadHistory.BackColor=[System.Drawing.Color]::FromArgb(58,67,83)
     $loadHistory.ForeColor=$WHITE
     $loadHistory.FlatStyle='Flat'
-    [void](Add-EditorTabField -Grid $cs2Grid -Title 'Cached 24 hours; requires internet' -Control $loadHistory -Column 1 -Row 16)
+    [void](Add-EditorTabField -Grid $cs2Grid -Title 'Cached 24 hours; requires internet' -Control $loadHistory -Column 1 -Row 17)
     $resetGraphics=New-Object System.Windows.Forms.Button
     $resetGraphics.Text='Reset to defaults'
     $resetGraphics.BackColor=[System.Drawing.Color]::FromArgb(70,75,88)
     $resetGraphics.ForeColor=$WHITE
     $resetGraphics.FlatStyle='Flat'
-    [void](Add-EditorTabField -Grid $cs2Grid -Title 'Load canonical profile preset' -Control $resetGraphics -Column 0 -Row 17)
+    [void](Add-EditorTabField -Grid $cs2Grid -Title 'Load canonical profile preset' -Control $resetGraphics -Column 0 -Row 18)
     $restoreHistory=New-Object System.Windows.Forms.Button
     $restoreHistory.Text='Restore selected version'
     $restoreHistory.BackColor=[System.Drawing.Color]::FromArgb(58,67,83)
     $restoreHistory.ForeColor=$WHITE
     $restoreHistory.FlatStyle='Flat'
     $restoreHistory.Enabled=$false
-    [void](Add-EditorTabField -Grid $cs2Grid -Title 'Loads into editor; save to keep' -Control $restoreHistory -Column 1 -Row 17)
+    [void](Add-EditorTabField -Grid $cs2Grid -Title 'Loads into editor; save to keep' -Control $restoreHistory -Column 1 -Row 18)
     $captureGraphics=New-Object System.Windows.Forms.Button
     $captureGraphics.Text='Capture from CS2'
     $captureGraphics.BackColor=[System.Drawing.Color]::FromArgb(58,67,83)
     $captureGraphics.ForeColor=$WHITE
     $captureGraphics.FlatStyle='Flat'
-    [void](Add-EditorTabField -Grid $cs2Grid -Title 'Game must be closed; review, then Save & Sync' -Control $captureGraphics -Column 0 -Row 18)
+    [void](Add-EditorTabField -Grid $cs2Grid -Title 'Game must be closed; review, then Save & Sync' -Control $captureGraphics -Column 0 -Row 19)
 
     $editorFooter=New-Object System.Windows.Forms.TableLayoutPanel
     $editorFooter.Dock='Fill'
@@ -4958,7 +5543,7 @@ function Show-ProfileEditor {
     $saveSync.FlatStyle='Flat'
     $saveSync.Dock='Fill'
     $editorFooter.Controls.Add($saveSync,1,2)
-    $saveSync.Tag='Sync this profile, its CS2 graphics preset, and (if set) sensitivity in its matching CFG on GitHub.'
+    $saveSync.Tag='Sync profile, graphics, voice push-to-talk, sensitivity and captured crosshair to the matching GitHub CFG.'
 
     $cancel=New-Object System.Windows.Forms.Button
     $cancel.Text='Cancel'
@@ -4977,8 +5562,6 @@ function Show-ProfileEditor {
             }
             $sensValue=$number.ToString('0.####',[Globalization.CultureInfo]::InvariantCulture)
         }
-        $cfgUrl=$url.Text.Trim()
-        if ($cfgUrl) { Assert-ConfigUrl $cfgUrl }
         $readChoiceValue={param($control)[string]$control.Tag[$control.SelectedIndex]}.GetNewClosure()
         $graphicsSettings=[ordered]@{
             Width=[int]$gameWidth.Value;Height=[int]$gameHeight.Value
@@ -5027,7 +5610,7 @@ function Show-ProfileEditor {
         $p.ApplyNvidia=[bool]$nv.Checked
         $p.LaunchApps=[bool]$apps.Checked
         $p.CS2Sensitivity=$sensValue
-        $p.CfgDownloadUrl=$cfgUrl
+        $p.VoicePushToTalkKey=[string]$voiceBox.Tag[$voiceBox.SelectedIndex]
         # Use the captured shared dictionary, not script: scope in this closure.
         $pendingSyncState[$ProfileName] = $true
         Save-ProfileSettings
@@ -5050,7 +5633,9 @@ function Show-ProfileEditor {
     $saveSync.Add_Click({
         try {
             & $saveEditorValues
-            $changes=if($script:CapturedCS2Convars.ContainsKey($ProfileName)){
+            $changes=if($p.VoicePushToTalkKey){
+                "profiles/$ProfileName.json, graphics/$ProfileName.json AND $($p.ConfigFile) (voice key and selected settings)"
+            }elseif($script:CapturedCS2Convars.ContainsKey($ProfileName)){
                 "profiles/$ProfileName.json, graphics/$ProfileName.json AND $($p.ConfigFile) (captured CS2 crosshair/sensitivity)"
             }elseif($sens.Text.Trim()){
                 "profiles/$ProfileName.json, graphics/$ProfileName.json AND $($p.ConfigFile) (sensitivity only)"
@@ -5096,7 +5681,7 @@ function Show-ProfileEditor {
                 Sync-ProfileToGitHub -ProfileName $ProfileName -Token $token
                 $pendingSyncState[$ProfileName] = $false
                 Save-ProfileSettings
-                [System.Windows.Forms.MessageBox]::Show("$ProfileName settings saved locally and synced to GitHub. The CS2 graphics preset was updated or already matched GitHub.`nOther PCs can now download the settings without signing in.`nIf CS2 sensitivity was set, it was also synced into the matching .cfg; binds and other commands remain unchanged.", 'GitHub sync complete', 'OK', 'Information') | Out-Null
+                [System.Windows.Forms.MessageBox]::Show("$ProfileName settings saved locally and synced to GitHub. The CS2 graphics preset was updated or already matched GitHub.`nOther PCs can now download the settings without signing in.`nSelected sensitivity and push-to-talk changes and captured crosshair values are saved in the matching .cfg when present; unrelated binds remain unchanged.", 'GitHub sync complete', 'OK', 'Information') | Out-Null
                 $dialog.DialogResult=[System.Windows.Forms.DialogResult]::OK
                 $dialog.Close()
             } finally {
@@ -5568,35 +6153,117 @@ function Invoke-GamingProfile {
     Write-Log "$ProfileName full routine finished. Review logs for individual results."
 }
 
-# The separate Play + Exec action launches CS2 with a one-time +exec argument.
-# No writes to Steam userdata/config/localconfig.vdf and no Steam restart.
+# Reset only the profile-managed settings to the values captured after CS2's
+# in-game Reset to Default action. The selected profile CFG runs immediately
+# after this file and remains the final authority for its explicit settings.
+function Get-CS2ProfileBaselineCfgText {
+    $lines=@(
+        '// CafeLauncher profile baseline captured after CS2 Reset to Default.'
+        '// r_low_latency was not saved by the reset; every profile CFG sets it explicitly.'
+        'con_enable "1"'
+        'bind "`" "toggleconsole"'
+        'bind "SPACE" "+jump"'
+        'bind "MWHEELUP" "invprev"'
+        'bind "MWHEELDOWN" "invnext"'
+        'bind "r" "+reload"'
+        'bind "f" "+lookatweapon"'
+        'bind "x" "slot12"'
+        'bind "t" "+spray_menu"'
+        'bind "c" "+radialradio"'
+        'bind "v" "+radialradio2"'
+        'unbind "CAPSLOCK"'
+        'unbind "ALT"'
+        'unbind "n"'
+        'unbind "MOUSE5"'
+        'sensitivity "1.25"'
+        'zoom_sensitivity_ratio "1"'
+        'cl_hud_radar_scale "1"'
+        'cl_radar_scale "0.7"'
+        'cl_mute_enemy_team "false"'
+        'cl_crosshair_drawoutline "1"'
+        'cl_crosshair_dynamic_maxdist_splitratio "1"'
+        'cl_crosshair_dynamic_splitalpha_innermod "0"'
+        'cl_crosshair_dynamic_splitalpha_outermod "1"'
+        'cl_crosshair_dynamic_splitdist "3"'
+        'cl_crosshair_dynamic_spread_limit "255"'
+        'cl_crosshair_gap "4"'
+        'cl_crosshair_length "8"'
+        'cl_crosshair_recoil "true"'
+        'cl_crosshair_sniper_width "1"'
+        'cl_crosshair_t "false"'
+        'cl_crosshair_thickness "2"'
+        'cl_crosshairalpha "200"'
+        'cl_crosshaircolor_a "255"'
+        'cl_crosshaircolor_b "0"'
+        'cl_crosshaircolor_g "255"'
+        'cl_crosshaircolor_r "0"'
+        'cl_crosshairdot "false"'
+        'cl_crosshairoutline_a "255"'
+        'cl_crosshairoutline_b "0"'
+        'cl_crosshairoutline_g "0"'
+        'cl_crosshairoutline_r "0"'
+        'cl_crosshairsize "2"'
+        'cl_crosshairstyle "7"'
+        'cl_crosshairthickness "1"'
+        'fps_max "400"'
+        'r_player_visibility_mode "1"'
+    )
+    return (($lines -join "`r`n")+"`r`n")
+}
+
+function Install-CS2ProfileBaselineCfg {
+    $cfgName='cafelauncher_profile_baseline.cfg'
+    $staged=$null
+    try {
+        $cfgDirectory=Find-CS2ConfigFolder -NoPrompt
+        if(-not $cfgDirectory){Write-Log 'CS2 profile baseline install skipped; no unique validated config folder was found.' 'ERROR';return $false}
+        $destination=Join-Path $cfgDirectory $cfgName
+        $staged=Join-Path $cfgDirectory ($cfgName+'.cafe-'+[Guid]::NewGuid().ToString('N')+'.tmp')
+        $encoding=New-Object System.Text.UTF8Encoding($false)
+        [IO.File]::WriteAllBytes($staged,$encoding.GetBytes((Get-CS2ProfileBaselineCfgText)))
+        $expected=(Get-FileHash -LiteralPath $staged -Algorithm SHA256 -ErrorAction Stop).Hash
+        $previousHash=if(Test-Path -LiteralPath $destination -PathType Leaf){(Get-FileHash -LiteralPath $destination -Algorithm SHA256 -ErrorAction Stop).Hash}else{$null}
+        if($previousHash -eq $expected){Write-Log "$cfgName already matches the captured reset baseline.";return $true}
+        if($previousHash){
+            $stamp=Get-Date -Format 'yyyyMMdd-HHmmss-fff'
+            $backup=Join-Path $cfgDirectory ($cfgName+'.backup-'+$stamp)
+            Copy-Item -LiteralPath $destination -Destination $backup -ErrorAction Stop
+            if((Get-FileHash -LiteralPath $backup -Algorithm SHA256 -ErrorAction Stop).Hash -ne $previousHash){throw 'Baseline CFG backup verification failed.'}
+            Write-Log "Backed up previous $cfgName to $backup"
+        }
+        Copy-Item -LiteralPath $staged -Destination $destination -Force -ErrorAction Stop
+        if((Get-FileHash -LiteralPath $destination -Algorithm SHA256 -ErrorAction Stop).Hash -ne $expected){throw 'Baseline CFG SHA-256 verification failed.'}
+        Write-Log "CS2 profile baseline installed and verified: $destination"
+        return $true
+    }catch{Write-Log ('CS2 profile baseline install failed: '+$_.Exception.Message) 'ERROR';return $false}
+    finally{if($staged -and (Test-Path -LiteralPath $staged -PathType Leaf)){Remove-Item -LiteralPath $staged -Force -ErrorAction SilentlyContinue}}
+}
+
+# Play + Exec runs the reset baseline first, then the selected current profile
+# CFG. It never changes Steam's persistent launch options or restarts Steam.
 function Get-CS2SteamLaunchArguments {
     param([Parameter(Mandatory=$true)][string]$CfgName)
     if ($CfgName -notmatch '^[A-Za-z0-9_-]+\.cfg$') { throw 'Invalid CFG filename for CS2.' }
-    return @('-applaunch', '730', '+exec', $CfgName)
+    return @('-applaunch', '730', '+exec', 'cafelauncher_profile_baseline.cfg', '+exec', $CfgName)
 }
 
 function Start-CS2WithProfileCfg {
     param([Parameter(Mandatory=$true)][string]$ProfileName)
     if (-not $script:GamingProfiles.Contains($ProfileName)) { throw "Unknown CS2 profile: $ProfileName" }
-    if (Get-Process -Name 'cs2' -ErrorAction SilentlyContinue) {
-        $runningCfg = [string]$script:GamingProfiles[$ProfileName].ConfigFile
-        Write-Log "$ProfileName Play + Exec skipped; CS2 is already running. Use developer console: exec $runningCfg" 'WARN'
-        [System.Windows.Forms.MessageBox]::Show(
-            "CS2 is already running. Steam launch arguments work only when starting the game." +
-            [Environment]::NewLine + [Environment]::NewLine +
-            "In CS2, open the developer console and type: exec $runningCfg" +
-            [Environment]::NewLine + "Or close CS2 and click Play + Exec again.",
-            'CS2 Already Running', 'OK', 'Information'
-        ) | Out-Null
-        return
-    }
+    $cs2Running=[bool](Get-Process -Name 'cs2' -ErrorAction SilentlyContinue)
     if(-not (Resolve-PendingProfileChanges -ProfileName $ProfileName)){return}
     $profileSource=Refresh-ProfileFromGitHub -ProfileName $ProfileName
     if(-not (Confirm-LocalProfileApply -ProfileName $ProfileName -Source $profileSource)){return}
     $profile = $script:GamingProfiles[$ProfileName]
     $cfgName = [string]$profile.ConfigFile
     if ($cfgName -notmatch '^[A-Za-z0-9_-]+\.cfg$') { throw "Invalid CFG filename for $ProfileName." }
+    Write-Log "$ProfileName Play + Exec: installing the CS2 reset baseline before the selected profile CFG."
+    $baselineInstalled=Install-CS2ProfileBaselineCfg
+    if($baselineInstalled -ne $true){
+        Write-Log "$ProfileName Play + Exec cancelled: the CS2 reset baseline could not be installed." 'ERROR'
+        [System.Windows.Forms.MessageBox]::Show('Unable to install the CS2 profile reset baseline. CS2 was not started. Check LIVE LOGS.','CS2 Baseline Installation Failed','OK','Warning') | Out-Null
+        return
+    }
     $url = [string]$profile.CfgDownloadUrl
     if ($ProfileName -eq 'FabMode' -and [string]::IsNullOrWhiteSpace($url)) {
         $url = $script:FabCfgCloudUrl
@@ -5611,6 +6278,19 @@ function Start-CS2WithProfileCfg {
         ) | Out-Null
         return
     }
+    if($cs2Running){
+        Write-Log "$ProfileName Play + Exec installed the reset baseline and current $cfgName; CS2 is already running, so it was not relaunched." 'WARN'
+        [System.Windows.Forms.MessageBox]::Show(
+            "The reset baseline and current profile CFG are installed. CS2 is already running, so Steam could not execute them at startup." +
+            [Environment]::NewLine + [Environment]::NewLine +
+            "If the developer console is off, enable it in Settings > Game first. Then run these commands in the console in order:" + [Environment]::NewLine +
+            'exec cafelauncher_profile_baseline.cfg' + [Environment]::NewLine +
+            "exec $cfgName" +
+            [Environment]::NewLine + "Or close CS2 and click Play + Exec again.",
+            'CS2 Already Running', 'OK', 'Information'
+        ) | Out-Null
+        return
+    }
     $steamExe = Get-SteamExecutable
     if (-not $steamExe) {
         Write-Log 'Steam was not detected. CFG installed, but CS2 not launched.' 'ERROR'
@@ -5619,7 +6299,7 @@ function Start-CS2WithProfileCfg {
     }
     $args = @(Get-CS2SteamLaunchArguments -CfgName $cfgName)
     Start-Process -FilePath $steamExe -ArgumentList $args -ErrorAction Stop
-    Write-Log "$ProfileName requested CS2 launch via Steam: -applaunch 730 +exec $cfgName. Persistent Steam launch options unchanged."
+    Write-Log "$ProfileName requested CS2 launch via Steam: -applaunch 730 +exec cafelauncher_profile_baseline.cfg +exec $cfgName. Persistent Steam launch options unchanged."
 }
 
 # Independent CS2 graphics module; loaded ONLY when Apply Graphics is clicked.
@@ -5959,6 +6639,7 @@ function New-Tile {
 
 New-Tile "LAUNCH ALL" 0 { Launch-All } -Primary
 New-Tile "Steam" 1 { Start-DetectedSteam }
+New-Tile "Workshop Cleanup" 18 { Show-CafeWorkshopCleanupDialog }
 New-Tile "FACEIT Anti-Cheat" 2 {
     Launch-App -Name "FACEIT Anti-Cheat" -Paths @(
         "$env:ProgramFiles\FACEIT AC\faceitclient.exe",
