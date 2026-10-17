@@ -4,7 +4,7 @@ start "" powershell.exe -NoProfile -ExecutionPolicy Bypass -STA -WindowStyle Hid
 exit /b
 
 # POWERSHELL_GUI
-# CAFE_RELEASE=2026.10.17.2
+# CAFE_RELEASE=2026.10.17.3
 
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
@@ -3004,6 +3004,378 @@ function Get-CafeActiveSteamVideoFile {
     $accountId=$accountNumber.ToString([Globalization.CultureInfo]::InvariantCulture)
     $videoPath=Join-Path $steamRoot ('userdata\'+$accountId+'\730\local\cfg\cs2_video.txt')
     return [pscustomobject]@{Path=$videoPath;AccountID=$accountId;SteamRoot=$steamRoot}
+}
+
+function ConvertFrom-CafeSteamVdfText {
+    param([Parameter(Mandatory=$true)][string]$Text)
+    if([string]::IsNullOrWhiteSpace($Text) -or $Text.Length -gt 8388608){throw 'Steam Workshop manifest is empty or exceeds the 8 MB safety limit.'}
+    $tokens=New-Object 'System.Collections.Generic.List[object]'
+    $i=0
+    while($i -lt $Text.Length){
+        while($i -lt $Text.Length){
+            if([char]::IsWhiteSpace($Text[$i])){$i++;continue}
+            if($Text[$i] -eq '/' -and $i+1 -lt $Text.Length -and $Text[$i+1] -eq '/'){
+                while($i -lt $Text.Length -and $Text[$i] -ne "`n"){$i++}
+                continue
+            }
+            break
+        }
+        if($i -ge $Text.Length){break}
+        $c=$Text[$i]
+        if($c -eq '{' -or $c -eq '}'){
+            $tokens.Add([pscustomobject]@{Kind=$(if($c -eq '{'){'Open'}else{'Close'});Value=[string]$c})
+            $i++
+        }elseif($c -eq '"'){
+            $i++
+            $builder=New-Object System.Text.StringBuilder
+            $closed=$false
+            while($i -lt $Text.Length){
+                $c=$Text[$i]
+                if($c -eq '"'){$closed=$true;$i++;break}
+                if($c -eq '\' -and $i+1 -lt $Text.Length -and ($Text[$i+1] -eq '\' -or $Text[$i+1] -eq '"')){
+                    [void]$builder.Append($Text[$i+1]);$i+=2;continue
+                }
+                [void]$builder.Append($c);$i++
+            }
+            if(-not $closed){throw 'Steam Workshop manifest contains an unterminated quoted value.'}
+            $tokens.Add([pscustomobject]@{Kind='Text';Value=$builder.ToString()})
+        }else{
+            $start=$i
+            while($i -lt $Text.Length -and -not [char]::IsWhiteSpace($Text[$i]) -and $Text[$i] -ne '{' -and $Text[$i] -ne '}'){
+                if($Text[$i] -eq '/' -and $i+1 -lt $Text.Length -and $Text[$i+1] -eq '/') {break}
+                $i++
+            }
+            if($i -eq $start){throw 'Steam Workshop manifest contains an invalid token.'}
+            $tokens.Add([pscustomobject]@{Kind='Text';Value=$Text.Substring($start,$i-$start)})
+        }
+        if($tokens.Count -gt 200000){throw 'Steam Workshop manifest contains too many tokens.'}
+    }
+    $root=@{}
+    $frames=New-Object 'System.Collections.Generic.List[object]'
+    $frames.Add([pscustomobject]@{Node=$root;Pending=$null})
+    foreach($token in $tokens){
+        $frame=$frames[$frames.Count-1]
+        if($token.Kind -eq 'Close'){
+            if($frames.Count -le 1){throw 'Steam Workshop manifest has an unexpected closing brace.'}
+            if($null -ne $frame.Pending){throw 'Steam Workshop manifest has a key without a value.'}
+            $frames.RemoveAt($frames.Count-1)
+            continue
+        }
+        if($token.Kind -eq 'Open'){
+            if($null -eq $frame.Pending){throw 'Steam Workshop manifest has an object without a key.'}
+            if($frames.Count -ge 65){throw 'Steam Workshop manifest nesting exceeds the safety limit.'}
+            $child=@{}
+            if($frame.Node.ContainsKey([string]$frame.Pending)){throw ('Steam Workshop manifest repeats a key: '+$frame.Pending)}
+            $frame.Node.Add([string]$frame.Pending,$child)
+            $frame.Pending=$null
+            $frames.Add([pscustomobject]@{Node=$child;Pending=$null})
+            continue
+        }
+        if($token.Kind -ne 'Text'){throw 'Steam Workshop manifest expected text.'}
+        if($null -eq $frame.Pending){$frame.Pending=[string]$token.Value;continue}
+        if($frame.Node.ContainsKey([string]$frame.Pending)){throw ('Steam Workshop manifest repeats a key: '+$frame.Pending)}
+        $frame.Node.Add([string]$frame.Pending,[string]$token.Value)
+        $frame.Pending=$null
+    }
+    if($frames.Count -ne 1){throw 'Steam Workshop manifest has an unclosed object.'}
+    if($null -ne $frames[0].Pending){throw 'Steam Workshop manifest has a key without a value.'}
+    return ,$root
+}
+
+function Get-CafeWorkshopManifestSnapshot {
+    param([Parameter(Mandatory=$true)][string]$LibraryRoot,[Parameter(Mandatory=$true)][string]$ActiveAccountID)
+    $rootText=$LibraryRoot.Replace('/','\').TrimEnd('\')
+    if($rootText.StartsWith('\\?\',[StringComparison]::OrdinalIgnoreCase)){$rootText=$rootText.Substring(4)}
+    $root=[IO.Path]::GetFullPath($rootText).TrimEnd('\')
+    $manifestPath=Join-Path $root 'steamapps\workshop\appworkshop_730.acf'
+    $contentRoot=Join-Path $root 'steamapps\workshop\content\730'
+    $snapshot=[ordered]@{LibraryRoot=$root;ManifestPath=$manifestPath;ContentRoot=$contentRoot;ManifestHash=$null;Subscriptions=@();Installed=@{};Trusted=$false;Reason='Workshop subscription manifest is unavailable.'}
+    if(-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)){
+        if(Test-Path -LiteralPath $contentRoot -PathType Container){$snapshot.Reason='Workshop content exists but the Steam manifest is missing.'}
+        return [pscustomobject]$snapshot
+    }
+    try{
+        $file=Get-Item -LiteralPath $manifestPath -ErrorAction Stop
+        if($file.Length -lt 1 -or $file.Length -gt 8388608){throw 'manifest size is outside the allowed range'}
+        $bytes=[IO.File]::ReadAllBytes($manifestPath)
+        $sha=[Security.Cryptography.SHA256]::Create()
+        try{$hash=([BitConverter]::ToString($sha.ComputeHash($bytes))).Replace('-','').ToLowerInvariant()}finally{$sha.Dispose()}
+        $text=[Text.Encoding]::UTF8.GetString($bytes)
+        if($text.Length -gt 0 -and [int]$text[0] -eq 0xFEFF){$text=$text.Substring(1)}
+        $parsed=ConvertFrom-CafeSteamVdfText -Text $text
+        if(-not $parsed.ContainsKey('AppWorkshop') -or $parsed.AppWorkshop -isnot [hashtable]){throw 'AppWorkshop section is missing or malformed'}
+        $app=$parsed.AppWorkshop
+        if([string]$app.appid -cne '730'){throw 'manifest appid is not CS2 (730)'}
+        foreach($flag in @('NeedsDownload','NeedsUpdate')){
+            $flagValue=0
+            if(-not $app.ContainsKey($flag) -or -not [int]::TryParse([string]$app[$flag],[ref]$flagValue)){
+                throw ('manifest '+$flag+' state is missing or invalid')
+            }
+            if($flagValue -ne 0){throw ('Steam reports Workshop '+$(if($flag -eq 'NeedsDownload'){'downloads'}else{'updates'})+' are pending')}
+        }
+        foreach($relative in @('steamapps\downloading\730','steamapps\workshop\downloads\730','steamapps\workshop\temp\730')){
+            $pendingPath=Join-Path $root $relative
+            if(Test-Path -LiteralPath $pendingPath -PathType Container){
+                try{$pendingItems=@(Get-ChildItem -LiteralPath $pendingPath -Force -ErrorAction Stop)}catch{throw 'Steam download state could not be checked safely'}
+                if($pendingItems.Count){throw 'Steam Workshop/game downloads appear to be in progress'}
+            }
+        }
+        if(-not $app.ContainsKey('WorkshopItemDetails') -or $app.WorkshopItemDetails -isnot [hashtable]){throw 'WorkshopItemDetails section is missing or malformed'}
+        if(-not $app.ContainsKey('WorkshopItemsInstalled') -or $app.WorkshopItemsInstalled -isnot [hashtable]){throw 'WorkshopItemsInstalled section is missing or malformed'}
+        $subscriptionIds=New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::Ordinal)
+        foreach($id in $app.WorkshopItemDetails.Keys){
+            $idText=[string]$id
+            [UInt64]$parsedId=0
+            if($idText -notmatch '^\d{1,20}$' -or -not [UInt64]::TryParse($idText,[ref]$parsedId) -or $parsedId -eq 0){throw 'manifest contains an invalid subscribed Workshop ID'}
+            $item=$app.WorkshopItemDetails[$id]
+            if($item -isnot [hashtable]){throw ('subscription entry '+$idText+' is malformed')}
+            if($item.ContainsKey('subscribedby') -and -not [string]::IsNullOrWhiteSpace([string]$item.subscribedby)){
+                $subscriber=[string]$item.subscribedby
+                if($subscriber -cne $ActiveAccountID){
+                    [long]$activeNumber=0
+                    [long]$subscriberNumber=0
+                    if([long]::TryParse($ActiveAccountID,[ref]$activeNumber) -and [long]::TryParse($subscriber,[ref]$subscriberNumber)){
+                        $steamId64=$activeNumber+76561197960265728L
+                        if($subscriber -cne $steamId64.ToString([Globalization.CultureInfo]::InvariantCulture)){
+                            throw 'manifest subscription account does not match the active Steam account'
+                        }
+                    }else{throw 'manifest subscription account cannot be verified against the active Steam account'}
+                }
+            }
+            [void]$subscriptionIds.Add($idText)
+        }
+        $installed=@{}
+        foreach($id in $app.WorkshopItemsInstalled.Keys){
+            $idText=[string]$id
+            [UInt64]$parsedId=0
+            if($idText -notmatch '^\d{1,20}$' -or -not [UInt64]::TryParse($idText,[ref]$parsedId) -or $parsedId -eq 0){throw 'manifest contains an invalid installed Workshop ID'}
+            $item=$app.WorkshopItemsInstalled[$id]
+            if($item -isnot [hashtable]){throw ('installed entry '+$idText+' is malformed')}
+            [long]$size=0
+            if($item.ContainsKey('size') -and [long]::TryParse([string]$item.size,[ref]$size) -and $size -ge 0){$installed[$idText]=$size}
+        }
+        $snapshot.Subscriptions=@($subscriptionIds|Sort-Object)
+        $snapshot.Installed=$installed
+        $snapshot.ManifestHash=$hash
+        $snapshot.Trusted=$true
+        $snapshot.Reason='Steam Workshop manifest was parsed and reports no pending downloads or updates.'
+    }catch{
+        $snapshot.Reason=$_.Exception.Message
+    }
+    return [pscustomobject]$snapshot
+}
+
+function Get-CafeWorkshopDirectorySize {
+    param([Parameter(Mandatory=$true)][string]$Path)
+    $stack=New-Object 'System.Collections.Generic.Stack[string]'
+    $stack.Push($Path)
+    [long]$bytes=0
+    $visited=0
+    while($stack.Count -gt 0){
+        $current=$stack.Pop()
+        try{$children=@(Get-ChildItem -LiteralPath $current -Force -ErrorAction Stop)}catch{return [pscustomobject]@{Safe=$false;Bytes=$null;Reason='Item files could not be read.'}}
+        foreach($child in $children){
+            $visited++
+            if($visited -gt 50000){return [pscustomobject]@{Safe=$false;Bytes=$null;Reason='Item exceeds the safe scan limit.'}}
+            if(($child.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0){return [pscustomobject]@{Safe=$false;Bytes=$null;Reason='Item contains a reparse point.'}}
+            if($child.PSIsContainer){$stack.Push($child.FullName)}else{
+                try{$bytes+=[long]$child.Length}catch{return [pscustomobject]@{Safe=$false;Bytes=$null;Reason='Item size could not be read.'}}
+            }
+        }
+    }
+    return [pscustomobject]@{Safe=$true;Bytes=$bytes;Reason=$null}
+}
+
+function Get-CafeWorkshopCleanupSnapshot {
+    param([Parameter(Mandatory=$true)][string[]]$LibraryRoots,[Parameter(Mandatory=$true)][string]$ActiveAccountID)
+    [long]$account=0
+    if(-not [long]::TryParse($ActiveAccountID,[ref]$account) -or $account -le 0){throw 'Steam has no verifiable signed-in account. Sign in to Steam, then scan again.'}
+    $snapshots=New-Object 'System.Collections.Generic.List[object]'
+    $subscriptions=New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::Ordinal)
+    $entries=New-Object 'System.Collections.Generic.List[object]'
+    $seenRoots=New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+    $subscriptionStateComplete=$true
+    foreach($libraryRoot in $LibraryRoots){
+        if([string]::IsNullOrWhiteSpace($libraryRoot)){continue}
+        try{
+            $rootText=$libraryRoot.Replace('/','\').TrimEnd('\')
+            if($rootText.StartsWith('\\?\',[StringComparison]::OrdinalIgnoreCase)){$rootText=$rootText.Substring(4)}
+            $root=[IO.Path]::GetFullPath($rootText).TrimEnd('\')
+        }catch{continue}
+        if(-not $seenRoots.Add($root)){continue}
+        $library=Get-CafeWorkshopManifestSnapshot -LibraryRoot $root -ActiveAccountID $ActiveAccountID
+        $snapshots.Add($library)
+        if($library.Trusted){foreach($id in $library.Subscriptions){[void]$subscriptions.Add([string]$id)}}
+        if(-not $library.Trusted -and ((Test-Path -LiteralPath $library.ManifestPath -PathType Leaf) -or (Test-Path -LiteralPath $library.ContentRoot -PathType Container))){$subscriptionStateComplete=$false}
+        if(-not (Test-Path -LiteralPath $library.ContentRoot -PathType Container)){continue}
+        try{$contentRootInfo=Get-Item -LiteralPath $library.ContentRoot -Force -ErrorAction Stop}catch{continue}
+        if(($contentRootInfo.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0){
+            $entries.Add([pscustomobject]@{WorkshopID='';LibraryRoot=$root;Path=$library.ContentRoot;Bytes=$null;Status='Unknown — content path is a reparse point';CanRemove=$false;Reason='Content root is not a normal directory.'})
+            continue
+        }
+        try{$folders=@(Get-ChildItem -LiteralPath $library.ContentRoot -Directory -Force -ErrorAction Stop)}catch{continue}
+        foreach($folder in $folders){
+            $id=[string]$folder.Name
+            [UInt64]$parsedId=0
+            if($id -notmatch '^\d{1,20}$' -or -not [UInt64]::TryParse($id,[ref]$parsedId) -or $parsedId -eq 0){continue}
+            $full=[IO.Path]::GetFullPath($folder.FullName)
+            $prefix=[IO.Path]::GetFullPath($library.ContentRoot).TrimEnd('\')+[IO.Path]::DirectorySeparatorChar
+            if(-not $full.StartsWith($prefix,[StringComparison]::OrdinalIgnoreCase)){continue}
+            $size=Get-CafeWorkshopDirectorySize -Path $full
+            $trusted=$library.Trusted
+            $subscribed=$subscriptions.Contains($id)
+            $canRemove=$subscriptionStateComplete -and $trusted -and -not $subscribed -and $size.Safe
+            $status=if($subscribed){'Keep — subscribed'}elseif(-not $subscriptionStateComplete){'Unknown — subscription state incomplete'}elseif(-not $trusted){'Unknown — subscription state unverified'}elseif(-not $size.Safe){'Unknown — unsafe or unreadable item'}else{'Removable — not in the active Steam manifest'}
+            $reason=if($subscribed){'Present in a verified Steam Workshop subscription manifest.'}elseif(-not $subscriptionStateComplete){'At least one library containing CS2 Workshop state has an unavailable or unverified manifest.'}elseif(-not $trusted){$library.Reason}else{$size.Reason}
+            $entries.Add([pscustomobject]@{WorkshopID=$id;LibraryRoot=$root;Path=$full;Bytes=$size.Bytes;Status=$status;CanRemove=$canRemove;Reason=$reason})
+        }
+    }
+    foreach($entry in $entries){
+        if($entry.WorkshopID -and $subscriptions.Contains([string]$entry.WorkshopID)){
+            $entry.CanRemove=$false
+            $entry.Status='Keep — subscribed'
+            $entry.Reason='Present in a Steam Workshop subscription manifest from one or more detected libraries.'
+        }elseif(-not $subscriptionStateComplete -and $entry.CanRemove){
+            $entry.CanRemove=$false
+            $entry.Status='Unknown — subscription state incomplete'
+            $entry.Reason='At least one library containing CS2 Workshop state has an unavailable or unverified manifest.'
+        }
+    }
+    $signature=New-Object 'System.Collections.Generic.List[string]'
+    foreach($library in @($snapshots|Sort-Object LibraryRoot)){$signature.Add(([string]$library.LibraryRoot)+'|'+[string]$library.ManifestHash+'|'+[string]$library.Trusted)}
+    $signatureText=$signature -join "`n"
+    $signatureHash=[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($signatureText))
+    return [pscustomobject]@{AccountID=$ActiveAccountID;Libraries=@($snapshots.ToArray());Subscriptions=@($subscriptions|Sort-Object);Entries=@($entries.ToArray());ManifestSignature=$signatureHash;ScannedAt=[DateTime]::UtcNow}
+}
+
+function Get-CafeActiveWorkshopContext {
+    $active=Get-CafeActiveSteamVideoFile
+    $steamProcesses=@(Get-Process -Name 'steam' -ErrorAction SilentlyContinue | Where-Object {$_.Path -and (Test-Path -LiteralPath $_.Path -PathType Leaf)})
+    if($steamProcesses.Count -ne 1){throw 'Could not identify exactly one running Steam client. Keep Steam open and retry.'}
+    return [pscustomobject]@{AccountID=[string]$active.AccountID;SteamRoot=[string]$active.SteamRoot;LibraryRoots=@(Get-SteamLibraryRoots)}
+}
+
+function Remove-CafeWorkshopItems {
+    param([Parameter(Mandatory=$true)]$Preview,[Parameter(Mandatory=$true)]$FreshSnapshot,
+        [Parameter(Mandatory=$true)][object[]]$SelectedEntries,[switch]$Confirmed)
+    if(-not $Confirmed){throw 'Workshop removal requires an explicit confirmation.'}
+    if($Preview.AccountID -cne $FreshSnapshot.AccountID){throw 'The active Steam account changed after the scan. Nothing was removed; scan again.'}
+    if($Preview.ManifestSignature -cne $FreshSnapshot.ManifestSignature){throw 'Steam Workshop subscription data changed after the scan. Nothing was removed; scan again.'}
+    if(@(Get-Process -Name 'cs2' -ErrorAction SilentlyContinue).Count){throw 'Close CS2 before removing Workshop files.'}
+    $results=New-Object 'System.Collections.Generic.List[object]'
+    $seenPaths=New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+    foreach($selection in $SelectedEntries){
+        $id=[string]$selection.WorkshopID
+        $selectedPath=[string]$selection.Path
+        if(-not $seenPaths.Add($selectedPath)){continue}
+        $previewEntry=@($Preview.Entries|Where-Object{$_.WorkshopID -ceq $id -and $_.CanRemove -and [string]::Equals([string]$_.Path,$selectedPath,[StringComparison]::OrdinalIgnoreCase)})|Select-Object -First 1
+        $freshEntry=@($FreshSnapshot.Entries|Where-Object{$_.WorkshopID -ceq $id -and $_.CanRemove -and [string]::Equals([string]$_.Path,$selectedPath,[StringComparison]::OrdinalIgnoreCase)})|Select-Object -First 1
+        if(-not $previewEntry -or -not $freshEntry){throw ('Workshop item '+$id+' is no longer a safe cleanup candidate. Nothing further was removed.')}
+        $path=[IO.Path]::GetFullPath([string]$freshEntry.Path)
+        $base=[IO.Path]::GetFullPath((Join-Path $freshEntry.LibraryRoot 'steamapps\workshop\content\730')).TrimEnd('\')+[IO.Path]::DirectorySeparatorChar
+        if(-not $path.StartsWith($base,[StringComparison]::OrdinalIgnoreCase) -or (Split-Path -Leaf $path) -cne $id){throw ('Refusing to remove a path outside the expected CS2 Workshop item directory: '+$id)}
+        $item=Get-Item -LiteralPath $path -Force -ErrorAction Stop
+        if(-not $item.PSIsContainer -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0){throw ('Workshop item is no longer a safe normal directory: '+$id)}
+        $check=Get-CafeWorkshopDirectorySize -Path $path
+        if(-not $check.Safe){throw ('Workshop item became unsafe after the preview: '+$id+' ('+$check.Reason+')')}
+        try{
+            Remove-Item -LiteralPath $path -Recurse -Force -ErrorAction Stop
+            $results.Add([pscustomobject]@{WorkshopID=$id;Status='Removed';Bytes=[long]$freshEntry.Bytes;Path=$path})
+            Write-Log ('Workshop cleanup removed item '+$id+' from '+$freshEntry.LibraryRoot)
+        }catch{
+            $results.Add([pscustomobject]@{WorkshopID=$id;Status='Failed';Bytes=0L;Path=$path;Error=$_.Exception.Message})
+            Write-Log ('Workshop cleanup failed for item '+$id+': '+$_.Exception.Message) 'ERROR'
+        }
+    }
+    return $results.ToArray()
+}
+
+function Show-CafeWorkshopCleanupDialog {
+    $dialog=New-Object System.Windows.Forms.Form
+    $dialog.Text='CS2 Workshop Cleanup - CafeLauncher'
+    $dialog.ClientSize=[System.Drawing.Size]::new(760,500)
+    $dialog.MinimumSize=[System.Drawing.Size]::new(700,420)
+    $dialog.StartPosition='CenterParent'
+    $dialog.BackColor=$BG
+    $dialog.ForeColor=$WHITE
+    $dialog.Font=New-Object System.Drawing.Font('Segoe UI',9)
+    $intro=New-CafeLabel -Text 'Keep Workshop maps subscribed to the signed-in Steam account. Select only local items Steam no longer lists as subscribed.' -FontSize 9
+    $intro.Location=[System.Drawing.Point]::new(14,12);$intro.Size=[System.Drawing.Size]::new(730,38);$intro.Anchor='Top,Left,Right'
+    $dialog.Controls.Add($intro)
+    $status=New-CafeLabel -Text 'Scan requires Steam to be running and signed in.' -FontSize 9
+    $status.Location=[System.Drawing.Point]::new(14,51);$status.Size=[System.Drawing.Size]::new(730,28);$status.Anchor='Top,Left,Right'
+    $dialog.Controls.Add($status)
+    $list=New-Object System.Windows.Forms.ListView
+    $list.Location=[System.Drawing.Point]::new(14,84);$list.Size=[System.Drawing.Size]::new(730,340);$list.Anchor='Top,Bottom,Left,Right'
+    $list.View='Details';$list.CheckBoxes=$true;$list.FullRowSelect=$true;$list.GridLines=$true
+    $list.BackColor=$PANEL;$list.ForeColor=$WHITE
+    [void]$list.Columns.Add('Workshop ID',140)
+    [void]$list.Columns.Add('Estimated size',120)
+    [void]$list.Columns.Add('Status',440)
+    $dialog.Controls.Add($list)
+    $scanButton=New-Object System.Windows.Forms.Button;$scanButton.Text='Scan again';$scanButton.Location=[System.Drawing.Point]::new(14,445);$scanButton.Size=[System.Drawing.Size]::new(125,38);Style-CafeButton -Button $scanButton;$scanButton.Anchor='Bottom,Left';$dialog.Controls.Add($scanButton)
+    $removeButton=New-Object System.Windows.Forms.Button;$removeButton.Text='Remove selected';$removeButton.Location=[System.Drawing.Point]::new(435,445);$removeButton.Size=[System.Drawing.Size]::new(160,38);Style-CafeButton -Button $removeButton;$removeButton.BackColor=[System.Drawing.Color]::FromArgb(150,62,62);$removeButton.Anchor='Bottom,Right';$dialog.Controls.Add($removeButton)
+    $closeButton=New-Object System.Windows.Forms.Button;$closeButton.Text='Close';$closeButton.Location=[System.Drawing.Point]::new(605,445);$closeButton.Size=[System.Drawing.Size]::new(139,38);Style-CafeButton -Button $closeButton;$closeButton.Anchor='Bottom,Right';$closeButton.Add_Click({$dialog.Close()}.GetNewClosure());$dialog.Controls.Add($closeButton)
+    $state=[pscustomobject]@{Snapshot=$null}
+    $list.Add_ItemCheck({
+        if($_.Index -ge 0 -and $_.Index -lt $list.Items.Count -and -not $list.Items[$_.Index].Tag.CanRemove){$_.NewValue=$_.CurrentValue}
+    }.GetNewClosure())
+    $scanAction={
+        $scanButton.Enabled=$false;$removeButton.Enabled=$false;$status.Text='Scanning Steam Workshop manifests and local CS2 content...'
+        try{
+            $context=Get-CafeActiveWorkshopContext
+            $scan=Get-CafeWorkshopCleanupSnapshot -LibraryRoots $context.LibraryRoots -ActiveAccountID $context.AccountID
+            $state.Snapshot=$scan
+            $list.BeginUpdate();$list.Items.Clear()
+            foreach($entry in $scan.Entries){
+                $sizeText=if($null -eq $entry.Bytes){'Unknown'}else{('{0:N1} MB' -f ([double]$entry.Bytes/1MB))}
+                $item=New-Object System.Windows.Forms.ListViewItem([string]$entry.WorkshopID)
+                [void]$item.SubItems.Add($sizeText);[void]$item.SubItems.Add([string]$entry.Status);$item.Tag=$entry
+                if($entry.CanRemove){$item.ForeColor=$WHITE}else{$item.ForeColor=$MUTED}
+                [void]$list.Items.Add($item)
+            }
+            $list.EndUpdate()
+            $candidateCount=@($scan.Entries|Where-Object{$_.CanRemove}).Count
+            $keepCount=@($scan.Entries|Where-Object{$_.Status -like 'Keep*'}).Count
+            $unknownCount=@($scan.Entries|Where-Object{$_.Status -like 'Unknown*'}).Count
+            $status.Text=('Account verified for this scan. '+$keepCount+' subscribed item(s) protected; '+$candidateCount+' removable; '+$unknownCount+' unknown/protected.')
+            $removeButton.Enabled=($candidateCount -gt 0)
+            Write-Log ('Workshop cleanup scan completed: keep='+$keepCount+'; candidates='+$candidateCount+'; protected/unknown='+$unknownCount)
+        }catch{
+            $state.Snapshot=$null;$list.Items.Clear();$status.Text='Scan unavailable: '+$_.Exception.Message
+            Write-Log ('Workshop cleanup scan refused: '+$_.Exception.Message) 'WARN'
+        }finally{$scanButton.Enabled=$true}
+    }.GetNewClosure()
+    $scanButton.Add_Click({& $scanAction}.GetNewClosure())
+    $removeButton.Add_Click({
+        if(-not $state.Snapshot){[void][System.Windows.Forms.MessageBox]::Show('Scan first; no verified preview is available.','Workshop Cleanup','OK','Warning');return}
+        $selected=@($list.CheckedItems|ForEach-Object{$_.Tag}|Where-Object{$_.CanRemove})
+        if(-not $selected.Count){[void][System.Windows.Forms.MessageBox]::Show('Select one or more removable Workshop items first.','Workshop Cleanup','OK','Information');return}
+        $ids=@($selected|ForEach-Object{$_.WorkshopID}|Sort-Object -Unique)
+        [long]$total=0;foreach($entry in $selected){if($null -ne $entry.Bytes){$total+=[long]$entry.Bytes}}
+        $idSummary=($ids|Select-Object -First 12) -join ', '
+        if($ids.Count -gt 12){$idSummary+=' ...'}
+        $message='Permanently remove '+$selected.Count+' selected local CS2 Workshop folder(s)?'+[Environment]::NewLine+[Environment]::NewLine+'IDs: '+$idSummary+[Environment]::NewLine+'Estimated space: '+('{0:N1} MB' -f ([double]$total/1MB))+[Environment]::NewLine+[Environment]::NewLine+'Steam subscriptions and other files will not be changed.'
+        $answer=[System.Windows.Forms.MessageBox]::Show($message,'Confirm Workshop Cleanup','YesNo','Warning')
+        if($answer -ne [System.Windows.Forms.DialogResult]::Yes){return}
+        $removeButton.Enabled=$false
+        try{
+            $context=Get-CafeActiveWorkshopContext
+            $fresh=Get-CafeWorkshopCleanupSnapshot -LibraryRoots $context.LibraryRoots -ActiveAccountID $context.AccountID
+            $result=@(Remove-CafeWorkshopItems -Preview $state.Snapshot -FreshSnapshot $fresh -SelectedEntries $selected -Confirmed)
+            $removed=@($result|Where-Object{$_.Status -eq 'Removed'}).Count
+            $failed=@($result|Where-Object{$_.Status -eq 'Failed'}).Count
+            [void][System.Windows.Forms.MessageBox]::Show(('Removed '+$removed+' item(s); '+$failed+' failed. Estimated space freed: '+('{0:N1} MB' -f ([double](($result|Where-Object{$_.Status -eq 'Removed'}|Measure-Object -Property Bytes -Sum).Sum)/1MB))+'.'),'Workshop Cleanup','OK',$(if($failed){'Warning'}else{'Information'}))
+            & $scanAction
+        }catch{
+            Write-Log ('Workshop cleanup stopped safely: '+$_.Exception.Message) 'WARN'
+            [void][System.Windows.Forms.MessageBox]::Show($_.Exception.Message,'Workshop Cleanup','OK','Warning')
+            & $scanAction
+        }
+    }.GetNewClosure())
+    & $scanAction
+    [void]$dialog.ShowDialog($form)
+    $dialog.Dispose()
 }
 
 function ConvertFrom-CafeCS2VideoText {
@@ -6150,6 +6522,7 @@ function New-Tile {
 
 New-Tile "LAUNCH ALL" 0 { Launch-All } -Primary
 New-Tile "Steam" 1 { Start-DetectedSteam }
+New-Tile "Workshop Cleanup" 18 { Show-CafeWorkshopCleanupDialog }
 New-Tile "FACEIT Anti-Cheat" 2 {
     Launch-App -Name "FACEIT Anti-Cheat" -Paths @(
         "$env:ProgramFiles\FACEIT AC\faceitclient.exe",
