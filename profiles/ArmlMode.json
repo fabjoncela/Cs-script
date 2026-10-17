@@ -12,7 +12,7 @@
     "Hue":  -1,
     "ScalingMode":  2,
     "CS2Sensitivity":  "",
-    "VoicePushToTalkKey":  "MOUSE5",
+    "VoicePushToTalkKey":  "MOUSE4",
     "CfgDownloadUrl":  "https://raw.githubusercontent.com/fabjoncela/Cs-script/main/arml.cfg",
     "LaunchApps":  true
 }
