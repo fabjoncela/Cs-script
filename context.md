@@ -3,7 +3,7 @@
 This file gives Codex and maintainers the operational context needed to work safely in this repository. **Always follow the checked-out source tree.** The generated state block below reports the launcher release marker, not whether that code has shipped to `main`.
 
 <!-- BEGIN GENERATED LAUNCHER STATE -->
-- Launcher release: `2026.10.18.5`
+- Launcher release: `2026.10.18.6`
 - Generated from the unique `# CAFE_RELEASE` marker in `cafe.bat` by `tools/Update-Context.ps1`.
 <!-- END GENERATED LAUNCHER STATE -->
 
@@ -143,7 +143,7 @@ These checks cover parser/formatting, profile Apply's GitHub-authoritative graph
 
 - Added **Capture CS2** beside each of FabMode, ArliMode, BrileMode, ArmlMode and OliMode. The shortcut opens that profile's editor directly on **CS2 / Apps**, triggering the same extracted capture action as the editor button; GitHub authentication, Save Locally, and Save & Sync are unchanged.
 - Capture reads video values from the active Steam account's `cs2_video.txt` and attempts to read sensitivity and supported crosshair commands from `cs2_user_convars_0_slot0.vcfg`. Missing user convars produce a warning and do not overwrite an existing CFG with invented values. Captured values are staged per profile until GitHub sync.
-- Save & Sync updates only recognized sensitivity/crosshair commands in that profile's matching `.cfg` (alongside existing graphics/profile JSON sync); unrelated binds and CFG commands remain untouched. Profile-to-profile **Copy graphics** remains graphics-only.
+- Save & Sync updates only recognized sensitivity/crosshair commands in that profile's matching `.cfg` (alongside existing graphics/profile JSON sync); unrelated binds and CFG commands remain untouched. When a captured modern crosshair command is present, its known legacy alias is removed from that selected CFG, without changing other profiles. Profile-to-profile **Copy graphics** remains graphics-only.
 - Dashboard profile rows have distinct outline accents (FabMode blue, ArliMode green, BrileMode purple, ArmlMode orange, OliMode cyan), more identifiable `Edit <Profile>` buttons, and `EDITING: <Profile>` window titles.
 - Keep the shortcut and editor wired to the **same** capture action to avoid diverging behavior. GitHub credentials must not be persisted; preserve Deep Freeze portability and non-admin assumptions.
 - **Validation required:** Windows PowerShell 5.1 parser and Windows/CS2 smoke test (including local account detection, saved user convars format, and GitHub read-back) before relying on this build in internet cafés. This environment cannot run the Windows GUI.

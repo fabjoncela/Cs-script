@@ -4,7 +4,7 @@ start "" powershell.exe -NoProfile -ExecutionPolicy Bypass -STA -WindowStyle Hid
 exit /b
 
 # POWERSHELL_GUI
-# CAFE_RELEASE=2026.10.18.5
+# CAFE_RELEASE=2026.10.18.6
 
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
@@ -4019,8 +4019,18 @@ function Set-CafeCapturedConvarsInCfg {
     param([string]$Content,$Values)
     $text=$Content
     $newline=if($text.Contains(([string][char]13+[string][char]10))){[string][char]13+[string][char]10}else{[string][char]10}
+    $legacyToModern=@{
+        cl_crosshairgap='cl_crosshair_gap'
+        cl_crosshairsize='cl_crosshair_length'
+        cl_crosshairthickness='cl_crosshair_thickness'
+    }
+    $modernToLegacy=@{}
+    foreach($legacyName in $legacyToModern.Keys){$modernToLegacy[$legacyToModern[$legacyName]]=$legacyName}
     foreach($name in @($Values.Keys|Sort-Object)){
         if($name -ne 'sensitivity' -and $name -notmatch '^cl_crosshair[a-z0-9_]*$'){continue}
+        # If CS2 saved both spellings, prefer its newer spelling and do not
+        # reintroduce the legacy command after it has been removed.
+        if($legacyToModern.ContainsKey($name) -and $Values.ContainsKey($legacyToModern[$name])){continue}
         $value=[string]$Values[$name]
         if($value -notmatch '^(true|false|-?[0-9]+(\.[0-9]+)?)$'){throw ('Invalid CFG value for '+$name)}
         $rx='(?im)^[ \t]*'+[regex]::Escape($name)+'[ \t]+(?:"[^"\r\n]*"|[^\s\r\n/;]+)[ \t]*(?://[^\r\n]*)?[ \t]*(?=\r?$)'
@@ -4033,6 +4043,16 @@ function Set-CafeCapturedConvarsInCfg {
         }else{
             if($text.Length -and -not $text.EndsWith([string][char]10)){$text+=$newline}
             $text+=$line+$newline
+        }
+        if($modernToLegacy.ContainsKey($name)){
+            $legacyName=[string]$modernToLegacy[$name]
+            $legacyRx='(?im)^[ \t]*'+[regex]::Escape($legacyName)+'[ \t]+(?:"[^"\r\n]*"|[^\s\r\n/;]+)[ \t]*(?://[^\r\n]*)?[ \t]*(?:\r\n|\n|$)'
+            $legacyMatches=[regex]::Matches($text,$legacyRx)
+            if($legacyMatches.Count -gt 1){throw ('Duplicate legacy '+$legacyName+' commands in destination CFG.')}
+            if($legacyMatches.Count -eq 1){
+                $legacyMatch=$legacyMatches[0]
+                $text=$text.Remove($legacyMatch.Index,$legacyMatch.Length)
+            }
         }
     }
     return $text

@@ -236,6 +236,33 @@ foreach($expected in @{
     'cl_crosshairoutline_a "255"'=$true;'cl_crosshair_future_option "7"'=$true
 }.Keys){Assert-True ($syncedFabCfg.Contains($expected)) ('Current CS2 crosshair setting did not sync to fab.cfg: '+$expected)}
 Assert-True ($script:FakeWrites[0] -eq 'fab.cfg') 'Captured crosshair values did not update the selected CFG first.'
+Assert-True ($syncedFabCfg -notmatch '(?m)^\s*cl_crosshairgap\s' -and $syncedFabCfg -notmatch '(?m)^\s*cl_crosshairsize\s' -and $syncedFabCfg -notmatch '(?m)^\s*cl_crosshairthickness\s') 'New FabMode names left their legacy aliases in fab.cfg.'
+$legacyOnly=Set-CafeCapturedConvarsInCfg -Content ('cl_crosshairgap "-3.7"'+$lf) -Values @{cl_crosshairgap='-2'}
+Assert-True ($legacyOnly.Contains('cl_crosshairgap "-2"') -and -not $legacyOnly.Contains('cl_crosshair_gap')) 'A legacy-only capture should remain supported without inventing a modern setting.'
+
+# Updating one profile migrates only that profile's legacy aliases. Exercise
+# mixed spacing, quoted/unquoted values, comments, and CRLF in the destination.
+$script:FakeFiles['brile.cfg']='sensitivity "1.2"'+$crlf+'bind "r" "+reload"'+$crlf+'  cl_crosshairgap   "-8" // Brile legacy gap'+$crlf+'   cl_crosshair_length  "1" // Brile old length'+$crlf+'cl_crosshair_thickness 1'+$crlf
+$script:FakeFiles['arli.cfg']='cl_crosshairgap "-2"'+$lf+'cl_crosshairsize "1"'+$lf
+$script:FakeFiles['oli.cfg']='cl_crosshairgap "1"'+$crlf+'cl_crosshairsize "3"'+$crlf
+$arliBefore=$script:FakeFiles['arli.cfg']
+$oliBefore=$script:FakeFiles['oli.cfg']
+$script:CapturedCS2Convars['BrileMode']=@{
+    cl_crosshair_gap='4';cl_crosshairgap='-9'
+    cl_crosshair_length='5';cl_crosshairsize='2'
+    cl_crosshair_thickness='2';cl_crosshairthickness='1'
+}
+$script:FakeWrites.Clear()
+Sync-ProfileToGitHub -ProfileName 'BrileMode' -Token ('testtoken-'+'x'*22)
+$syncedBrileCfg=$script:FakeFiles['brile.cfg']
+foreach($expected in @('cl_crosshair_gap "4"','cl_crosshair_length "5"','cl_crosshair_thickness "2"')){
+    Assert-True ($syncedBrileCfg.Contains($expected)) ('Modern BrileMode crosshair setting missing: '+$expected)
+}
+Assert-True ($syncedBrileCfg -notmatch '(?m)^\s*cl_crosshairgap\s' -and $syncedBrileCfg -notmatch '(?m)^\s*cl_crosshairsize\s' -and $syncedBrileCfg -notmatch '(?m)^\s*cl_crosshairthickness\s') 'BrileMode kept a legacy alias beside a captured modern name.'
+Assert-True ($syncedBrileCfg.Contains('bind "r" "+reload"')) 'BrileMode crosshair migration changed an unrelated bind.'
+Assert-True ($syncedBrileCfg -notmatch '(?<!\r)\n') 'BrileMode crosshair migration lost CRLF line endings.'
+Assert-True ($script:FakeFiles['arli.cfg'] -ceq $arliBefore -and $script:FakeFiles['oli.cfg'] -ceq $oliBefore) 'BrileMode crosshair migration changed another profile CFG.'
+Assert-True ($script:FakeWrites[0] -eq 'brile.cfg') 'BrileMode crosshair migration did not target brile.cfg first.'
 Remove-Item -LiteralPath (Split-Path -Parent $script:FakeConvarsPath) -Recurse -Force
 
 # Ensure per-profile voice binding reaches only the requested CFG and survives JSON sync.
