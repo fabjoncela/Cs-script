@@ -167,7 +167,7 @@ function Get-ActiveSteamCS2Video {
     if(-not $steam){throw 'Steam installation not found.'}
     $video=Join-Path (Split-Path -Parent $steam) ("userdata\"+$id+"\730\local\cfg\cs2_video.txt")
     if(-not (Test-Path -LiteralPath $video -PathType Leaf)){
-        throw ("Missing cs2_video.txt for signed-in account "+$id+" at "+$video+". Launch CS2 once and save video settings.")
+        throw ("Missing cs2_video.txt for signed-in account "+$id+" at "+$video+". Launch CS2 to generate the missing cs2_video.txt file, close CS2, then click Apply Graphics again.")
     }
     return [pscustomobject]@{Path=$video;AccountID=[string]$id}
 }
@@ -306,7 +306,7 @@ function Apply-CS2ModeGraphics {
     param([string]$ModeName)
     Write-Log ("Clicked: Apply Graphics "+$ModeName)
     try{
-        if(Get-Process -Name cs2 -ErrorAction SilentlyContinue){throw 'CS2 is running. Close it before applying graphics.'}
+        if(Get-Process -Name cs2 -ErrorAction SilentlyContinue){throw 'CS2 is running. Close CS2 completely, then click Apply Graphics again.'}
         $preset=Get-CS2ModeGraphicsPreset -ModeName $ModeName
         $displayPolicy=Assert-CS2GraphicsDisplayPolicy -Preset $preset
         $refreshPolicy=if($preset.PSObject.Properties['RefreshPolicy'] -and $preset.RefreshPolicy){[string]$preset.RefreshPolicy}else{'Highest'}
