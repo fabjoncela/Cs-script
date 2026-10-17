@@ -5,7 +5,7 @@ CafeLauncher is a portable Windows setup launcher for CS2 internet cafés. It ru
 [Technical architecture and maintenance notes](./context.md)
 
 <!-- BEGIN GENERATED LAUNCHER RELEASE -->
-> Launcher release: **2026.10.18.4**. Features depend on the PC's hardware, installed programs and user permissions.
+> Launcher release: **2026.10.18.5**. Features depend on the PC's hardware, installed programs and user permissions.
 <!-- END GENERATED LAUNCHER RELEASE -->
 
 ## Download and start
@@ -50,7 +50,7 @@ Each profile has its own canonical preset under [`graphics/`](./graphics/). In t
 
 FabMode, ArliMode, ArmlMode, and OliMode currently use 1280×960 4:3 fullscreen defaults. BrileMode uses 1920×1080 16:9. Presets request the highest refresh rate advertised for the selected game resolution, or can use an exact rate when it is available.
 
-- **Capture CS2** stages saved video settings from the active Steam account after CS2 is closed. It can also read sensitivity and supported crosshair commands from the account's user-convars file. It does not edit those game files; you review captured values before saving or syncing. Missing user-convars are reported and do not replace existing CFG values with invented ones.
+- **Capture CS2** stages saved video settings from the active Steam account after CS2 is closed. It also captures sensitivity and saved `cl_crosshair*` values with numeric or true/false values from the account's user-convars file. It does not edit those game files; you review captured values before saving or syncing. Missing user-convars are reported and do not replace existing CFG values with invented ones.
 - **Copy graphics** copies only graphics fields from another profile. **Reset** reloads the selected profile's canonical preset. Neither saves automatically.
 - **Load history** can show the three previous versions of a profile's preset. Restoring loads values into the editor; it does not save or apply them.
 - **Apply Graphics** requires CS2 to be closed. It validates the selected profile and active Steam account, backs up the target file, changes recognized settings, verifies the result, and reports fields that were applied, skipped, or could not be verified.

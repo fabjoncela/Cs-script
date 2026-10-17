@@ -3,7 +3,7 @@
 This file gives Codex and maintainers the operational context needed to work safely in this repository. **Always follow the checked-out source tree.** The generated state block below reports the launcher release marker, not whether that code has shipped to `main`.
 
 <!-- BEGIN GENERATED LAUNCHER STATE -->
-- Launcher release: `2026.10.18.4`
+- Launcher release: `2026.10.18.5`
 - Generated from the unique `# CAFE_RELEASE` marker in `cafe.bat` by `tools/Update-Context.ps1`.
 <!-- END GENERATED LAUNCHER STATE -->
 
@@ -44,7 +44,7 @@ Each profile's canonical preset is stored independently in `graphics/<ProfileNam
 
 The editor can copy only the CS2 graphics fields from another profile, or reset the current editor values from that profile's canonical preset. These actions do not save automatically. Apply Graphics reports confirmed/applied fields, changed fields, skipped fields, display-mode fallback details, NVIDIA scaling verification, and the backup path. A partial result is presented as a warning rather than unconditional success.
 
-The CS2 / Apps editor can capture saved video settings from the running Steam client's active account after CS2 is closed. Capture reads only that account's `userdata/<id>/730/local/cfg/cs2_video.txt`, rechecks the active account after reading, validates recognized keys and ranges, converts the refresh numerator/denominator to whole Hz, and preserves profile values for missing settings. It imports CS2 resolution/aspect/fullscreen and supported video quality values into the editor; NVIDIA scaling is outside `cs2_video.txt` and remains the profile's current value. Capture never edits the game file or syncs immediately. The user reviews the imported values, then chooses Save Locally or Save & Sync; the existing sync confirmation describes profile/graphics and optional sensitivity CFG changes. In-game CFG binds are not captured.
+The CS2 / Apps editor can capture saved video settings from the running Steam client's active account after CS2 is closed. Capture reads only that account's `userdata/<id>/730/local/cfg/cs2_video.txt`, rechecks the active account after reading, validates recognized keys and ranges, converts the refresh numerator/denominator to whole Hz, and preserves profile values for missing settings. It imports CS2 resolution/aspect/fullscreen and supported video quality values into the editor; NVIDIA scaling is outside `cs2_video.txt` and remains the profile's current value. It also captures sensitivity and every saved `cl_crosshair*` user-convar whose value is numeric or boolean, so new crosshair convars do not require an allowlist update. Capture never edits the game file or syncs immediately. The user reviews the imported values, then chooses Save Locally or Save & Sync; the existing sync confirmation describes profile/graphics and optional sensitivity CFG changes. In-game CFG binds are not captured.
 
 The CS2 / Apps editor can load the three previous versions of `graphics/<ProfileName>.json` from GitHub commit history. The commit list is cached per profile for 24 hours; manual refresh bypasses the cache. Restoring fetches the selected file version over the internet, validates it, and fills the editor without saving or applying it. Saving or syncing remains a separate user action. History is not available offline unless it is already listed in the fresh cache; fetching an older preset still requires internet.
 

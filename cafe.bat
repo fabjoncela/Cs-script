@@ -4,7 +4,7 @@ start "" powershell.exe -NoProfile -ExecutionPolicy Bypass -STA -WindowStyle Hid
 exit /b
 
 # POWERSHELL_GUI
-# CAFE_RELEASE=2026.10.18.4
+# CAFE_RELEASE=2026.10.18.5
 
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
@@ -4000,27 +4000,16 @@ function Get-CafeCS2UserConvarsCapture {
     $reader=New-Object IO.StreamReader($path,$true)
     try{$content=$reader.ReadToEnd()}finally{$reader.Dispose()}
     if($content -notmatch '(?m)^\s*\{\s*$' -or $content -notmatch '(?m)^\s*\}\s*$'){throw 'Unrecognized user convars KeyValues format.'}
-    $allowed=@('sensitivity','cl_crosshair_drawoutline','cl_crosshair_outlinethickness','cl_crosshair_recoil',
-        'cl_crosshair_sniper_width','cl_crosshair_t','cl_crosshairalpha','cl_crosshaircolor','cl_crosshaircolor_a',
-        'cl_crosshaircolor_b','cl_crosshaircolor_g','cl_crosshaircolor_r','cl_crosshairdot',
-        'cl_crosshairgap','cl_crosshairgap_useweaponvalue','cl_crosshairsize','cl_crosshairstyle',
-        'cl_crosshairthickness','cl_crosshairusealpha','cl_crosshair_friendly_warning',
-        # Include current CS2 names as well as legacy names that older builds save.
-        'cl_crosshair_gap','cl_crosshair_length','cl_crosshair_thickness','cl_crosshair_screen_height',
-        'cl_crosshair_dynamic_spread_limit','cl_crosshairoutline_a','cl_crosshairoutline_b',
-        'cl_crosshairoutline_g','cl_crosshairoutline_r',
-        'cl_crosshair_dynamic_maxdist_splitratio','cl_crosshair_dynamic_splitalpha_innermod',
-        'cl_crosshair_dynamic_splitalpha_outermod','cl_crosshair_dynamic_splitdist')
     $values=@{}
-    foreach($name in $allowed){
-        $rx='(?im)^\s*"'+[regex]::Escape($name)+'"\s+"(?<v>[^"\r\n]{1,40})"\s*$'
-        $matches=[regex]::Matches($content,$rx)
-        if($matches.Count -gt 1){throw ('Duplicate CS2 saved '+$name+' values.')}
-        if($matches.Count -eq 1){
-            $value=[string]$matches[0].Groups['v'].Value
-            if($value -notmatch '^(true|false|-?[0-9]+(\.[0-9]+)?)$'){throw ('Unexpected '+$name+' in convars.')}
-            $values[$name]=$value
+    $rx='(?im)^\s*"(?<name>sensitivity|cl_crosshair[a-z0-9_]*)"\s+"(?<v>[^"\r\n]{1,40})"\s*$'
+    foreach($match in [regex]::Matches($content,$rx)){
+        $name=[string]$match.Groups['name'].Value
+        $value=[string]$match.Groups['v'].Value
+        if($values.ContainsKey($name)){throw ('Duplicate CS2 saved '+$name+' values.')}
+        if($value -notmatch '^(true|false|-?[0-9]+(\.[0-9]+)?)$'){
+            throw ('Unexpected '+$name+' in convars.')
         }
+        $values[$name]=$value
     }
     $active=Get-CafeActiveSteamVideoFile
     if($active.AccountID -cne $Source.AccountID -or $active.Path -ine $Source.Path){throw 'Steam account changed during capture.'}

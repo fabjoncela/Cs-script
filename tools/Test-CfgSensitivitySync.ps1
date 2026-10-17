@@ -197,6 +197,8 @@ $newConvars=@'
         "cl_crosshairoutline_b" "0"
         "cl_crosshairoutline_g" "0"
         "cl_crosshairoutline_r" "0"
+        "cl_crosshair_future_option" "7"
+        "cl_grenadecrosshair_smoke" "true"
         "cl_crosshairgap" "3"
         "cl_crosshairsize" "2"
         "cl_crosshairthickness" "1"
@@ -216,9 +218,11 @@ $captured=Get-CafeCS2UserConvarsCapture -Source ([pscustomobject]@{Path=$script:
 foreach($expected in @{
     cl_crosshair_gap='0';cl_crosshair_length='3';cl_crosshair_thickness='3';cl_crosshaircolor_a='255'
     cl_crosshair_screen_height='960';cl_crosshair_dynamic_spread_limit='226';cl_crosshairoutline_a='255'
+    cl_crosshair_future_option='7'
 }.GetEnumerator()){
     Assert-True ($captured.Values[$expected.Key] -ceq $expected.Value) ('Current CS2 convar was not captured: '+$expected.Key)
 }
+Assert-True (-not $captured.Values.ContainsKey('cl_grenadecrosshair_smoke')) 'A non-crosshair command was captured.'
 $script:CapturedCS2Convars['FabMode']=$captured.Values
 $script:FakeFiles['fab.cfg']='cl_crosshairgap "-3.7"'+$lf+'cl_crosshairsize "2"'+$lf+'cl_crosshairthickness "1"'+$lf
 $script:GamingProfiles['FabMode'].CS2Sensitivity=''
@@ -229,7 +233,7 @@ foreach($expected in @{
     'cl_crosshair_gap "0"'=$true;'cl_crosshair_length "3"'=$true
     'cl_crosshair_thickness "3"'=$true;'cl_crosshaircolor_a "255"'=$true
     'cl_crosshair_screen_height "960"'=$true;'cl_crosshair_dynamic_spread_limit "226"'=$true
-    'cl_crosshairoutline_a "255"'=$true
+    'cl_crosshairoutline_a "255"'=$true;'cl_crosshair_future_option "7"'=$true
 }.Keys){Assert-True ($syncedFabCfg.Contains($expected)) ('Current CS2 crosshair setting did not sync to fab.cfg: '+$expected)}
 Assert-True ($script:FakeWrites[0] -eq 'fab.cfg') 'Captured crosshair values did not update the selected CFG first.'
 Remove-Item -LiteralPath (Split-Path -Parent $script:FakeConvarsPath) -Recurse -Force
@@ -330,4 +334,4 @@ try{Sync-ProfileToGitHub -ProfileName 'OliMode' -Token ('testtoken-'+'x'*22)}
 catch{$failureMessage=$_.Exception.Message}
 Assert-True ($failureMessage.Contains('unexpected CFG')) 'Cross-profile CFG path must be blocked.'
 Assert-True ($script:FakeWrites.Count -eq 0) 'Unsafe CFG path must not write anything.'
-Write-Host 'PASS: 5 profile, graphics, and CFG syncs; authenticated read-back; commit-anchored profile refresh; stale profile/graphics rejection; safe sensitivity rewrite; blank override; retry; partial failure; path validation.'
+Write-Host 'PASS: dynamic CS2 crosshair capture and CFG sync; 5 profile/graphics syncs; authenticated read-back; commit-anchored profile refresh; stale profile/graphics rejection; sensitivity and voice handling; retry; partial failure; path validation.'
