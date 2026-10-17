@@ -43,3 +43,5 @@ if([string]$releaseProperty.Value -ne $release){
     throw "Google Drive updater returned a different release than $release."
 }
 Write-Host "Google Drive cafe.bat updated in place to release $release."
+# git diff --quiet returns 1 when cafe.bat changed; that is expected on publish.
+exit 0
