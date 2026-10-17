@@ -11,7 +11,8 @@
     "Vibrance":  75,
     "Hue":  -1,
     "ScalingMode":  2,
-    "CS2Sensitivity":  "",
+    "CS2Sensitivity":  "1.2",
+    "VoicePushToTalkKey":  "V",
     "CfgDownloadUrl":  "https://raw.githubusercontent.com/fabjoncela/Cs-script/main/fab.cfg",
     "LaunchApps":  true
 }
