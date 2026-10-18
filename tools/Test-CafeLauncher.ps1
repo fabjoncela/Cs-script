@@ -395,6 +395,10 @@ foreach($fn in @('New-EditorTabGrid','Add-EditorTabField','New-EditorTabNumber',
 }
 # Construct the field layout without opening CafeLauncher or touching devices.
 Add-Type -AssemblyName System.Windows.Forms
+if($psSource -notmatch '(?s)Add-Type -ReferencedAssemblies @\(''System.Windows.Forms'',''System.Drawing''\) -TypeDefinition @''\r?\n(?<editorControls>.*?)\r?\n''@'){
+    throw 'Profile editor wheel-aware controls were not found.'
+}
+Add-Type -ReferencedAssemblies @('System.Windows.Forms','System.Drawing') -TypeDefinition $Matches['editorControls']
 $WHITE=[System.Drawing.Color]::White
 foreach($fn in @('New-EditorTabGrid','Add-EditorTabField','New-EditorTabNumber','Add-EditorTabWide')){
     Invoke-Expression $definitions[$fn]
