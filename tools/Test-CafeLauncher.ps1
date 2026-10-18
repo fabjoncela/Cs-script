@@ -430,8 +430,10 @@ if($definitions['Check-CafeLauncherUpdates'] -notmatch '\$runningReleaseText=Get
 $startupAt=$psSource.IndexOf('$startupTimer.Add_Tick({')
 if($startupAt -lt 0){throw 'Startup inventory timer is missing.'}
 $startupSource=$psSource.Substring($startupAt)
-if($startupSource -match 'Check-CafeLauncherUpdates' -or $startupSource -notmatch 'Get-PCDiagnostics'){
-    throw 'Startup must inventory the PC without checking GitHub for launcher updates.'
+$inventoryAt=$startupSource.IndexOf('Get-PCDiagnostics',[StringComparison]::Ordinal)
+$updateCheckAt=$startupSource.IndexOf('Check-CafeLauncherUpdates',[StringComparison]::Ordinal)
+if($inventoryAt -lt 0 -or $updateCheckAt -le $inventoryAt -or $startupSource -match 'Check-CafeLauncherUpdates\s+-Manual'){
+    throw 'Startup must check launcher updates automatically after the local PC inventory.'
 }
 if($editorSource -notmatch 'Sync-ProfileToGitHub -ProfileName \$ProfileName -Token \$token' -or
    $editorSource -notmatch 'Confirm GitHub sync'){

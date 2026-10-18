@@ -4,7 +4,7 @@ start "" powershell.exe -NoProfile -ExecutionPolicy Bypass -STA -WindowStyle Hid
 exit /b
 
 # POWERSHELL_GUI
-# CAFE_RELEASE=2026.10.18.10
+# CAFE_RELEASE=2026.10.18.11
 
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
@@ -7522,7 +7522,7 @@ $form.Add_FormClosed({
     if($script:LogBoldFont){$script:LogBoldFont.Dispose();$script:LogBoldFont=$null}
 })
 # On first display, inventory the machine after Windows has rendered the UI.
-# Update checks are user-triggered through the Check for Updates tile.
+# Launcher update checks also run automatically after the initial local startup inventory.
 $script:StartupInventoryRunning=$false
 $script:StartupStatusMessage='Getting CafeLauncher ready...'
 $script:StartupSpinnerAngle=0
@@ -7597,6 +7597,8 @@ $startupTimer.Add_Tick({
         if($script:StartupStatusTimer){$script:StartupStatusTimer.Stop();$script:StartupStatusTimer.Dispose();$script:StartupStatusTimer=$null}
         if($script:StartupOverlay -and -not $script:StartupOverlay.IsDisposed){$script:StartupOverlay.Hide()}
     }
+    # Check GitHub main after the local inventory and dashboard startup are complete.
+    Check-CafeLauncherUpdates
 })
 $form.Add_Shown({ $startupTimer.Start() })
 [void]$form.ShowDialog()
