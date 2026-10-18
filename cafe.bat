@@ -4,7 +4,7 @@ start "" powershell.exe -NoProfile -ExecutionPolicy Bypass -STA -WindowStyle Hid
 exit /b
 
 # POWERSHELL_GUI
-# CAFE_RELEASE=2026.10.19.1
+# CAFE_RELEASE=2026.10.19.2
 
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
@@ -4480,7 +4480,7 @@ function Get-GitHubJsonFromContentsApi {
     # The raw-content CDN served old profile data even with a unique query.
     # Read mutable profile/graphics JSON through the API; callers keep their
     # local copy if this request fails rather than falling back to raw CDN.
-    $file = Invoke-CafeGitHubRestMethod -Uri $url -Method Get -Headers $headers -TimeoutSec 12 -MaximumRedirection 0
+    $file = Invoke-CafeGitHubRestMethod -Uri (Add-CafeCacheBust -Uri $url) -Method Get -Headers $headers -TimeoutSec 12 -MaximumRedirection 0
     if($file.type -ne 'file' -or $file.path -cne $Path -or
        $file.encoding -ne 'base64' -or [string]$file.sha -notmatch '^[a-fA-F0-9]{40}$' -or
        [string]::IsNullOrWhiteSpace([string]$file.content) -or [int64]$file.size -gt $MaxBytes){
@@ -7193,7 +7193,7 @@ function Invoke-GraphicsOnly {
     Start-StepScope -Run $graphicsRun -Step 'Apply Graphics'
     try {
     if(-not (Resolve-PendingProfileChanges -ProfileName $ModeName)){return}
-    $expected='1aa2a754fbba92ab4ff25f9450380f9d98a2e559'
+    $expected='21327a7e4819c60b89236639b173ad03d2a8eac6'
     $source=Add-CafeCacheBust -Uri 'https://raw.githubusercontent.com/fabjoncela/Cs-script/main/graphics/ApplyGraphics.ps1'
     $cache=Join-Path $env:LOCALAPPDATA 'CafeLauncher\graphics-module.ps1'
     $parent=Split-Path -Parent $cache

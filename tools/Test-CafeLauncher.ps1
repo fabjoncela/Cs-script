@@ -265,6 +265,7 @@ if($profileApiFunction.Count -ne 1){throw 'Expected one GitHub Contents API JSON
 $profileApiSource=$profileApiFunction[0].Extent.Text
 if($profileApiSource -notmatch 'api\.github\.com/repos/\$Repo/contents/\$\{encodedPath\}' -or
    $profileApiSource -notmatch 'Cache-Control.*no-cache' -or
+   $profileApiSource -notmatch 'Add-CafeCacheBust' -or
    $profileApiSource -notmatch 'FromBase64String' -or
    $profileApiSource -notmatch 'file\.path -cne \$Path' -or
    $profileApiSource -match 'raw\.githubusercontent\.com'){
@@ -308,14 +309,14 @@ $script:ProfileApiFixture=[pscustomobject]@{
 }
 $profileFixture=Get-GitHubJsonFromContentsApi -Repo 'owner/repo' -Branch 'main' -Path 'profiles/FabMode.json'
 if([int]$profileFixture.PointerSpeed -ne 18 -or
-   $script:ProfileApiRequest.Uri -notmatch '/contents/profiles/FabMode\.json\?ref=main$' -or
+   $script:ProfileApiRequest.Uri -notmatch '/contents/profiles/FabMode\.json\?ref=main&fresh=[0-9a-f]{32}$' -or
    $script:ProfileApiRequest.Headers['Cache-Control'] -ne 'no-cache'){
     throw 'The profile reader did not decode the current validated API fixture or send no-cache headers.'
 }
 $script:ProfileApiFixture.path='graphics/FabMode.json'
 $graphicsFixture=Get-GitHubJsonFromContentsApi -Repo 'owner/repo' -Branch 'main' -Path 'graphics/FabMode.json' -MaxBytes 1048576
 if([int]$graphicsFixture.PointerSpeed -ne 18 -or
-   $script:ProfileApiRequest.Uri -notmatch '/contents/graphics/FabMode\.json\?ref=main$'){
+   $script:ProfileApiRequest.Uri -notmatch '/contents/graphics/FabMode\.json\?ref=main&fresh=[0-9a-f]{32}$'){
     throw 'The shared Contents API reader did not load the graphics preset path.'
 }
 $script:ProfileApiFixture.path='profiles/OliMode.json'

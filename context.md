@@ -3,7 +3,7 @@
 This file gives Codex and maintainers the operational context needed to work safely in this repository. **Always follow the checked-out source tree.** The generated state block below reports the launcher release marker, not whether that code has shipped to `main`.
 
 <!-- BEGIN GENERATED LAUNCHER STATE -->
-- Launcher release: `2026.10.19.1`
+- Launcher release: `2026.10.19.2`
 - Generated from the unique `# CAFE_RELEASE` marker in `cafe.bat` by `tools/Update-Context.ps1`.
 <!-- END GENERATED LAUNCHER STATE -->
 
@@ -113,7 +113,7 @@ Dashboard **Apply Graphics** is a separate action from the normal profile Apply 
 - **Refresh safeguard:** a previous stale-read regression showed that a unique query to `raw.githubusercontent.com` did not guarantee the latest profile. Always refresh profile and graphics JSON through the GitHub Contents API with no-cache headers.
 - Validate the returned path, type, blob SHA, base64 encoding, and size; decode only the validated response. Never fall back to mutable raw-CDN profile or graphics JSON.
 - If a Contents API read fails, retain local cache for recovery but do not silently use it for normal Apply. Normal Apply must verify the selected profile's latest graphics file or cancel. Apply Graphics uses its explicit local-fallback confirmation path.
-- Other mutable raw reads (CFG files, launcher update BAT, and the pinned graphics module) need a unique cache-busting query and `Cache-Control: no-cache` where supported. Verify downloaded bytes before using the hash-pinned graphics module.
+- Mutable profile and graphics JSON reads use the GitHub Contents API with a unique cache-busting query and `Cache-Control: no-cache`, so an immediate Apply after Save & Sync sees the verified new preset instead of an intermediary's older response. Other mutable raw reads (CFG files, launcher update BAT, and the pinned graphics module) also need a unique cache-busting query and `Cache-Control: no-cache` where supported. Verify downloaded bytes before using the hash-pinned graphics module.
 - **Persistence invariant:** after successful Save & Sync, the exact verified values must remain the values used by the next Apply. Preserve sync-pending/local precedence; background refresh or cache must never replace a successful local write with older data.
 - After GitHub accepts the profile and graphics writes, read both JSON files back through the authenticated Contents API with no-cache headers. Verify every submitted profile field and the normalized graphics preset.
 - Only a verified read-back clears `SyncPending` and persists the clean local snapshot. Failed or mismatched read-back leaves local settings pending for retry.
