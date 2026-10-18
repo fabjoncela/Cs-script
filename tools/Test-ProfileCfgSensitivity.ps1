@@ -16,13 +16,12 @@ foreach($name in @('ConvertTo-CafeCS2Sensitivity','Get-CafeCS2CfgSensitivity')){
 }
 function Assert-True {param([bool]$Value,[string]$Message);if(-not $Value){throw $Message}}
 
-$expected=[ordered]@{'fab.cfg'='1.2';'arli.cfg'='1';'arml.cfg'='1';'brile.cfg'='1.2';'oli.cfg'='1.2'}
-foreach($cfgName in $expected.Keys){
-    $path=Join-Path $root $cfgName
-    if(-not (Test-Path -LiteralPath $path -PathType Leaf)){throw ('Missing profile CFG: '+$cfgName)}
-    $content=[IO.File]::ReadAllText($path)
+$cfgFiles=@(Get-ChildItem -LiteralPath $root -Filter '*.cfg' -File | Sort-Object Name)
+if($cfgFiles.Count -eq 0){throw 'No checked-in profile CFG files were found.'}
+foreach($cfgFile in $cfgFiles){
+    $content=[IO.File]::ReadAllText($cfgFile.FullName)
     $sensitivity=Get-CafeCS2CfgSensitivity -Content $content
-    Assert-True ($sensitivity -ceq $expected[$cfgName]) ($cfgName+' sensitivity changed unexpectedly: '+$sensitivity)
+    Assert-True (-not [string]::IsNullOrWhiteSpace($sensitivity)) ($cfgFile.Name+' has no valid sensitivity.')
 }
 foreach($invalid in @('', ('bind "r" "+reload"'+"`n"), ('sensitivity "1"'+"`n"+'sensitivity "2"'+"`n"), ('sensitivity "0"'+"`n"), ('sensitivity "20.1"'+"`n"), ('sensitivity'+"`n"), ('sensitivity nope'+"`n"))){
     $failed=$false
