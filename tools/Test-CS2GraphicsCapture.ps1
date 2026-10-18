@@ -117,7 +117,7 @@ foreach($required in @('$cs2Grid=New-EditorTabGrid -Page $cs2Page -Rows 20','$ca
     if($editor -notmatch [regex]::Escape($required)){throw ('Profile editor capture workflow is missing: '+$required)}
 }
 $sensitivityField="Add-EditorTabField -Grid `$mouseGrid -Title 'CS2 sensitivity (sync updates CS2 .cfg)' -Control `$sens -Column 0 -Row 1"
-foreach($required in @('$mouseGrid=New-EditorTabGrid -Page $mousePage -Rows 4',$sensitivityField,'$sens.Text=[string]$convars.Values[''sensitivity'']','$p.CS2Sensitivity=$sensValue','is staged on the Mouse tab.')){
+foreach($required in @('$mouseGrid=New-EditorTabGrid -Page $mousePage -Rows 5',$sensitivityField,'$sens.Text=[string]$convars.Values[''sensitivity'']','$p.CS2Sensitivity=$sensValue','is staged on the Mouse tab.')){
     if($editor -notmatch [regex]::Escape($required)){throw ('CS2 sensitivity Mouse tab workflow is missing: '+$required)}
 }
 if($editor -match [regex]::Escape("Add-EditorTabField -Grid `$cs2Grid -Title 'CS2 sensitivity")){

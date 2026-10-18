@@ -4,7 +4,7 @@ start "" powershell.exe -NoProfile -ExecutionPolicy Bypass -STA -WindowStyle Hid
 exit /b
 
 # POWERSHELL_GUI
-# CAFE_RELEASE=2026.10.18.9
+# CAFE_RELEASE=2026.10.18.10
 
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
@@ -3990,6 +3990,136 @@ function Get-CafeCS2GraphicsCapture {
 
 # CS2 user settings captured only on demand; keyed by target profile.
 $script:CapturedCS2Convars=@{}
+function ConvertFrom-CafeCS2CrosshairShareCode {
+    param([Parameter(Mandatory=$true)][string]$ShareCode)
+    # Share-code layouts documented by akiver/csgo-sharecode (MIT):
+    # https://github.com/akiver/csgo-sharecode/blob/main/doc/code_layout.md
+    # This PowerShell implementation is kept local so CafeLauncher needs no Node.js runtime.
+    $alphabet='ABCDEFGHJKLMNOPQRSTUVWXYZabcdefhijkmnopqrstuvwxyz23456789'
+    $code=$ShareCode.Trim()
+    if($code -match '^CSGO(?:-[A-Za-z0-9]{5}){5}$'){
+        $format='legacy'
+        $digits=($code.Substring(5) -replace '-','')
+        $byteCount=18
+    }elseif($code -match '^CS[A-Zabcdefghijkmnopqrstuvwxyz23456789]{44}$'){
+        $format='cs2'
+        $digits=$code.Substring(2)
+        $byteCount=32
+    }else{
+        throw 'Enter a CS:GO/older CS2 code (CSGO-xxxxx-xxxxx-xxxxx-xxxxx-xxxxx) or current CS2 code (CS plus 44 characters).'
+    }
+    $number=[Numerics.BigInteger]::Zero
+    $place=[Numerics.BigInteger]::One
+    for($i=0;$i -lt $digits.Length;$i++){
+        $digit=$alphabet.IndexOf([char]$digits[$i])
+        if($digit -lt 0){throw 'The share code contains a character that is not allowed.'}
+        $number=$number+($place*[Numerics.BigInteger]$digit)
+        $place=$place*[Numerics.BigInteger]57
+    }
+    $littleEndian=$number.ToByteArray()
+    while($littleEndian.Length -gt 1 -and $littleEndian[$littleEndian.Length-1] -eq 0){$littleEndian=$littleEndian[0..($littleEndian.Length-2)]}
+    if($littleEndian.Length -gt $byteCount){throw 'The share code value is too large for its format.'}
+    $bytes=New-Object byte[] $byteCount
+    for($i=0;$i -lt $littleEndian.Length;$i++){$bytes[$byteCount-1-$i]=$littleEndian[$i]}
+    $checksum=0
+    for($i=1;$i -lt $bytes.Length;$i++){$checksum+=[int]$bytes[$i]}
+    if(($checksum -band 0xff) -ne [int]$bytes[0]){throw 'The share code checksum is invalid. Check that it was copied completely.'}
+    $values=@{}
+    $warnings=New-Object 'System.Collections.Generic.List[string]'
+    if($format -eq 'legacy'){
+        switch([int]$bytes[1]){
+            1 {
+                $b8=[int]$bytes[8];$b10=[int]$bytes[10];$b11=[int]$bytes[11];$b13=[int]$bytes[13]
+                $signedGap=[int]$bytes[2];if($signedGap -ge 128){$signedGap-=256}
+                $values['cl_crosshair_gap']=([double]$signedGap/10).ToString('0.##',[Globalization.CultureInfo]::InvariantCulture)
+                $values['cl_crosshair_drawoutline']=if(($b10 -band 8) -ne 0){'1'}else{'0'}
+                $values['cl_crosshair_dynamic_maxdist_splitratio']=([double](($b11 -shr 4) -band 15)/10).ToString('0.##',[Globalization.CultureInfo]::InvariantCulture)
+                $values['cl_crosshair_dynamic_splitalpha_innermod']=([double](($b10 -shr 4) -band 15)/10).ToString('0.##',[Globalization.CultureInfo]::InvariantCulture)
+                $values['cl_crosshair_dynamic_splitalpha_outermod']=([double]($b11 -band 15)/10).ToString('0.##',[Globalization.CultureInfo]::InvariantCulture)
+                $values['cl_crosshair_dynamic_splitdist']=[string]($b8 -band 7)
+                $values['cl_crosshair_recoil']=if(($b8 -band 128) -ne 0){'1'}else{'0'}
+                $values['cl_crosshair_t']=if(($b13 -band 128) -ne 0){'1'}else{'0'}
+                $values['cl_crosshair_thickness']=([double]$bytes[12]/10).ToString('0.##',[Globalization.CultureInfo]::InvariantCulture)
+                $values['cl_crosshaircolor_a']=if(($b13 -band 64) -ne 0){[string]$bytes[7]}else{'255'}
+                $values['cl_crosshaircolor_r']=[string]$bytes[4];$values['cl_crosshaircolor_g']=[string]$bytes[5];$values['cl_crosshaircolor_b']=[string]$bytes[6]
+                $values['cl_crosshairdot']=if(($b13 -band 16) -ne 0){'1'}else{'0'}
+                $values['cl_crosshair_length']=([double]$bytes[14]/10).ToString('0.##',[Globalization.CultureInfo]::InvariantCulture)
+                $values['cl_crosshairstyle']=[string](($b13 -band 15) -shr 1)
+                if(($b13 -band 32) -ne 0){$warnings.Add('This old code enabled weapon-dependent gap. CS2 has no matching setting; only the stored gap value can be imported.')}
+                if([int]$bytes[9] -ne 0){$warnings.Add('This old code also stores a separate fixed-crosshair gap that has no direct current CS2 equivalent.')}
+                if([int]$bytes[3] -gt 0){$warnings.Add('This old code has an outline-thickness value with no current CS2 equivalent.')}
+                if(($b10 -band 7) -ne 5){$warnings.Add('This old code uses a palette color mode. Its stored RGB channels will be imported because current CS2 uses RGB color controls.')}
+                $warnings.Add('This oldest code has no source-resolution field. Its old size and gap units may not match current pixel sizing exactly.')
+                $warnings.Add('This code predates current CS2 style numbering; its style value is carried over as-is.')
+            }
+            {$_ -in 3,4} {
+                $bits=[long]$bytes[10] -bor ([long]$bytes[11] -shl 8) -bor ([long]$bytes[12] -shl 16) -bor ([long]$bytes[13] -shl 24)
+                $style=[int]$bytes[2] -band 15
+                $outline=if($_ -eq 4){[int](($bits -shr 28) -band 3)}elseif(($bytes[2] -band 32) -ne 0){1}else{0}
+                $values['cl_crosshair_drawoutline']=[string][Math]::Min($outline,2)
+                $values['cl_crosshair_dynamic_maxdist_splitratio']=([double](($bits -shr 16) -band 127)/100).ToString('0.##',[Globalization.CultureInfo]::InvariantCulture)
+                $values['cl_crosshair_dynamic_splitalpha_innermod']=([double](($bits -shr 7) -band 31)/20).ToString('0.##',[Globalization.CultureInfo]::InvariantCulture)
+                $values['cl_crosshair_dynamic_splitalpha_outermod']=([double]((($bits -shr 12) -band 15)+6)/20).ToString('0.##',[Globalization.CultureInfo]::InvariantCulture)
+                $values['cl_crosshair_dynamic_splitdist']=[string]($bits -band 127)
+                $values['cl_crosshair_dynamic_spread_limit']=[string]$bytes[9]
+                $values['cl_crosshair_gap']=[string]$bytes[7]
+                $values['cl_crosshair_length']=[string]$bytes[8]
+                $values['cl_crosshair_recoil']=if(($bytes[2] -band 16) -ne 0){'1'}else{'0'}
+                $values['cl_crosshair_screen_height']=[string]([int]$bytes[14] -bor ([int]$bytes[15] -shl 8))
+                $values['cl_crosshair_t']=if(($bytes[2] -band 128) -ne 0){'1'}else{'0'}
+                $values['cl_crosshair_thickness']=[string](($bits -shr 23) -band 31)
+                $values['cl_crosshaircolor_a']=[string]$bytes[6];$values['cl_crosshaircolor_r']=[string]$bytes[3];$values['cl_crosshaircolor_g']=[string]$bytes[4];$values['cl_crosshaircolor_b']=[string]$bytes[5]
+                $values['cl_crosshairdot']=if(($bytes[2] -band 64) -ne 0){'1'}else{'0'}
+                $values['cl_crosshairstyle']=[string]$style
+                if([int]$bytes[14] -eq 0 -and [int]$bytes[15] -eq 0){$warnings.Add('The share code contains no source-resolution value; current CS2 may reject its sizing information.')}
+            }
+            default {throw ('Unsupported legacy share-code version '+[string]$bytes[1]+'.')}
+        }
+    }else{
+        if([int]$bytes[1] -ne 1){throw ('Unsupported current CS2 share-code version '+[string]$bytes[1]+'.')}
+        $screenHeight=[int]$bytes[2] -bor ([int]$bytes[3] -shl 8)
+        if($screenHeight -eq 0){throw 'The current CS2 share code has an invalid zero screen height.'}
+        $bits=[long]$bytes[18] -bor ([long]$bytes[19] -shl 8) -bor ([long]$bytes[20] -shl 16) -bor ([long]$bytes[21] -shl 24)
+        $gap=[int]$bytes[14] -bor ([int]$bytes[15] -shl 8);if($gap -ge 32768){$gap-=65536};$gap=[Math]::Max(-3840,[Math]::Min(3840,$gap))
+        $values['cl_crosshair_drawoutline']=[string][Math]::Min(($bytes[13] -shr 6),2)
+        $values['cl_crosshair_dynamic_maxdist_splitratio']=([double][Math]::Min((($bits -shr 21) -band 127),100)/100).ToString('0.##',[Globalization.CultureInfo]::InvariantCulture)
+        $values['cl_crosshair_dynamic_splitalpha_innermod']=([double][Math]::Min((($bits -shr 7) -band 127),100)/100).ToString('0.##',[Globalization.CultureInfo]::InvariantCulture)
+        $values['cl_crosshair_dynamic_splitalpha_outermod']=([double]([Math]::Min((($bits -shr 14) -band 127),70)+30)/100).ToString('0.##',[Globalization.CultureInfo]::InvariantCulture)
+        $values['cl_crosshair_dynamic_splitdist']=[string][Math]::Min(($bits -band 127),127)
+        $values['cl_crosshair_dynamic_spread_limit']=[string]$bytes[17]
+        $values['cl_crosshair_gap']=[string]$gap;$values['cl_crosshair_length']=[string]$bytes[16]
+        $values['cl_crosshair_recoil']=if(($bytes[4] -band 32) -ne 0){'1'}else{'0'}
+        $values['cl_crosshair_screen_height']=[string][Math]::Max($screenHeight,240)
+        $values['cl_crosshair_t']=if(($bytes[4] -band 128) -ne 0){'1'}else{'0'}
+        $values['cl_crosshair_thickness']=[string][Math]::Min(($bytes[13] -band 63),32)
+        $values['cl_crosshaircolor_a']=[string]$bytes[8];$values['cl_crosshaircolor_r']=[string]$bytes[5];$values['cl_crosshaircolor_g']=[string]$bytes[6];$values['cl_crosshaircolor_b']=[string]$bytes[7]
+        $values['cl_crosshairoutline_a']=[string]$bytes[12];$values['cl_crosshairoutline_r']=[string]$bytes[9];$values['cl_crosshairoutline_g']=[string]$bytes[10];$values['cl_crosshairoutline_b']=[string]$bytes[11]
+        $values['cl_crosshairdot']=if(($bytes[4] -band 64) -ne 0){'1'}else{'0'}
+        $values['cl_crosshairstyle']=[string][Math]::Min(($bytes[4] -band 31),9)
+        $values['cl_ironsight_dot_scale']=([double][Math]::Min(([int]$bytes[22]+10),200)/100).ToString('0.##',[Globalization.CultureInfo]::InvariantCulture)
+        $values['cl_ironsight_usecrosshaircolor']=if((($bits -shr 28) -band 1) -ne 0){'1'}else{'0'}
+    }
+    return [pscustomobject]@{Format=($(if($format -eq 'cs2'){'cs2-v1'}else{'legacy-v'+[string]$bytes[1]}));Values=$values;Warnings=@($warnings.ToArray())}
+}
+function Set-CafeProfileCrosshairImportStage {
+    param([Parameter(Mandatory=$true)][string]$ProfileName,$Values,$State)
+    if(-not $script:GamingProfiles.Contains($ProfileName)){throw ('Unknown profile for crosshair import: '+$ProfileName)}
+    if($null -eq $State -or $State -isnot [System.Collections.IDictionary]){throw 'Crosshair import staging state is unavailable.'}
+    if($null -eq $Values -or $Values -isnot [System.Collections.IDictionary] -or $Values.Count -eq 0){throw 'The decoded share code contains no settings.'}
+    $staged=@{}
+    if($State.Contains($ProfileName)){
+        $existing=$State[$ProfileName]
+        if($existing -is [System.Collections.IDictionary] -and $existing.Contains('sensitivity')){$staged['sensitivity']=[string]$existing['sensitivity']}
+    }
+    foreach($name in $Values.Keys){
+        if([string]$name -notmatch '^cl_(?:crosshair[a-z0-9_]*|ironsight_(?:dot_scale|usecrosshaircolor))$'){throw ('Unexpected crosshair share-code setting: '+[string]$name)}
+        $value=[string]$Values[$name]
+        if($value -notmatch '^(true|false|-?[0-9]+(\.[0-9]+)?)$'){throw ('Invalid share-code value for '+[string]$name)}
+        $staged[[string]$name]=$value
+    }
+    $State[$ProfileName]=$staged
+    return [pscustomobject]@{ProfileName=$ProfileName;Values=$staged;Count=$Values.Count}
+}
 function Get-CafeCS2UserConvarsCapture {
     param($Source)
     if(@(Get-Process -Name 'cs2' -ErrorAction SilentlyContinue).Count){throw 'Close CS2 before capture.'}
@@ -4037,7 +4167,7 @@ function Set-CafeCapturedConvarsInCfg {
     $modernToLegacy=@{}
     foreach($legacyName in $legacyToModern.Keys){$modernToLegacy[$legacyToModern[$legacyName]]=$legacyName}
     foreach($name in @($Values.Keys|Sort-Object)){
-        if($name -ne 'sensitivity' -and $name -notmatch '^cl_crosshair[a-z0-9_]*$'){continue}
+        if($name -ne 'sensitivity' -and $name -notmatch '^cl_(?:crosshair[a-z0-9_]*|ironsight_(?:dot_scale|usecrosshaircolor))$'){continue}
         # If CS2 saved both spellings, prefer its newer spelling and do not
         # reintroduce the legacy command after it has been removed.
         if($legacyToModern.ContainsKey($name) -and $Values.ContainsKey($legacyToModern[$name])){continue}
@@ -5568,7 +5698,7 @@ function Show-ProfileEditor {
         [void]$editorTabs.TabPages.Add($page)
     }
 
-    $mouseGrid=New-EditorTabGrid -Page $mousePage -Rows 4
+    $mouseGrid=New-EditorTabGrid -Page $mousePage -Rows 5
     $pointerSpeedValues=@(1,2,4,6,8,10,12,14,16,18,20)
     $pointerSpeedLabels=@(
         '1/11 - Slowest (1)';'2/11 (2)';'3/11 (4)';'4/11 (6)';'5/11 (8)';
@@ -5596,14 +5726,24 @@ function Show-ProfileEditor {
     $accel.Text='Enable Windows mouse acceleration (EPP)'
     $accel.Checked= -not [bool]$p.DisableAcceleration
     Add-EditorTabWide -Grid $mouseGrid -Control $accel -Row 2
+    $crosshairShareCode=New-Object System.Windows.Forms.TextBox
+    $crosshairShareCode.Dock='Fill'
+    $crosshairShareCode.MaxLength=60
+    [void](Add-EditorTabField -Grid $mouseGrid -Title 'Paste a CS2 crosshair share code' -Control $crosshairShareCode -Column 0 -Row 3)
+    $importCrosshair=New-Object System.Windows.Forms.Button
+    $importCrosshair.Text='Preview & Import'
+    $importCrosshair.BackColor=[System.Drawing.Color]::FromArgb(58,67,83)
+    $importCrosshair.ForeColor=$WHITE
+    $importCrosshair.FlatStyle='Flat'
+    [void](Add-EditorTabField -Grid $mouseGrid -Title 'Stage for selected profile' -Control $importCrosshair -Column 1 -Row 3)
     $mouseHint=New-Object System.Windows.Forms.Label
     if($pointerSpeedOriginalValue -in $pointerSpeedValues){
-        $mouseHint.Text='Choices match Windows Mouse Properties (11 levels). Live DPI uses better-logihub; profiles do not launch G HUB.'
+        $mouseHint.Text='CS2 share codes are previewed locally; import stages values for this profile only. Choices match Windows Mouse Properties (11 levels).'
     }else{
-        $mouseHint.Text="This profile's custom pointer value ($pointerSpeedOriginalValue) is preserved unless you choose a level. Live DPI uses better-logihub; profiles do not launch G HUB."
+        $mouseHint.Text="This profile's custom pointer value ($pointerSpeedOriginalValue) is preserved unless changed. Crosshair import stages locally until Save & Sync."
     }
     $mouseHint.ForeColor=$MUTED
-    Add-EditorTabWide -Grid $mouseGrid -Control $mouseHint -Row 3
+    Add-EditorTabWide -Grid $mouseGrid -Control $mouseHint -Row 4
 
     $displayGrid=New-EditorTabGrid -Page $displayPage -Rows 5
     $width=New-EditorTabNumber -Grid $displayGrid -Title 'Resolution width' -Column 0 -Row 0 -Min 640 -Max 7680 -Value ([int]$p.Width)
@@ -6010,6 +6150,31 @@ function Show-ProfileEditor {
         }
     }.GetNewClosure()
     $captureGraphics.Add_Click($invokeCS2Capture)
+    $importCrosshair.Add_Click({
+        try{
+            $decoded=ConvertFrom-CafeCS2CrosshairShareCode -ShareCode ([string]$crosshairShareCode.Text)
+            $previewLines=New-Object 'System.Collections.Generic.List[string]'
+            $previewLines.Add(('Detected code format: '+$decoded.Format))
+            $previewLines.Add(('Values to stage for '+$ProfileName+':'))
+            foreach($name in @($decoded.Values.Keys|Sort-Object)){$previewLines.Add(('  '+$name+' = '+[string]$decoded.Values[$name]))}
+            if($decoded.Warnings.Count){
+                $previewLines.Add('')
+                $previewLines.Add('Notes:')
+                foreach($warning in $decoded.Warnings){$previewLines.Add(('  '+[string]$warning))}
+            }
+            $previewLines.Add('')
+            $previewLines.Add('Yes stages these values for this profile. Nothing is saved or synced until you choose Save & Sync.')
+            $answer=[System.Windows.Forms.MessageBox]::Show([string]::Join([Environment]::NewLine,$previewLines.ToArray()),'Preview Crosshair Import','YesNo',$(if($decoded.Warnings.Count){'Warning'}else{'Question'}))
+            if($answer -ne [System.Windows.Forms.DialogResult]::Yes){return}
+            $staged=Set-CafeProfileCrosshairImportStage -ProfileName $ProfileName -Values $decoded.Values -State $capturedCS2ConvarsState
+            $status.Text=('Imported '+$decoded.Format+' crosshair values for '+$ProfileName+'. Review them, then Save & Sync; other profiles and CS2 are unchanged.')
+            $status.ForeColor=[System.Drawing.Color]::FromArgb(255,190,105)
+            Write-Log ('Staged '+$staged.Count+' crosshair share-code values for '+$ProfileName+'; format='+$decoded.Format+'; keys='+(@($decoded.Values.Keys|Sort-Object) -join ', '))
+        }catch{
+            Write-Log ('Crosshair share-code import for '+$ProfileName+' failed: '+$_.Exception.Message) 'WARN'
+            $null=[System.Windows.Forms.MessageBox]::Show(('Could not import crosshair code:`n'+$_.Exception.Message),'Crosshair Import','OK','Warning')
+        }
+    }.GetNewClosure())
     if($CaptureOnOpen){
         $editorTabs.SelectedTab=$cs2Page
         $dialog.Add_Shown({ & $invokeCS2Capture }.GetNewClosure())
