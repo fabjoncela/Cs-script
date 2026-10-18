@@ -79,6 +79,7 @@ $script:CapturedCS2Convars=@{}
 $script:GamingProfiles=[ordered]@{}
 $script:PendingSync=@{}
 $script:VerifiedProfileState=@{}
+$script:ProfileRefreshStatus=@{}
 $script:GraphicsPresets=[ordered]@{}
 $script:FakeFiles=@{}
 $script:FakeWrites=New-Object System.Collections.ArrayList
