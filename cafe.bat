@@ -5593,7 +5593,25 @@ public sealed class CafeEditorScrollComboBox : ComboBox {
             base.OnMouseWheel(e);
             return;
         }
-        for (Control control = this.Parent; control != null; control = control.Parent) {
+        CafeEditorWheelScroll.ScrollParent(this, e);
+    }
+}
+
+public sealed class CafeEditorScrollNumericUpDown : NumericUpDown {
+    protected override void OnMouseWheel(MouseEventArgs e) {
+        CafeEditorWheelScroll.ScrollParent(this, e);
+    }
+}
+
+public sealed class CafeEditorScrollTextBox : TextBox {
+    protected override void OnMouseWheel(MouseEventArgs e) {
+        CafeEditorWheelScroll.ScrollParent(this, e);
+    }
+}
+
+public static class CafeEditorWheelScroll {
+    public static void ScrollParent(Control source, MouseEventArgs e) {
+        for (Control control = source.Parent; control != null; control = control.Parent) {
             ScrollableControl container = control as ScrollableControl;
             if (container == null || !container.AutoScroll || !container.VerticalScroll.Visible) continue;
             int lines = SystemInformation.MouseWheelScrollLines;
@@ -5605,7 +5623,7 @@ public sealed class CafeEditorScrollComboBox : ComboBox {
             container.AutoScrollPosition = new Point(-container.AutoScrollPosition.X, next);
             return;
         }
-        // Intentionally ignore wheel on a closed combo if no scrollable parent exists.
+        // Ignore wheel input when no scrollable editor tab contains the control.
     }
 }
 '@
@@ -5677,7 +5695,7 @@ function Add-EditorTabFullRowField {
 }
 function New-EditorTabNumber {
     param($Grid,[string]$Title,[int]$Column,[int]$Row,[int]$Min,[int]$Max,[int]$Value)
-    $numeric=New-Object System.Windows.Forms.NumericUpDown
+    $numeric=New-Object CafeEditorScrollNumericUpDown
     $numeric.Minimum=[decimal]$Min
     $numeric.Maximum=[decimal]$Max
     $numeric.Value=[decimal]$Value
@@ -5867,14 +5885,14 @@ function Show-ProfileEditor {
     $pointer.add_SelectionChangeCommitted({$pointerSpeedSelectionState.UserChanged=$true}.GetNewClosure())
     $logitechDpi=New-EditorTabNumber -Grid $mouseGrid -Title 'Logitech DPI (live, per profile)' -Column 1 -Row 0 -Min 100 -Max 25600 -Value ([int]$p.LogitechDPI)
     $logitechDpi.Increment=50
-    $sens=New-Object System.Windows.Forms.TextBox
+    $sens=New-Object CafeEditorScrollTextBox
     $sens.Text=[string]$cfgSensitivity.Sensitivity
     Add-EditorTabField -Grid $mouseGrid -Title 'CS2 sensitivity (profile CFG source)' -Control $sens -Column 0 -Row 1
     $accel=New-Object System.Windows.Forms.CheckBox
     $accel.Text='Enable Windows mouse acceleration (EPP)'
     $accel.Checked= -not [bool]$p.DisableAcceleration
     Add-EditorTabWide -Grid $mouseGrid -Control $accel -Row 2
-    $crosshairShareCode=New-Object System.Windows.Forms.TextBox
+    $crosshairShareCode=New-Object CafeEditorScrollTextBox
     $crosshairShareCode.Dock='Fill'
     $crosshairShareCode.MaxLength=60
     [void](Add-EditorTabField -Grid $mouseGrid -Title 'Paste a CS2 crosshair share code' -Control $crosshairShareCode -Column 0 -Row 3)
@@ -5909,7 +5927,7 @@ function Show-ProfileEditor {
     Add-EditorTabWide -Grid $displayGrid -Control $nv -Row 4
 
     $cs2Grid=New-EditorTabGrid -Page $cs2Page -Rows 29
-    $cfgFile=New-Object System.Windows.Forms.TextBox
+    $cfgFile=New-Object CafeEditorScrollTextBox
     $cfgFile.Text=[string]$p.ConfigFile
     $cfgFile.ReadOnly=$true
     Add-EditorTabField -Grid $cs2Grid -Title 'CS2 config filename (fixed)' -Control $cfgFile -Column 0 -Row 0
@@ -6019,7 +6037,7 @@ function Show-ProfileEditor {
         $gameRefresh.Enabled=([string]$refreshPolicyChoice.Tag[$refreshPolicyChoice.SelectedIndex] -eq 'Exact')
     }.GetNewClosure())
     $scalingChoice=New-EditorTabChoice -Grid $cs2Grid -Title 'Stretch / scaling' -Column 0 -Row 25 -Labels @('Stretch to fill','Keep aspect ratio','Center without scaling') -Values @('2','5','3') -SelectedValue ([string]$graphicsPreset.ScalingMode)
-    $historyChoice=New-Object System.Windows.Forms.ComboBox
+    $historyChoice=New-Object CafeEditorScrollComboBox
     $historyChoice.DropDownStyle='DropDownList'
     [void]$historyChoice.Items.Add('Load history first')
     $historyChoice.SelectedIndex=0
