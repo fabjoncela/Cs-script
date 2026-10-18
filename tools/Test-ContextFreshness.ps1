@@ -9,7 +9,7 @@ if($LASTEXITCODE -ne 0){throw 'Generated context state is stale.'}
 foreach($required in @(
     'main` is the production source',
     'testing/development until merged',
-    '**CS2 / Apps** tab contains CFG sensitivity/URL, app launch options, and per-profile CS2 graphics controls',
+    '**Mouse** tab contains Windows mouse controls and the per-profile **CS2 sensitivity** field',
     'three previous versions of `graphics/<ProfileName>.json` from GitHub commit history',
     'cached per profile for 24 hours',
     'GraphicsSettings',
