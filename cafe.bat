@@ -5614,16 +5614,46 @@ public static class CafeEditorWheelScroll {
         for (Control control = source.Parent; control != null; control = control.Parent) {
             ScrollableControl container = control as ScrollableControl;
             if (container == null || !container.AutoScroll || !container.VerticalScroll.Visible) continue;
-            int lines = SystemInformation.MouseWheelScrollLines;
-            int amount = lines < 0 ? container.VerticalScroll.LargeChange :
-                Math.Max(1, lines) * Math.Max(16, container.VerticalScroll.SmallChange);
-            int current = -container.AutoScrollPosition.Y;
-            int upper = Math.Max(0, container.VerticalScroll.Maximum - container.VerticalScroll.LargeChange + 1);
-            int next = Math.Max(0, Math.Min(upper, current - (e.Delta * amount / 120)));
-            container.AutoScrollPosition = new Point(-container.AutoScrollPosition.X, next);
+            ScrollContainer(container, e.Delta);
             return;
         }
         // Ignore wheel input when no scrollable editor tab contains the control.
+    }
+
+    public static void ScrollContainer(ScrollableControl container, int delta) {
+        if (container == null || !container.AutoScroll || !container.VerticalScroll.Visible) return;
+        int lines = SystemInformation.MouseWheelScrollLines;
+        int amount = lines < 0 ? container.VerticalScroll.LargeChange :
+            Math.Max(1, lines) * Math.Max(16, container.VerticalScroll.SmallChange);
+        int current = -container.AutoScrollPosition.Y;
+        int upper = Math.Max(0, container.VerticalScroll.Maximum - container.VerticalScroll.LargeChange + 1);
+        int next = Math.Max(0, Math.Min(upper, current - (delta * amount / 120)));
+        container.AutoScrollPosition = new Point(-container.AutoScrollPosition.X, next);
+    }
+}
+
+public sealed class CafeProfileEditorWheelMessageFilter : IMessageFilter {
+    private readonly TabControl tabs;
+
+    public CafeProfileEditorWheelMessageFilter(TabControl editorTabs) {
+        tabs = editorTabs;
+    }
+
+    public bool PreFilterMessage(ref Message message) {
+        if (message.Msg != 0x020A) return false;
+        long coordinates = message.LParam.ToInt64();
+        Point cursor = new Point((short)(coordinates & 0xffff), (short)((coordinates >> 16) & 0xffff));
+        int delta = (short)((message.WParam.ToInt64() >> 16) & 0xffff);
+        return HandleWheel(cursor, delta);
+    }
+
+    public bool HandleWheel(Point cursor, int delta) {
+        if (tabs == null || tabs.IsDisposed || tabs.SelectedTab == null) return false;
+        TabPage page = tabs.SelectedTab;
+        if (!page.RectangleToScreen(page.ClientRectangle).Contains(cursor)) return false;
+        CafeEditorWheelScroll.ScrollContainer(page, delta);
+        // Consume the original message even at the scroll limits so a control cannot change value.
+        return true;
     }
 }
 '@
@@ -6533,7 +6563,13 @@ function Show-ProfileEditor {
         }
     }.GetNewClosure())
 
-    [void]$dialog.ShowDialog($form)
+    $wheelFilter=New-Object CafeProfileEditorWheelMessageFilter -ArgumentList $editorTabs
+    [System.Windows.Forms.Application]::AddMessageFilter($wheelFilter)
+    try {
+        [void]$dialog.ShowDialog($form)
+    } finally {
+        [System.Windows.Forms.Application]::RemoveMessageFilter($wheelFilter)
+    }
     $dialog.Dispose()
     # Editor open already refreshed this profile and its graphics preset; the
     # local snapshot is updated by Save/Sync handlers. Avoid a duplicate fetch
