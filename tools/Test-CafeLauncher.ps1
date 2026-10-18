@@ -65,16 +65,10 @@ if($psSource -match '(?i)Invoke-RestMethod\s+-Uri\s+(?!''https://api\.steampower
     throw 'GitHub REST requests must use the response-header tracking wrapper.'
 }
 
-# Regression: legacy main-menu shortcut tiles must remain commented out, but
-# profile workflows and their underlying functions stay available.
-foreach($tile in @('Apply NVIDIA Settings')){
-    $escaped=[regex]::Escape($tile)
-    if($psSource -notmatch ('(?m)^# New-Tile "'+$escaped+'" \d+')){
-        throw ('Legacy main-menu tile must be commented out: '+$tile)
-    }
-    if($psSource -match ('(?m)^[ \t]*New-Tile "'+$escaped+'" \d+')){
-        throw ('Legacy main-menu tile was inadvertently re-enabled: '+$tile)
-    }
+# Regression: the retired standalone NVIDIA shortcut stays absent while
+# profile workflows and their underlying function remain available.
+if($psSource -match '(?m)^[ \t]*#?[ \t]*New-Tile "Apply NVIDIA Settings" \d+'){
+    throw 'Retired standalone NVIDIA tile must be removed from the dashboard source.'
 }
 if($psSource -match '(?i)at\.cfg|Install-AtCfg|Get-AtCfgSource|EmbeddedAtCfgBase64'){
     throw 'The retired standalone at.cfg workflow must be removed.'
