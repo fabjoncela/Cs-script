@@ -116,8 +116,8 @@ $editor=$editorAst.Extent.Text
 foreach($required in @('$cs2Grid=New-EditorTabGrid -Page $cs2Page -Rows 20','$captureGraphics.Text=''Capture from CS2''','Get-CafeCS2GraphicsCapture -ProfileName $ProfileName -BasePreset $graphicsPreset','Save & Sync to publish')){
     if($editor -notmatch [regex]::Escape($required)){throw ('Profile editor capture workflow is missing: '+$required)}
 }
-$sensitivityField="Add-EditorTabField -Grid `$mouseGrid -Title 'CS2 sensitivity (sync updates CS2 .cfg)' -Control `$sens -Column 0 -Row 1"
-foreach($required in @('$mouseGrid=New-EditorTabGrid -Page $mousePage -Rows 5',$sensitivityField,'$sens.Text=[string]$convars.Values[''sensitivity'']','$p.CS2Sensitivity=$sensValue','is staged on the Mouse tab.')){
+$sensitivityField="Add-EditorTabField -Grid `$mouseGrid -Title 'CS2 sensitivity (profile CFG source)' -Control `$sens -Column 0 -Row 1"
+foreach($required in @('$mouseGrid=New-EditorTabGrid -Page $mousePage -Rows 5',$sensitivityField,'Get-ProfileCfgSensitivity -ProfileName $ProfileName','$sens.Text=[string]$cfgSensitivity.Sensitivity','$sens.Text=[string]$convars.Values[''sensitivity'']','$pendingCfgSensitivityState[$ProfileName]=$sensValue','is staged on the Mouse tab.')){
     if($editor -notmatch [regex]::Escape($required)){throw ('CS2 sensitivity Mouse tab workflow is missing: '+$required)}
 }
 if($editor -match [regex]::Escape("Add-EditorTabField -Grid `$cs2Grid -Title 'CS2 sensitivity")){

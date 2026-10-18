@@ -10,7 +10,7 @@ $code=[string]::Join([Environment]::NewLine,[string[]]$lines[($marker+1)..($line
 $tokens=$null;$errors=$null
 $ast=[Management.Automation.Language.Parser]::ParseInput($code,[ref]$tokens,[ref]$errors)
 if(@($errors).Count){throw ('Launcher syntax failed: '+$errors[0].Message)}
-foreach($name in @('Get-CafeVoiceBindingFromCfg','Set-CafeVoiceBindingInCfg','Set-CS2CfgSensitivityText','Get-CafeCS2UserConvarsCapture','Set-CafeCapturedConvarsInCfg','Get-CafeCfgChangePreview','Sync-ProfileToGitHub','Export-ProfileValues','Get-ProfileGraphicsPreset','Get-GitHubJsonFromContentsApi','ConvertTo-CafeGraphicsPreset','Refresh-ProfileFromGitHub','Get-LatestGitHubFileCommit','Compare-GitHubCommitOrder','Import-ProfileValues')){
+foreach($name in @('Get-CafeVoiceBindingFromCfg','Set-CafeVoiceBindingInCfg','ConvertTo-CafeCS2Sensitivity','Get-CafeCS2CfgSensitivity','Set-CS2CfgSensitivityText','Add-CafeCacheBust','Get-GitHubCfgFromContentsApi','Get-ProfileCfgSensitivity','Get-CafeCS2UserConvarsCapture','Set-CafeCapturedConvarsInCfg','Get-CafeCfgChangePreview','Sync-ProfileToGitHub','Export-ProfileValues','Get-ProfileGraphicsPreset','Get-GitHubJsonFromContentsApi','ConvertTo-CafeGraphicsPreset','Refresh-ProfileFromGitHub','Get-LatestGitHubFileCommit','Compare-GitHubCommitOrder','Import-ProfileValues')){
     $funcs=@($ast.FindAll({param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst]},$true) |
         Where-Object {$_.Name -eq $name})
     if($funcs.Count -ne 1){throw ('Missing or duplicate sync function: '+$name)}
@@ -76,6 +76,7 @@ $script:GithubRepo='fabjoncela/Cs-script'
 $script:GithubBranch='main'
 # The launcher initializes this during startup; function-only CI tests must mirror it.
 $script:CapturedCS2Convars=@{}
+$script:PendingCfgSensitivity=@{}
 $script:GamingProfiles=[ordered]@{}
 $script:PendingSync=@{}
 $script:VerifiedProfileState=@{}
@@ -99,16 +100,18 @@ function Clear-ProfileGraphicsHistoryCache {param([string]$ProfileName)}
 foreach($name in @('FabMode','ArliMode','BrileMode','ArmlMode','OliMode')){
     $cfgName=($name -replace 'Mode$','').ToLowerInvariant()+'.cfg'
     $script:GamingProfiles[$name]=@{
-        ConfigFile=$cfgName;CS2Sensitivity='1.5';VoicePushToTalkKey='';PointerSpeed=10;LogitechDPI=800
+        ConfigFile=$cfgName;VoicePushToTalkKey='';PointerSpeed=10;LogitechDPI=800
         DisableAcceleration=$true;ApplyNvidia=$true;Width=1920;Height=1080
         RefreshHz=360;Vibrance=75;Hue=-1;ScalingMode=2;CfgDownloadUrl='';LaunchApps=$true
     }
     $script:PendingSync[$name]=$true
+    $script:PendingCfgSensitivity[$name]='1.5'
     $script:GraphicsPresets[$name]=[pscustomobject]@{
         SchemaVersion=1;ProfileName=$name;DisplayPolicy='ApplyPreset';RefreshPolicy='Highest';ScalingMode=2
         Settings=[ordered]@{Width=1280;Height=960;AspectRatioMode=0;Fullscreen=1;MSAASamples=8;ShadowQuality=0;DynamicShadows=1;TextureDetail=1;ShaderQuality=0;ParticleDetail=0;AmbientOcclusion=0;HDRDetail=3;NvidiaReflex=2;TextureFiltering=0;FSRDetail=0;VSync=0;CMAA=0}
     }
-    $script:FakeFiles[$cfgName]=$cfg
+    $profileSensitivity=@{FabMode='1.1';ArliMode='1.0';ArmlMode='1.0';BrileMode='1.2';OliMode='1.2'}[$name]
+    $script:FakeFiles[$cfgName]='sensitivity "'+$profileSensitivity+'"'+$crlf+'bind "r" "+reload"'+$crlf
     $script:FakeFiles[('profiles/'+$name+'.json')]='{}'
     $script:FakeFiles[('graphics/'+$name+'.json')]='{}'
 }
@@ -163,6 +166,29 @@ function Invoke-CafeGitHubRestMethod {
     $script:FakeLatestCommitSha=$script:FakeCommitSha
     return [pscustomobject]@{commit=[pscustomobject]@{sha=$script:FakeCommitSha}}
 }
+# Opening Edit reads each selected profile's CFG value through the Contents API.
+$expectedProfileSens=@{FabMode='1.1';ArliMode='1';ArmlMode='1';BrileMode='1.2';OliMode='1.2'}
+$oldLocalAppData=$env:LOCALAPPDATA
+$testLocalAppData=Join-Path $env:TEMP ('Cafe-Cfg-Sensitivity-Test-'+[guid]::NewGuid().ToString('N'))
+[void](New-Item -ItemType Directory -Path $testLocalAppData -Force)
+$env:LOCALAPPDATA=$testLocalAppData
+try{
+    foreach($name in $expectedProfileSens.Keys){
+        $script:PendingSync[$name]=$false
+        [void]$script:PendingCfgSensitivity.Remove($name)
+        $loaded=Get-ProfileCfgSensitivity -ProfileName $name
+        Assert-True ($loaded.Source -eq 'GitHub' -and $loaded.Sensitivity -ceq $expectedProfileSens[$name]) ($name+' did not load its own CFG sensitivity.')
+        $script:PendingSync[$name]=$true
+        $script:PendingCfgSensitivity[$name]='1.5'
+    }
+    foreach($name in $expectedProfileSens.Keys){
+        $pending=Get-ProfileCfgSensitivity -ProfileName $name
+        Assert-True ($pending.Source -eq 'LocalPending' -and $pending.Sensitivity -ceq '1.5') ($name+' reopened with an older CFG value instead of its local pending draft.')
+    }
+}finally{
+    $env:LOCALAPPDATA=$oldLocalAppData
+    Remove-Item -LiteralPath $testLocalAppData -Recurse -Force -ErrorAction SilentlyContinue
+}
 # Test each profile uses its own matching cfg and JSON, never another player's.
 foreach($name in @('FabMode','ArliMode','BrileMode','ArmlMode','OliMode')){
     $script:FakeWrites.Clear()
@@ -176,7 +202,7 @@ foreach($name in @('FabMode','ArliMode','BrileMode','ArmlMode','OliMode')){
     Assert-True ($script:FakeFiles[$cfgName].Contains('sensitivity "1.5"')) ($name+' CFG sensitivity not persisted.')
     Assert-True ($script:FakeFiles[$cfgName].Contains('bind "r" "+reload"')) ($name+' CFG binds altered.')
     $profile=$script:FakeFiles[('profiles/'+$name+'.json')]|ConvertFrom-Json
-    Assert-True ($profile.CS2Sensitivity -eq '1.5') ($name+' JSON sensitivity differs.')
+    Assert-True (-not $profile.PSObject.Properties['CS2Sensitivity']) ($name+' JSON still contains legacy sensitivity.')
     $graphics=$script:FakeFiles[('graphics/'+$name+'.json')]|ConvertFrom-Json
     Assert-True ($graphics.ProfileName -eq $name -and $graphics.Settings.Width -eq 1280) ($name+' graphics preset differs.')
     Assert-True ($script:FakeCalls[-2] -eq ('Get:profiles/'+$name+'.json') -and $script:FakeCalls[-1] -eq ('Get:graphics/'+$name+'.json')) ($name+' did not read both saved JSON files back after upload.')
@@ -240,8 +266,7 @@ foreach($expected in @{
 }
 Assert-True (-not $captured.Values.ContainsKey('cl_grenadecrosshair_smoke')) 'A non-crosshair command was captured.'
 $script:CapturedCS2Convars['FabMode']=$captured.Values
-$script:FakeFiles['fab.cfg']='cl_crosshairgap "-3.7"'+$lf+'cl_crosshairsize "2"'+$lf+'cl_crosshairthickness "1"'+$lf+'cl_crosshaircolor "5"'+$lf+'cl_crosshairalpha "200"'+$lf+'cl_crosshairusealpha "true"'+$lf+'cl_crosshairgap_useweaponvalue "false"'+$lf+'cl_crosshair_outlinethickness "1"'+$lf
-$script:GamingProfiles['FabMode'].CS2Sensitivity=''
+$script:FakeFiles['fab.cfg']='sensitivity "1.5"'+$lf+'cl_crosshairgap "-3.7"'+$lf+'cl_crosshairsize "2"'+$lf+'cl_crosshairthickness "1"'+$lf+'cl_crosshaircolor "5"'+$lf+'cl_crosshairalpha "200"'+$lf+'cl_crosshairusealpha "true"'+$lf+'cl_crosshairgap_useweaponvalue "false"'+$lf+'cl_crosshair_outlinethickness "1"'+$lf
 $script:FakeWrites.Clear()
 Sync-ProfileToGitHub -ProfileName 'FabMode' -Token ('testtoken-'+'x'*22)
 $syncedFabCfg=$script:FakeFiles['fab.cfg']
@@ -271,8 +296,8 @@ Assert-True ($legacyOnly.Contains('cl_crosshairgap "-2"') -and -not $legacyOnly.
 # Updating one profile migrates only that profile's legacy aliases. Exercise
 # mixed spacing, quoted/unquoted values, comments, and CRLF in the destination.
 $script:FakeFiles['brile.cfg']='sensitivity "1.2"'+$crlf+'bind "r" "+reload"'+$crlf+'  cl_crosshairgap   "-8" // Brile legacy gap'+$crlf+'   cl_crosshair_length  "1" // Brile old length'+$crlf+'cl_crosshair_thickness 1'+$crlf+'  cl_crosshaircolor   5 // old palette'+$crlf+'cl_crosshairalpha 200'+$crlf+' cl_crosshairusealpha true'+$crlf+'cl_crosshairgap_useweaponvalue false'+$crlf+' cl_crosshair_outlinethickness 1'+$crlf
-$script:FakeFiles['arli.cfg']='cl_crosshairgap "-2"'+$lf+'cl_crosshairsize "1"'+$lf
-$script:FakeFiles['oli.cfg']='cl_crosshairgap "1"'+$crlf+'cl_crosshairsize "3"'+$crlf
+$script:FakeFiles['arli.cfg']='sensitivity "1.0"'+$lf+'cl_crosshairgap "-2"'+$lf+'cl_crosshairsize "1"'+$lf
+$script:FakeFiles['oli.cfg']='sensitivity "1.2"'+$crlf+'cl_crosshairgap "1"'+$crlf+'cl_crosshairsize "3"'+$crlf
 $arliBefore=$script:FakeFiles['arli.cfg']
 $oliBefore=$script:FakeFiles['oli.cfg']
 $script:CapturedCS2Convars['BrileMode']=@{
@@ -297,7 +322,7 @@ Assert-True ($script:FakeWrites[0] -eq 'brile.cfg') 'BrileMode crosshair migrati
 Remove-Item -LiteralPath (Split-Path -Parent $script:FakeConvarsPath) -Recurse -Force
 
 # Ensure per-profile voice binding reaches only the requested CFG and survives JSON sync.
-$script:FakeFiles['arli.cfg']='bind "V" "+voicerecord"'+$lf+'bind "r" "+reload"'+$lf
+$script:FakeFiles['arli.cfg']='sensitivity "1.0"'+$lf+'bind "V" "+voicerecord"'+$lf+'bind "r" "+reload"'+$lf
 $script:GamingProfiles['ArliMode'].VoicePushToTalkKey='MOUSE4'
 $script:FakeWrites.Clear()
 Sync-ProfileToGitHub -ProfileName 'ArliMode' -Token ('testtoken-'+'x'*22)
@@ -346,16 +371,17 @@ Refresh-ProfileFromGitHub -ProfileName 'FabMode'
 Assert-True ($script:GamingProfiles['FabMode'].PointerSpeed -eq 12) 'A confirmed newer GitHub profile commit was not applied.'
 Assert-True ($script:VerifiedProfileState['FabMode'].CommitSha -eq $script:FakeLatestCommitSha) 'The newer immutable commit was not recorded locally.'
 Assert-True (($script:FakeLogs -join "`n").Contains('latestCommit='+$script:FakeLatestCommitSha) -and ($script:FakeLogs -join "`n").Contains('pointerBefore=16; pointerLoaded=12')) 'Remote refresh log must include its commit SHA and the pointer value transition.'
-# Blank means "leave original CFG unchanged".
-$script:GamingProfiles['FabMode'].CS2Sensitivity=''
+# With no pending sensitivity edit, sync validates but preserves the CFG value.
+$script:PendingCfgSensitivity.Remove('FabMode')|Out-Null
 $script:PendingSync['FabMode']=$true
 $cfgBefore=$script:FakeFiles['fab.cfg']
 $script:FakeWrites.Clear()
 Sync-ProfileToGitHub -ProfileName 'FabMode' -Token ('testtoken-'+'x'*22)
-Assert-True ($script:FakeWrites.Count -eq 1 -and $script:FakeWrites[0] -eq 'profiles/FabMode.json') 'Blank sensitivity should sync profile settings without editing the CFG or creating an unchanged graphics revision.'
-Assert-True ($cfgBefore -ceq $script:FakeFiles['fab.cfg']) 'Blank sensitivity modified CFG.'
+Assert-True ($script:FakeWrites.Count -eq 1 -and $script:FakeWrites[0] -eq 'profiles/FabMode.json') 'No sensitivity draft should sync profile settings without editing the CFG or creating an unchanged graphics revision.'
+Assert-True ($cfgBefore -ceq $script:FakeFiles['fab.cfg']) 'Sync without a sensitivity draft modified CFG.'
+Assert-True (-not ($script:FakeFiles['profiles/FabMode.json']|ConvertFrom-Json).PSObject.Properties['CS2Sensitivity']) 'Synced profile JSON retained legacy sensitivity.'
 # Simulate graphics commit failure after CFG and profile commits.
-$script:GamingProfiles['FabMode'].CS2Sensitivity='3.3'
+$script:PendingCfgSensitivity['FabMode']='3.3'
 $script:GraphicsPresets['FabMode'].Settings.Width=1366
 $beforeJson=$script:FakeFiles['profiles/FabMode.json']
 $script:FakeWrites.Clear()
@@ -366,7 +392,7 @@ catch{$failureMessage=$_.Exception.Message}
 $script:FailJsonPut=$false
 Assert-True ($failureMessage.Contains('PARTIAL SYNC') -and $failureMessage.Contains('graphics/FabMode.json')) ('Partial upload must identify saved files and the missing graphics file. Actual error: '+$failureMessage)
 Assert-True ($script:FakeFiles['fab.cfg'].Contains('sensitivity "3.3"')) 'CFG should be updated before a later JSON failure.'
-Assert-True ($script:FakeFiles['profiles/FabMode.json'] -cne $beforeJson) 'Profile upload should be recorded before the simulated graphics failure.'
+Assert-True ($script:FakeWrites.Contains('profiles/FabMode.json')) 'Profile upload should be recorded before the simulated graphics failure.'
 $script:FakeWrites.Clear()
 Sync-ProfileToGitHub -ProfileName 'FabMode' -Token ('testtoken-'+'x'*22)
 Assert-True ($script:FakeWrites.Count -eq 2 -and $script:FakeWrites[0] -eq 'profiles/FabMode.json' -and $script:FakeWrites[1] -eq 'graphics/FabMode.json') 'Retry must finish both JSON files without a duplicate CFG commit.'

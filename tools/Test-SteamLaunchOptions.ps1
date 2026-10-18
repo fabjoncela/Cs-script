@@ -34,7 +34,7 @@ $apply=$source.IndexOf('function Invoke-GamingProfile {',[StringComparison]::Ord
 $applyEnd=$source.IndexOf('function Get-CS2SteamLaunchArguments {',[StringComparison]::Ordinal)
 if($apply -lt 0 -or $applyEnd -le $apply){throw 'Profile apply function missing.'}
 $applyText=$source.Substring($apply,$applyEnd-$apply)
-if($applyText -notmatch 'Install-AtCfg' -or $applyText -match '(?i)-applaunch|LaunchOptions|Set-CS2SteamLaunchOptions'){
+if($applyText -notmatch 'Install-ProfileCfg' -or $applyText -match '(?i)-applaunch|LaunchOptions|Set-CS2SteamLaunchOptions'){
     throw 'Normal profile application must only install the CFG, not modify Steam launch options.'
 }
 foreach($name in @('FabMode','ArliMode','BrileMode','ArmlMode','OliMode')){
@@ -44,11 +44,11 @@ if($source -notmatch '\$play\.Add_Click' -or $source -notmatch 'Start-CS2WithPro
     throw 'Missing independent Play + Exec profile button handler.'
 }
 $script:GamingProfiles=[ordered]@{
-    FabMode=@{ConfigFile='fab.cfg';CfgDownloadUrl='https://raw.githubusercontent.com/fabjoncela/Cs-script/main/fab.cfg';CS2Sensitivity=''}
-    ArliMode=@{ConfigFile='arli.cfg';CfgDownloadUrl='https://raw.githubusercontent.com/fabjoncela/Cs-script/main/arli.cfg';CS2Sensitivity=''}
-    BrileMode=@{ConfigFile='brile.cfg';CfgDownloadUrl='https://raw.githubusercontent.com/fabjoncela/Cs-script/main/brile.cfg';CS2Sensitivity=''}
-    ArmlMode=@{ConfigFile='arml.cfg';CfgDownloadUrl='https://raw.githubusercontent.com/fabjoncela/Cs-script/main/arml.cfg';CS2Sensitivity=''}
-    OliMode=@{ConfigFile='oli.cfg';CfgDownloadUrl='https://raw.githubusercontent.com/fabjoncela/Cs-script/main/oli.cfg';CS2Sensitivity=''}
+    FabMode=@{ConfigFile='fab.cfg';CfgDownloadUrl='https://raw.githubusercontent.com/fabjoncela/Cs-script/main/fab.cfg'}
+    ArliMode=@{ConfigFile='arli.cfg';CfgDownloadUrl='https://raw.githubusercontent.com/fabjoncela/Cs-script/main/arli.cfg'}
+    BrileMode=@{ConfigFile='brile.cfg';CfgDownloadUrl='https://raw.githubusercontent.com/fabjoncela/Cs-script/main/brile.cfg'}
+    ArmlMode=@{ConfigFile='arml.cfg';CfgDownloadUrl='https://raw.githubusercontent.com/fabjoncela/Cs-script/main/arml.cfg'}
+    OliMode=@{ConfigFile='oli.cfg';CfgDownloadUrl='https://raw.githubusercontent.com/fabjoncela/Cs-script/main/oli.cfg'}
 }
 $script:FabCfgCloudUrl='https://raw.githubusercontent.com/fabjoncela/Cs-script/main/fab.cfg'
 $script:Installed=@()
@@ -81,8 +81,8 @@ try{
     Remove-Item -LiteralPath $script:BaselineFixture -Recurse -Force -ErrorAction SilentlyContinue
 }
 function Install-CS2ProfileBaselineCfg {$script:Events+='baseline';return $true}
-function Install-AtCfg {
-    param([switch]$Silent,[string]$CfgName,[string]$DownloadUrl,[switch]$CloudPreferred,[string]$CS2Sensitivity)
+function Install-ProfileCfg {
+    param([switch]$Silent,[string]$CfgName,[string]$DownloadUrl,[switch]$CloudPreferred)
     $script:Installed+= $CfgName
     $script:InstalledUrls+=$DownloadUrl
     $script:CloudPreferredFlags+=[bool]$CloudPreferred

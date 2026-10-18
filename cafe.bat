@@ -2173,46 +2173,6 @@ function Open-GHub {
     )
 }
 
-# Optional: place a direct HTTPS URL here to make the at.cfg button fully
-# one-click on every PC. Alternatively, keep at.cfg next to this BAT, or let
-# the button request a URL the first time on each PC.
-$script:AtCfgDownloadUrl = ""
-
-# Built-in at.cfg from the uploaded file. Makes this BAT portable and usable
-# offline without needing a second file or a configuration download URL.
-# An at.cfg beside this BAT can override the bundled copy.
-$script:EmbeddedAtCfgBase64 = @"
-Ly8gPT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PQ0KLy8gQ1MyIEFVVE9FWEVDDQovLyA9PT09PT09PT09
-PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09DQplY2hvICJGYWIgTW9kZSINCg0KLy8gLS0tLS0tLS0tLSBDT05TT0xFIC0t
-LS0tLS0tLS0NCmJpbmQgImAiICJ0b2dnbGVjb25zb2xlIg0KDQoNCi8vIC0tLS0tLS0tLS0gTU9VU0UgLyBNT1ZFTUVOVCAtLS0t
-LS0tLS0tDQpiaW5kICJNV0hFRUxVUCIgIitqdW1wIg0KYmluZCAiTVdIRUVMRE9XTiIgIitqdW1wIg0KYmluZCAiU1BBQ0UiICIr
-anVtcCINCg0Kc2Vuc2l0aXZpdHkgIjEuMiINCnpvb21fc2Vuc2l0aXZpdHlfcmF0aW8gIjEuMCINCg0KDQovLyAtLS0tLS0tLS0t
-IFJBREFSIC8gSFVEIC0tLS0tLS0tLS0NCmJpbmQgIkFMVCIgInRvZ2dsZSBjbF9yYWRhcl9zY2FsZSAwLjI1IDAuOCINCmNsX2h1
-ZF9yYWRhcl9zY2FsZSAiMS4zMCINCg0KDQovLyAtLS0tLS0tLS0tIFdFQVBPTlMgLS0tLS0tLS0tLQ0KYmluZCAiUiIgIityZWxv
-YWQiDQpiaW5kICJYIiAiK2xvb2thdHdlYXBvbiINCg0KYmluZCAiVCIgInNsb3Q2IiAgICAgICAgLy8gSEUgZ3JlbmFkZQ0KYmlu
-ZCAiRiIgInNsb3Q3IiAgICAgICAgLy8gRmxhc2hiYW5nDQpiaW5kICJDIiAic2xvdDgiICAgICAgICAvLyBTbW9rZQ0KYmluZCAi
-TiIgInNsb3QxMCIgICAgICAgLy8gTW9sb3RvdiAvIEluY2VuZGlhcnkNCg0KDQovLyAtLS0tLS0tLS0tIFZPSUNFIC0tLS0tLS0t
-LS0NCmJpbmQgIlYiICIrdm9pY2VyZWNvcmQiDQoNCg0KLy8gLS0tLS0tLS0tLSBJTkNPTUlORyBDSEFUIC0tLS0tLS0tLS0NCmJp
-bmQgIk1PVVNFNSIgInRvZ2dsZSBjbF9tdXRlX2VuZW15X3RlYW0gMSAwIg0KDQoNCi8vIC0tLS0tLS0tLS0gQ1JPU1NIQUlSIC0t
-LS0tLS0tLS0NCmNsX2Nyb3NzaGFpcl9kcmF3b3V0bGluZSB0cnVlDQpjbF9jcm9zc2hhaXJfb3V0bGluZXRoaWNrbmVzcyAwDQpj
-bF9jcm9zc2hhaXJfcmVjb2lsIGZhbHNlDQpjbF9jcm9zc2hhaXJfc25pcGVyX3dpZHRoIDANCmNsX2Nyb3NzaGFpcl90IGZhbHNl
-DQoNCmNsX2Nyb3NzaGFpcmFscGhhIDIwMA0KY2xfY3Jvc3NoYWlyY29sb3IgNQ0KY2xfY3Jvc3NoYWlyY29sb3JfYiAwDQpjbF9j
-cm9zc2hhaXJjb2xvcl9nIDI1NQ0KY2xfY3Jvc3NoYWlyY29sb3JfciAwDQoNCmNsX2Nyb3NzaGFpcmRvdCBmYWxzZQ0KY2xfY3Jv
-c3NoYWlyZ2FwIC0zLjcNCmNsX2Nyb3NzaGFpcmdhcF91c2V3ZWFwb252YWx1ZSBmYWxzZQ0KY2xfY3Jvc3NoYWlyc2l6ZSAyDQpj
-bF9jcm9zc2hhaXJzdHlsZSA0DQpjbF9jcm9zc2hhaXJ0aGlja25lc3MgMQ0KY2xfY3Jvc3NoYWlydXNlYWxwaGEgdHJ1ZQ0KDQoN
-Ci8vIC0tLS0tLS0tLS0gUEVSRk9STUFOQ0UgLS0tLS0tLS0tLQ0KZnBzX21heCAiNDAwIg0KDQoNCnJfbG93X2xhdGVuY3kgIjIi
-DQoNCnJfcGxheWVyX3Zpc2liaWxpdHlfbW9kZSAiMSINCg0KDQovLyA9PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09
-PT09PT09DQovLyBWSURFTyBTRVRUSU5HUw0KLy8gPT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PQ0KLy8N
-Ci8vIERpc3BsYXkgTW9kZTogRnVsbHNjcmVlbg0KLy8gQXNwZWN0IFJhdGlvOiA0OjMNCi8vIFJlc29sdXRpb246IDEyODB4OTYw
-DQovLyBSZWZyZXNoIFJhdGU6IDM2MCBIeg0KLy8gQnJpZ2h0bmVzczogOTMlDQovLw0KLy8gQWR2YW5jZWQgVmlkZW86DQovLw0K
-Ly8gTXVsdGlzYW1wbGluZyBBbnRpLUFsaWFzaW5nOiA4WCBNU0FBDQovLyBHbG9iYWwgU2hhZG93IFF1YWxpdHk6IExPVw0KLy8g
-RHluYW1pYyBTaGFkb3dzOiBBTEwNCi8vIE1vZGVsIC8gVGV4dHVyZSBEZXRhaWw6IE1FRElVTQ0KLy8gVGV4dHVyZSBGaWx0ZXJp
-bmc6IEJJTElORUFSDQovLyBTaGFkZXIgRGV0YWlsOiBMT1cNCi8vIFBhcnRpY2xlIERldGFpbDogTE9XDQovLyBBbWJpZW50IE9j
-Y2x1c2lvbjogRElTQUJMRUQNCi8vIEhpZ2ggRHluYW1pYyBSYW5nZTogUEVSRk9STUFOQ0UNCi8vIEZpZGVsaXR5RlggU3VwZXIg
-UmVzb2x1dGlvbjogRElTQUJMRUQNCi8vDQovLyBCb29zdCBQbGF5ZXIgQ29udHJhc3Q6IEVOQUJMRUQNCi8vIFYtU3luYzogRElT
-QUJMRUQNCi8vIE5WSURJQSBSZWZsZXg6IEVOQUJMRUQgKyBCT09TVA0KLy8gTWF4aW11bSBGUFM6IDQwMA==
-"@
-
 function Get-SteamLibraryCachePath {
     if ([string]::IsNullOrWhiteSpace($env:LOCALAPPDATA)) { return $null }
     return (Join-Path $env:LOCALAPPDATA 'CafeLauncher\steam-library-cache.json')
@@ -2481,85 +2441,56 @@ function Assert-ConfigUrl {
     }
 }
 
-function Get-AtCfgSource {
-    param([string]$CfgName = 'at.cfg', [string]$DownloadUrl = '', [switch]$CloudPreferred)
+function Get-ProfileCfgSource {
+    param([Parameter(Mandatory=$true)][string]$CfgName,[string]$DownloadUrl='',[switch]$CloudPreferred)
+    if($CfgName -notmatch '^[a-z0-9_-]+\.cfg$'){throw 'Invalid profile CFG filename.'}
     $launcherDir = Split-Path -Parent $env:CAFE_SCRIPT
-    $localCfg = Join-Path $launcherDir $CfgName
-
-    # Friend profiles: always attempt their GitHub config first, even if a local copy exists.
     if ($CloudPreferred -and -not [string]::IsNullOrWhiteSpace($DownloadUrl)) {
         Assert-ConfigUrl $DownloadUrl
         return [pscustomobject]@{ Type='Url'; Value=$DownloadUrl; RememberUrl=$false }
     }
-    if (Test-Path -LiteralPath $localCfg -PathType Leaf) {
-        Write-Log "Found $CfgName next to launcher: $localCfg"
-        return [pscustomobject]@{ Type='File'; Value=$localCfg; RememberUrl=$false }
-    }
-    if ($CfgName -ne 'at.cfg') {
-        # Never silently install FabMode's at.cfg into a friend's profile.
-        $cached = Join-Path $env:LOCALAPPDATA ("CafeLauncher\cfg-cache\$CfgName")
-        if (Test-Path -LiteralPath $cached -PathType Leaf) {
-            Write-Log "Using previously cached $CfgName (cloud source not configured)." 'WARN'
-            return [pscustomobject]@{ Type='File'; Value=$cached; RememberUrl=$false }
-        }
-        if (-not [string]::IsNullOrWhiteSpace($DownloadUrl)) {
-            Assert-ConfigUrl $DownloadUrl
-            return [pscustomobject]@{ Type='Url'; Value=$DownloadUrl; RememberUrl=$false }
-        }
-        Write-Log "No source available for $CfgName. Upload its GitHub CFG or put $CfgName beside the launcher." 'WARN'
-        return $null
-    }
-
-    if ([string]::IsNullOrWhiteSpace($DownloadUrl) -and
-        -not [string]::IsNullOrWhiteSpace($script:EmbeddedAtCfgBase64)) {
-        Write-Log 'Using bundled at.cfg (FabMode offline default).'
-        return [pscustomobject]@{ Type='Embedded'; Value='bundled at.cfg'; RememberUrl=$false }
-    }
-
-    $url = $DownloadUrl
-    $remember = $false
-    if ([string]::IsNullOrWhiteSpace($url)) {
-        $storedUrlFile = Join-Path $env:LOCALAPPDATA 'CafeLauncher\at_cfg_url.txt'
-        if (Test-Path -LiteralPath $storedUrlFile -PathType Leaf) {
-            try { $url = (Get-Content -LiteralPath $storedUrlFile -Raw -ErrorAction Stop).Trim() } catch {}
+    if($launcherDir){
+        $localCfg=Join-Path $launcherDir $CfgName
+        if(Test-Path -LiteralPath $localCfg -PathType Leaf){
+            Write-Log "Found $CfgName next to launcher: $localCfg"
+            return [pscustomobject]@{Type='File';Value=$localCfg;RememberUrl=$false}
         }
     }
-    if ([string]::IsNullOrWhiteSpace($url)) {
-        Add-Type -AssemblyName Microsoft.VisualBasic
-        $url = [Microsoft.VisualBasic.Interaction]::InputBox(
-            "Paste a DIRECT raw.githubusercontent.com HTTPS link for at.cfg.`nLeave blank to browse for a local file.",
-            'Install CS2 at.cfg', ''
-        ).Trim()
-        if ([string]::IsNullOrWhiteSpace($url)) {
-            $picker = New-Object System.Windows.Forms.OpenFileDialog
-            $picker.Title = 'Select at.cfg to install'
-            $picker.Filter = 'CS2 CFG files (*.cfg)|*.cfg'
-            if ($picker.ShowDialog() -ne [System.Windows.Forms.DialogResult]::OK) { return $null }
-            return [pscustomobject]@{ Type='File'; Value=$picker.FileName; RememberUrl=$false }
+    if(-not [string]::IsNullOrWhiteSpace($env:LOCALAPPDATA)){
+        $cached=Join-Path $env:LOCALAPPDATA ("CafeLauncher\cfg-cache\$CfgName")
+        if(Test-Path -LiteralPath $cached -PathType Leaf){
+            Write-Log "Using previously cached $CfgName." 'WARN'
+            return [pscustomobject]@{Type='File';Value=$cached;RememberUrl=$false}
         }
-        $remember = $true
     }
-    Assert-ConfigUrl $url
-    return [pscustomobject]@{ Type='Url'; Value=$url; RememberUrl=$remember }
+    if(-not [string]::IsNullOrWhiteSpace($DownloadUrl)){
+        Assert-ConfigUrl $DownloadUrl
+        return [pscustomobject]@{Type='Url';Value=$DownloadUrl;RememberUrl=$false}
+    }
+    Write-Log "No source available for $CfgName. Use its profile download URL or place the CFG beside the launcher." 'WARN'
+    return $null
 }
 
 function Get-FriendConfigFallback {
     param([string]$CfgName, [string]$CfgDirectory)
     $launcherDir = Split-Path -Parent $env:CAFE_SCRIPT
     $cache = Join-Path $env:LOCALAPPDATA ("CafeLauncher\cfg-cache\$CfgName")
-    foreach ($candidate in @($cache, (Join-Path $launcherDir $CfgName), (Join-Path $CfgDirectory $CfgName))) {
+    $candidates=New-Object 'System.Collections.Generic.List[string]'
+    $candidates.Add($cache)
+    if($launcherDir){$candidates.Add((Join-Path $launcherDir $CfgName))}
+    if($CfgDirectory){$candidates.Add((Join-Path $CfgDirectory $CfgName))}
+    foreach ($candidate in $candidates) {
         if (Test-Path -LiteralPath $candidate -PathType Leaf) { return $candidate }
     }
     return $null
 }
 
-function Install-AtCfg {
+function Install-ProfileCfg {
     param(
         [switch]$Silent,
-        [string]$CfgName = 'at.cfg',
+        [Parameter(Mandatory=$true)][string]$CfgName,
         [string]$DownloadUrl = '',
-        [switch]$CloudPreferred,
-        [string]$CS2Sensitivity = ''
+        [switch]$CloudPreferred
     )
     if ($CfgName -notmatch '^[A-Za-z0-9_-]+\.cfg$') {
         Write-Log "Unsafe config filename rejected: $CfgName" 'ERROR'
@@ -2567,11 +2498,10 @@ function Install-AtCfg {
     }
     $downloaded = $null
     $staged = $null
-    $configured = $null
     $cloudDownloaded = $false
     try {
         Write-Log "CS2 config installation started: $CfgName."
-        $source = Get-AtCfgSource -CfgName $CfgName -DownloadUrl $DownloadUrl -CloudPreferred:$CloudPreferred
+        $source = Get-ProfileCfgSource -CfgName $CfgName -DownloadUrl $DownloadUrl -CloudPreferred:$CloudPreferred
         if (-not $source) {
             Write-Log "CS2 $CfgName installation cancelled; no file or URL selected." 'WARN'
             return $false
@@ -2583,12 +2513,7 @@ function Install-AtCfg {
             return $false
         }
 
-        if ($source.Type -eq 'Embedded') {
-            $downloaded = Join-Path $env:TEMP ("CafeLauncher-{0}-{1}.cfg" -f [IO.Path]::GetFileNameWithoutExtension($CfgName), [Guid]::NewGuid().ToString('N'))
-            [IO.File]::WriteAllBytes($downloaded, [Convert]::FromBase64String($script:EmbeddedAtCfgBase64))
-            $sourcePath = $downloaded
-            Write-Log "Extracted bundled starter config for $CfgName to a temporary file."
-        } elseif ($source.Type -eq 'Url') {
+        if ($source.Type -eq 'Url') {
             $downloaded = Join-Path $env:TEMP ("CafeLauncher-{0}-{1}.cfg" -f [IO.Path]::GetFileNameWithoutExtension($CfgName), [Guid]::NewGuid().ToString('N'))
             Write-Log "Downloading $CfgName from $($source.Value)"
             # Windows PowerShell 5.1 uses TLS 1.2 when supported by the system.
@@ -2602,13 +2527,6 @@ function Install-AtCfg {
                 if (-not $CloudPreferred) { throw }
                 Write-Log "Could not download latest ${CfgName}: $($_.Exception.Message)" 'WARN'
                 $sourcePath = Get-FriendConfigFallback -CfgName $CfgName -CfgDirectory $cfgDirectory
-                if (-not $sourcePath -and $CfgName -eq 'fab.cfg') {
-                    # FabMode has the original at.cfg embedded for first-run offline use.
-                    # The installed filename is still fab.cfg, not at.cfg.
-                    [IO.File]::WriteAllBytes($downloaded, [Convert]::FromBase64String($script:EmbeddedAtCfgBase64))
-                    $sourcePath = $downloaded
-                    Write-Log 'GitHub unavailable; using embedded at.cfg content as offline fab.cfg fallback.' 'WARN'
-                }
                 if (-not $sourcePath) {
                     throw "GitHub download unavailable and no cached/local $CfgName exists. Skipping this config; other profile steps can continue."
                 }
@@ -2632,25 +2550,8 @@ function Install-AtCfg {
             throw 'The source contains NUL bytes and does not appear to be a plain-text CFG.'
         }
 
-        # Apply optional per-profile sensitivity to a TEMP copy, never overwrite the GitHub source.
-        # Blank = use sensitivity already defined by the friend CFG.
-        if (-not [string]::IsNullOrWhiteSpace($CS2Sensitivity)) {
-            $parsedSens = 0.0
-            if (-not [double]::TryParse($CS2Sensitivity, [Globalization.NumberStyles]::Float,
-                    [Globalization.CultureInfo]::InvariantCulture, [ref]$parsedSens) -or
-                [double]::IsNaN($parsedSens) -or $parsedSens -le 0 -or $parsedSens -gt 20) {
-                throw 'CS2 sensitivity must be blank or a number greater than 0 and at most 20.'
-            }
-            $sensText = $parsedSens.ToString('0.####', [Globalization.CultureInfo]::InvariantCulture)
-            $cfgText = [IO.File]::ReadAllText($sourcePath)
-            $cfgText = [Regex]::Replace($cfgText,
-                '(?m)^[ \t]*// CafeLauncher sensitivity override[ \t]*\r?\n[ \t]*sensitivity\s+"[0-9.]+"[ \t]*\r?\n?', '')
-            $configured = Join-Path $env:TEMP ("CafeLauncher-configured-{0}.cfg" -f [Guid]::NewGuid().ToString('N'))
-            [IO.File]::WriteAllText($configured, ($cfgText.TrimEnd() + "`r`n// CafeLauncher sensitivity override`r`nsensitivity `"$sensText`"`r`n"),
-                (New-Object System.Text.UTF8Encoding($false)))
-            $sourcePath = $configured
-            Write-Log "$CfgName sensitivity override prepared: $sensText."
-        }
+        $cfgSensitivity=Get-CafeCS2CfgSensitivity -Content ([IO.File]::ReadAllText($sourcePath))
+        Write-Log "$CfgName sensitivity verified: $cfgSensitivity."
 
         $dest = Join-Path $cfgDirectory $CfgName
         $expected = (Get-FileHash -LiteralPath $sourcePath -Algorithm SHA256 -ErrorAction Stop).Hash
@@ -2718,7 +2619,7 @@ function Install-AtCfg {
         }
         return $false
     } finally {
-        foreach ($temporary in @($downloaded, $staged, $configured)) {
+        foreach ($temporary in @($downloaded, $staged)) {
             if ($temporary -and (Test-Path -LiteralPath $temporary -PathType Leaf)) {
                 try { Remove-Item -LiteralPath $temporary -Force -ErrorAction Stop } catch {}
             }
@@ -3116,31 +3017,32 @@ $script:GamingProfiles = [ordered]@{
     FabMode = @{
         PointerSpeed=10; LogitechDPI=800; DisableAcceleration=$true; ApplyNvidia=$true; ScalingMode=2
         Width=1920; Height=1080; RefreshHz=360; Vibrance=75; Hue=-1
-        CS2Sensitivity=''; VoicePushToTalkKey=''; ConfigFile='fab.cfg'; CfgDownloadUrl=$script:FabCfgCloudUrl; LaunchApps=$true
+        VoicePushToTalkKey=''; ConfigFile='fab.cfg'; CfgDownloadUrl=$script:FabCfgCloudUrl; LaunchApps=$true
     }
     ArliMode = @{
         PointerSpeed=10; LogitechDPI=800; DisableAcceleration=$true; ApplyNvidia=$true; ScalingMode=2
         Width=1920; Height=1080; RefreshHz=360; Vibrance=75; Hue=-1
-        CS2Sensitivity=''; VoicePushToTalkKey=''; ConfigFile='arli.cfg'; CfgDownloadUrl='https://raw.githubusercontent.com/fabjoncela/Cs-script/main/arli.cfg'; LaunchApps=$true
+        VoicePushToTalkKey=''; ConfigFile='arli.cfg'; CfgDownloadUrl='https://raw.githubusercontent.com/fabjoncela/Cs-script/main/arli.cfg'; LaunchApps=$true
     }
     BrileMode = @{
         PointerSpeed=10; LogitechDPI=800; DisableAcceleration=$true; ApplyNvidia=$true; ScalingMode=2
         Width=1920; Height=1080; RefreshHz=360; Vibrance=75; Hue=-1
-        CS2Sensitivity=''; VoicePushToTalkKey=''; ConfigFile='brile.cfg'; CfgDownloadUrl='https://raw.githubusercontent.com/fabjoncela/Cs-script/main/brile.cfg'; LaunchApps=$true
+        VoicePushToTalkKey=''; ConfigFile='brile.cfg'; CfgDownloadUrl='https://raw.githubusercontent.com/fabjoncela/Cs-script/main/brile.cfg'; LaunchApps=$true
     }
     ArmlMode = @{
         PointerSpeed=10; LogitechDPI=800; DisableAcceleration=$true; ApplyNvidia=$true; ScalingMode=2
         Width=1920; Height=1080; RefreshHz=360; Vibrance=75; Hue=-1
-        CS2Sensitivity=''; VoicePushToTalkKey=''; ConfigFile='arml.cfg'; CfgDownloadUrl='https://raw.githubusercontent.com/fabjoncela/Cs-script/main/arml.cfg'; LaunchApps=$true
+        VoicePushToTalkKey=''; ConfigFile='arml.cfg'; CfgDownloadUrl='https://raw.githubusercontent.com/fabjoncela/Cs-script/main/arml.cfg'; LaunchApps=$true
     }
     OliMode = @{
         PointerSpeed=10; LogitechDPI=800; DisableAcceleration=$true; ApplyNvidia=$true; ScalingMode=2
         Width=1920; Height=1080; RefreshHz=360; Vibrance=75; Hue=-1
-        CS2Sensitivity=''; VoicePushToTalkKey=''; ConfigFile='oli.cfg'; CfgDownloadUrl='https://raw.githubusercontent.com/fabjoncela/Cs-script/main/oli.cfg'; LaunchApps=$true
+        VoicePushToTalkKey=''; ConfigFile='oli.cfg'; CfgDownloadUrl='https://raw.githubusercontent.com/fabjoncela/Cs-script/main/oli.cfg'; LaunchApps=$true
     }
 }
 $script:ProfileSettingsPath = Join-Path $env:LOCALAPPDATA 'CafeLauncher\profiles.json'
 $script:PendingSync = @{}
+$script:PendingCfgSensitivity = @{}
 $script:VerifiedProfileState = @{}
 $script:GraphicsPresets = [ordered]@{}
 foreach ($name in @($script:GamingProfiles.Keys)) { $script:PendingSync[$name] = $false }
@@ -4407,7 +4309,7 @@ function Get-ProfileGraphicsVersion {
 function Import-ProfileValues {
     param([string]$ProfileName, $SavedProfile, [string]$SourceLabel = 'local')
     if (-not $script:GamingProfiles.Contains($ProfileName) -or -not $SavedProfile) { return }
-    foreach ($setting in @('PointerSpeed','LogitechDPI','DisableAcceleration','ApplyNvidia','Width','Height','RefreshHz','Vibrance','Hue','ScalingMode','CS2Sensitivity','VoicePushToTalkKey','CfgDownloadUrl','LaunchApps')) {
+    foreach ($setting in @('PointerSpeed','LogitechDPI','DisableAcceleration','ApplyNvidia','Width','Height','RefreshHz','Vibrance','Hue','ScalingMode','VoicePushToTalkKey','CfgDownloadUrl','LaunchApps')) {
         $saved = $SavedProfile.PSObject.Properties[$setting]
         if (-not $saved) { continue }
         $value = $saved.Value
@@ -4424,11 +4326,6 @@ function Import-ProfileValues {
                 'VoicePushToTalkKey' {
                     $value=[string]$value
                     if($value -and $value -notmatch '^(?:[A-Z]|[0-9]|F(?:[1-9]|1[0-2])|MOUSE[1-5]|CAPSLOCK|ALT|SHIFT|CTRL|SPACE|TAB)$'){throw 'invalid voice key'}
-                }
-                'CS2Sensitivity' {
-                    $value=[string]$value
-                    if ($value -and $value -notmatch '^(?:[0-9]+(?:\.[0-9]+)?)$') { throw 'invalid sensitivity' }
-                    if ($value -and ([double]::Parse($value,[Globalization.CultureInfo]::InvariantCulture) -le 0 -or [double]::Parse($value,[Globalization.CultureInfo]::InvariantCulture) -gt 20)) { throw 'range' }
                 }
                 'CfgDownloadUrl' {
                     $value = [string]$value
@@ -4469,6 +4366,17 @@ function Load-ProfileSettings {
             } else {
                 $script:PendingSync[$name] = $true
             }
+            $pendingSensitivity=$savedProfile.Value.PSObject.Properties['PendingCfgSensitivity']
+            if($script:PendingSync[$name] -and $pendingSensitivity){
+                $draft=[string]$pendingSensitivity.Value
+                $draftNumber=0.0
+                if($draft -match '^(?:[0-9]+(?:\.[0-9]+)?)$' -and
+                   [double]::TryParse($draft,[Globalization.NumberStyles]::Float,[Globalization.CultureInfo]::InvariantCulture,[ref]$draftNumber) -and
+                   -not [double]::IsNaN($draftNumber) -and -not [double]::IsInfinity($draftNumber) -and
+                   $draftNumber -gt 0 -and $draftNumber -le 20){
+                    $script:PendingCfgSensitivity[$name]=$draftNumber.ToString('0.####',[Globalization.CultureInfo]::InvariantCulture)
+                }else{Write-Log "Ignored invalid local $name pending CFG sensitivity." 'WARN'}
+            }
             $verifiedBlob=$savedProfile.Value.PSObject.Properties['GitHubVerifiedProfileSha']
             $verifiedCommit=$savedProfile.Value.PSObject.Properties['GitHubVerifiedCommitSha']
             if($verifiedBlob -and [string]$verifiedBlob.Value -match '^[a-fA-F0-9]{40}$' -and
@@ -4490,7 +4398,7 @@ function Export-ProfileValues {
         PointerSpeed=[int]$p.PointerSpeed; LogitechDPI=[int]$p.LogitechDPI; DisableAcceleration=[bool]$p.DisableAcceleration
         ApplyNvidia=[bool]$p.ApplyNvidia; Width=[int]$p.Width; Height=[int]$p.Height
         RefreshHz=[int]$p.RefreshHz; Vibrance=[int]$p.Vibrance; Hue=[int]$p.Hue; ScalingMode=[int]$p.ScalingMode
-        CS2Sensitivity=[string]$p.CS2Sensitivity; VoicePushToTalkKey=$(if($p.Contains('VoicePushToTalkKey')){[string]$p['VoicePushToTalkKey']}else{''}); CfgDownloadUrl=[string]$p.CfgDownloadUrl
+        VoicePushToTalkKey=$(if($p.Contains('VoicePushToTalkKey')){[string]$p['VoicePushToTalkKey']}else{''}); CfgDownloadUrl=[string]$p.CfgDownloadUrl
         LaunchApps=[bool]$p.LaunchApps
     }
     # Preserve the dictionary as ONE pipeline object on Windows PowerShell 5.1.
@@ -4509,6 +4417,9 @@ function Save-ProfileSettings {
         }
         $snapshot = [ordered]@{}
         foreach ($key in @($values.Keys)) { $snapshot[$key] = $values[$key] }
+        if($script:PendingSync[$name] -and $script:PendingCfgSensitivity.ContainsKey($name)){
+            $snapshot['PendingCfgSensitivity']=[string]$script:PendingCfgSensitivity[$name]
+        }
         if($script:GraphicsPresets.Contains($name)){
             $snapshot['GraphicsSettings']=$script:GraphicsPresets[$name]
         }
@@ -4578,6 +4489,78 @@ function Get-GitHubJsonFromContentsApi {
     }
     if($IncludeMetadata){return [pscustomobject]@{Profile=$remote;BlobSha=[string]$file.sha}}
     return $remote
+}
+
+function Get-GitHubCfgFromContentsApi {
+    param([Parameter(Mandatory=$true)][string]$Repo,[Parameter(Mandatory=$true)][string]$Branch,
+        [Parameter(Mandatory=$true)][string]$Path,[hashtable]$Headers)
+    if($Path -notmatch '^[a-z0-9_-]+\.cfg$'){throw 'GitHub CFG path is invalid.'}
+    $encodedBranch=[Uri]::EscapeDataString($Branch)
+    $encodedPath=[Uri]::EscapeDataString($Path)
+    $url=Add-CafeCacheBust -Uri "https://api.github.com/repos/$Repo/contents/${encodedPath}?ref=$encodedBranch"
+    $requestHeaders=@{
+        Accept='application/vnd.github+json'
+        'User-Agent'='CafeLauncher-ProfileCFG'
+        'X-GitHub-Api-Version'='2022-11-28'
+        'Cache-Control'='no-cache'
+        Pragma='no-cache'
+    }
+    if($Headers){foreach($key in $Headers.Keys){$requestHeaders[$key]=$Headers[$key]}}
+    [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+    $file=Invoke-CafeGitHubRestMethod -Uri $url -Method Get -Headers $requestHeaders -TimeoutSec 20 -MaximumRedirection 0
+    if($file.type -ne 'file' -or $file.path -cne $Path -or
+       $file.encoding -ne 'base64' -or [string]$file.sha -notmatch '^[a-fA-F0-9]{40}$' -or
+       [string]::IsNullOrWhiteSpace([string]$file.content) -or [int64]$file.size -lt 1 -or [int64]$file.size -gt 2097152){
+        throw "GitHub returned invalid file metadata for $Path."
+    }
+    try{$bytes=[Convert]::FromBase64String(([string]$file.content -replace '\s',''))}
+    catch{throw "GitHub returned invalid base64 content for $Path."}
+    if($bytes.Length -ne [int64]$file.size -or [Array]::IndexOf($bytes,[byte]0) -ge 0){throw "GitHub CFG content is invalid for $Path."}
+    $content=[Text.Encoding]::UTF8.GetString($bytes)
+    $sensitivity=Get-CafeCS2CfgSensitivity -Content $content
+    return [pscustomobject]@{Path=$Path;BlobSha=[string]$file.sha;Content=$content;Sensitivity=$sensitivity}
+}
+
+function Get-ProfileCfgSensitivity {
+    param([Parameter(Mandatory=$true)][string]$ProfileName,[switch]$LocalProfileConfirmed)
+    if(-not $script:GamingProfiles.Contains($ProfileName)){throw "Unknown CS2 profile: $ProfileName"}
+    $profile=$script:GamingProfiles[$ProfileName]
+    $cfgName=[string]$profile.ConfigFile
+    $expectedCfg=(($ProfileName -replace 'Mode$','').ToLowerInvariant()+'.cfg')
+    if($cfgName -cne $expectedCfg -or $cfgName -notmatch '^[a-z0-9_-]+\.cfg$'){
+        throw ('Refusing to read unexpected CFG filename for '+$ProfileName+': '+$cfgName)
+    }
+    if($script:PendingSync[$ProfileName] -and $script:PendingCfgSensitivity.ContainsKey($ProfileName)){
+        $draft=ConvertTo-CafeCS2Sensitivity -Value ([string]$script:PendingCfgSensitivity[$ProfileName])
+        return [pscustomobject]@{Sensitivity=$draft;Source='LocalPending'}
+    }
+    try{
+        $remote=Get-GitHubCfgFromContentsApi -Repo $script:GithubRepo -Branch $script:GithubBranch -Path $cfgName
+        try{
+            $cacheDir=Join-Path $env:LOCALAPPDATA 'CafeLauncher\cfg-cache'
+            if(-not (Test-Path -LiteralPath $cacheDir)){[void](New-Item -ItemType Directory -Path $cacheDir -Force -ErrorAction Stop)}
+            [IO.File]::WriteAllText((Join-Path $cacheDir $cfgName),$remote.Content,(New-Object System.Text.UTF8Encoding($false)))
+        }catch{Write-Log ('Could not cache verified '+$cfgName+' for offline sensitivity display: '+$_.Exception.Message) 'WARN'}
+        Write-Log ($ProfileName+' sensitivity loaded from GitHub '+$cfgName+' ('+$remote.BlobSha+').')
+        return [pscustomobject]@{Sensitivity=$remote.Sensitivity;Source='GitHub'}
+    }catch{
+        $remoteError=$_.Exception.Message
+        $cfgDirectory=$null
+        try{$cfgDirectory=Find-CS2ConfigFolder -NoPrompt}catch{}
+        $fallbackPath=$null
+        try{$fallbackPath=Get-FriendConfigFallback -CfgName $cfgName -CfgDirectory $cfgDirectory}catch{}
+        if(-not $fallbackPath){throw ('Could not verify '+$cfgName+' on GitHub and no local CFG fallback is available. '+$remoteError)}
+        if(-not $LocalProfileConfirmed){
+            $answer=[System.Windows.Forms.MessageBox]::Show(
+                ("Could not verify the latest GitHub $cfgName for $ProfileName.`r`n`r`nUse the available cached/local CFG sensitivity instead? It may be older than GitHub.`r`n`r`nYes = use the local CFG; No = cancel editing."),
+                'Confirm local CS2 sensitivity','YesNo','Warning','Button2')
+            if($answer -ne [System.Windows.Forms.DialogResult]::Yes){throw 'Profile editing canceled because the latest CFG sensitivity could not be verified.'}
+        }
+        $localContent=[IO.File]::ReadAllText($fallbackPath)
+        $localSensitivity=Get-CafeCS2CfgSensitivity -Content $localContent
+        Write-Log ($ProfileName+' sensitivity loaded from explicitly confirmed local CFG '+$fallbackPath+'. GitHub error: '+$remoteError) 'WARN'
+        return [pscustomobject]@{Sensitivity=$localSensitivity;Source='LocalFallback'}
+    }
 }
 
 function Get-LatestGitHubFileCommit {
@@ -4682,7 +4665,7 @@ function Confirm-LocalProfileApply {
 function Resolve-PendingProfileChanges {
     param([Parameter(Mandatory=$true)][string]$ProfileName)
     if(-not $script:PendingSync[$ProfileName]){return $true}
-    $message="$ProfileName has local profile and/or CS2 graphics edits that are not synced to GitHub.`r`n`r`nYes = Sync these local edits to GitHub, then continue.`r`nNo = Discard them and download the latest profile and graphics from GitHub.`r`nCancel = leave everything unchanged."
+    $message="$ProfileName has local profile, CS2 graphics, and/or CFG sensitivity edits that are not synced to GitHub.`r`n`r`nYes = Sync these local edits to GitHub, then continue.`r`nNo = Discard them and download the latest profile, graphics, and CFG sensitivity from GitHub.`r`nCancel = leave everything unchanged."
     $choice=[System.Windows.Forms.MessageBox]::Show($message,'Resolve unsynced profile edits','YesNoCancel','Warning','Button3')
     if($choice -eq [System.Windows.Forms.DialogResult]::Cancel){Write-Log "$ProfileName action canceled; unsynced local edits were kept.";return $false}
     if($choice -eq [System.Windows.Forms.DialogResult]::Yes){
@@ -4721,11 +4704,15 @@ function Resolve-PendingProfileChanges {
     foreach($key in $script:GamingProfiles[$ProfileName].Keys){$profileBefore[$key]=$script:GamingProfiles[$ProfileName][$key]}
     $graphicsBefore=$script:GraphicsPresets[$ProfileName]
     $verifiedBefore=$script:VerifiedProfileState[$ProfileName]
+    $hadPendingCfgSensitivity=$script:PendingCfgSensitivity.ContainsKey($ProfileName)
+    $pendingCfgSensitivityBefore=if($hadPendingCfgSensitivity){[string]$script:PendingCfgSensitivity[$ProfileName]}else{$null}
     try{
         $script:PendingSync[$ProfileName]=$false
+        [void]$script:PendingCfgSensitivity.Remove($ProfileName)
         $profileSource=Refresh-ProfileFromGitHub -ProfileName $ProfileName -NoSave -ForceLoad
         if($profileSource -notin @('GitHub','VerifiedGitHub')){throw 'The latest GitHub profile could not be verified.'}
         [void](Get-ProfileGraphicsPreset -ProfileName $ProfileName -RequireGitHub)
+        [void](Get-ProfileCfgSensitivity -ProfileName $ProfileName)
         Save-ProfileSettings
         Write-Log "$ProfileName unsynced edits discarded only after the latest GitHub profile and graphics files were verified."
         return $true
@@ -4734,6 +4721,7 @@ function Resolve-PendingProfileChanges {
         foreach($key in $profileBefore.Keys){$script:GamingProfiles[$ProfileName][$key]=$profileBefore[$key]}
         if($graphicsBefore){$script:GraphicsPresets[$ProfileName]=$graphicsBefore}else{$script:GraphicsPresets.Remove($ProfileName)}
         if($verifiedBefore){$script:VerifiedProfileState[$ProfileName]=$verifiedBefore}else{$script:VerifiedProfileState.Remove($ProfileName)}
+        if($hadPendingCfgSensitivity){$script:PendingCfgSensitivity[$ProfileName]=$pendingCfgSensitivityBefore}else{[void]$script:PendingCfgSensitivity.Remove($ProfileName)}
         $script:PendingSync[$ProfileName]=$true
         Write-Log "$ProfileName could not discard local edits because GitHub refresh failed; local values remain pending. $($_.Exception.Message)" 'ERROR'
         [void][System.Windows.Forms.MessageBox]::Show(
@@ -5168,6 +5156,30 @@ function Get-CafeGitHubVoiceBinding {
     return Get-CafeVoiceBindingFromCfg -Content $text
 }
 # Replace the active CS2 sensitivity command without changing binds or comments.
+function ConvertTo-CafeCS2Sensitivity {
+    param([Parameter(Mandatory=$true)][string]$Value)
+    $text=$Value.Trim()
+    $number=0.0
+    if($text -notmatch '^(?:[0-9]+(?:\.[0-9]+)?)$' -or
+       -not [double]::TryParse($text,[Globalization.NumberStyles]::Float,
+           [Globalization.CultureInfo]::InvariantCulture,[ref]$number) -or
+       [double]::IsNaN($number) -or [double]::IsInfinity($number) -or
+       $number -le 0 -or $number -gt 20){
+        throw 'CS2 sensitivity must be a number greater than 0 and at most 20.'
+    }
+    return $number.ToString('0.####',[Globalization.CultureInfo]::InvariantCulture)
+}
+
+function Get-CafeCS2CfgSensitivity {
+    param([Parameter(Mandatory=$true)][string]$Content)
+    $commands=[regex]::Matches($Content,'(?im)^[ \t]*sensitivity\b[^\r\n]*')
+    if($commands.Count -ne 1){throw ('CFG must contain exactly one active sensitivity command; found '+$commands.Count+'.')}
+    $valueMatch=[regex]::Match([string]$commands[0].Value,'(?i)^[ \t]*sensitivity[ \t]+(?:"(?<quoted>[^"\r\n]+)"|(?<plain>[^ \t\r\n]+))[ \t]*(?://[^\r\n]*)?$')
+    if(-not $valueMatch.Success){throw 'CFG sensitivity command has an invalid format.'}
+    $value=if($valueMatch.Groups['quoted'].Success){$valueMatch.Groups['quoted'].Value}else{$valueMatch.Groups['plain'].Value}
+    return ConvertTo-CafeCS2Sensitivity -Value $value
+}
+
 function Set-CS2CfgSensitivityText {
     param([Parameter(Mandatory=$true)][string]$Content,
           [Parameter(Mandatory=$true)][string]$Sensitivity)
@@ -5184,13 +5196,17 @@ function Set-CS2CfgSensitivityText {
     if($matches.Count -eq 1){
         $m=$matches[0]
         $line=$m.Groups['indent'].Value+'sensitivity "'+$Sensitivity+'"'+$m.Groups['tail'].Value
-        return $Content.Substring(0,$m.Index)+$line+$Content.Substring($m.Index+$m.Length)
+        $result=$Content.Substring(0,$m.Index)+$line+$Content.Substring($m.Index+$m.Length)
+        [void](Get-CafeCS2CfgSensitivity -Content $result)
+        return $result
     }
     $newline=if($Content.Contains(([string][char]13+[string][char]10))){
         [string][char]13+[string][char]10
     }else{[string][char]10}
     $separator=if($Content.Length -eq 0 -or $Content.EndsWith([string][char]10)){''}else{$newline}
-    return $Content+$separator+'sensitivity "'+$Sensitivity+'"'+$newline
+    $result=$Content+$separator+'sensitivity "'+$Sensitivity+'"'+$newline
+    [void](Get-CafeCS2CfgSensitivity -Content $result)
+    return $result
 }
 
 function Get-CafeCfgChangePreview {
@@ -5251,7 +5267,7 @@ function Sync-ProfileToGitHub {
     $cfgBody=$null
     $cfgUploaded=$false
     $readbackFailed=$false
-    $cfgStatus='left unchanged (no sensitivity or captured crosshair)'
+    $cfgStatus='validated and left unchanged'
     $capturedConvars=$null
     if($script:CapturedCS2Convars.ContainsKey($ProfileName)){$capturedConvars=$script:CapturedCS2Convars[$ProfileName]}
     [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
@@ -5322,33 +5338,33 @@ function Sync-ProfileToGitHub {
         branch=$script:GithubBranch
     }
     if($existingGraphicsSha){$graphicsBody.sha=$existingGraphicsSha}
-    # Stage a matching CFG update after validating its path, blob metadata, and SHA.
-    # Empty sensitivity means "use the CFG's value" and does not edit the CFG.
-    $sensValue=[string]$values['CS2Sensitivity']
+    # The profile CFG is the canonical sensitivity source. Read it on every
+    # sync so even unrelated profile edits cannot publish an invalid CFG.
+    $cfgRemote=Get-GitHubCfgFromContentsApi -Repo $script:GithubRepo -Branch $script:GithubBranch -Path $cfgName -Headers $headers
+    $cfgText=[string]$cfgRemote.Content
+    $cfgSensitivity=[string]$cfgRemote.Sensitivity
+    $sensValue=$null
+    if($script:PendingCfgSensitivity.ContainsKey($ProfileName)){
+        $sensValue=ConvertTo-CafeCS2Sensitivity -Value ([string]$script:PendingCfgSensitivity[$ProfileName])
+    }elseif($capturedConvars -and $capturedConvars.Contains('sensitivity')){
+        $sensValue=ConvertTo-CafeCS2Sensitivity -Value ([string]$capturedConvars['sensitivity'])
+    }
     $voiceKey=[string]$values['VoicePushToTalkKey']
-    if(-not [string]::IsNullOrWhiteSpace($sensValue) -or $voiceKey -or ($capturedConvars -and $capturedConvars.Count -gt 0)){
+    $newCfgText=$cfgText
+    if($capturedConvars -and $capturedConvars.Count -gt 0){$newCfgText=Set-CafeCapturedConvarsInCfg -Content $newCfgText -Values $capturedConvars}
+    if($null -ne $sensValue){$newCfgText=Set-CS2CfgSensitivityText -Content $newCfgText -Sensitivity $sensValue}
+    if($voiceKey){$newCfgText=Set-CafeVoiceBindingInCfg -Content $newCfgText -Key $voiceKey}
+    $finalSensitivity=Get-CafeCS2CfgSensitivity -Content $newCfgText
+    if($newCfgText -cne $cfgText){
         $cfgUri="https://api.github.com/repos/$($script:GithubRepo)/contents/$cfgName"
-        $cfgRemote=Invoke-CafeGitHubRestMethod -Uri ($cfgUri+'?ref='+$script:GithubBranch) -Method Get -Headers $headers -TimeoutSec 20 -MaximumRedirection 0
-        if($cfgRemote.type -ne 'file' -or $cfgRemote.path -ne $cfgName -or
-            $cfgRemote.encoding -ne 'base64' -or
-            [string]$cfgRemote.sha -notmatch '^[a-fA-F0-9]{40}$' -or
-            [string]::IsNullOrWhiteSpace([string]$cfgRemote.content) -or
-            [int64]$cfgRemote.size -gt 2097152){
-            throw ('Invalid GitHub CFG metadata, cannot safely sync '+$cfgName)
+        $cfgBody=@{
+            message="Sync $cfgName voice, sensitivity and crosshair from CafeLauncher"
+            content=[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($newCfgText))
+            branch=$script:GithubBranch
+            sha=[string]$cfgRemote.BlobSha
         }
-        $cfgText=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String(([string]$cfgRemote.content -replace '\s','')))
-        $newCfgText=$cfgText
-        if($capturedConvars -and $capturedConvars.Count -gt 0){$newCfgText=Set-CafeCapturedConvarsInCfg -Content $newCfgText -Values $capturedConvars}
-        if(-not [string]::IsNullOrWhiteSpace($sensValue)){$newCfgText=Set-CS2CfgSensitivityText -Content $newCfgText -Sensitivity $sensValue}
-        if($voiceKey){$newCfgText=Set-CafeVoiceBindingInCfg -Content $newCfgText -Key $voiceKey}
-        if($newCfgText -cne $cfgText){
-            $cfgBody=@{
-                message="Sync $cfgName voice, sensitivity and crosshair from CafeLauncher"
-                content=[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($newCfgText))
-                branch=$script:GithubBranch
-                sha=[string]$cfgRemote.sha
-            }
-        }else{$cfgStatus='already has the requested sensitivity'}
+    }elseif($null -ne $sensValue){
+        $cfgStatus='already has the requested sensitivity'
     }
     try {
         if($cfgBody -and $ConfirmCfgChanges){
@@ -5361,15 +5377,11 @@ function Sync-ProfileToGitHub {
             $cfgResponse=Invoke-CafeGitHubRestMethod -Uri $cfgUri -Method Put -Headers $headers -ContentType 'application/json' -Body ($cfgBody | ConvertTo-Json -Depth 5 -Compress) -TimeoutSec 25 -MaximumRedirection 0
             if(-not $cfgResponse.commit.sha){throw ('CFG write was not confirmed for '+$cfgName)}
             $cfgUploaded=$true
-            if($voiceKey){
-                $voiceReadUrl=$cfgUri+'?ref='+[Uri]::EscapeDataString([string]$script:GithubBranch)+'&fresh='+[guid]::NewGuid().ToString('N')
-                $voiceRead=Invoke-CafeGitHubRestMethod -Uri $voiceReadUrl -Method Get -Headers $headers -TimeoutSec 20 -MaximumRedirection 0
-                if($voiceRead.type -ne 'file' -or $voiceRead.path -cne $cfgName -or $voiceRead.encoding -ne 'base64' -or [int64]$voiceRead.size -gt 2097152){throw 'GitHub voice binding read-back metadata was invalid.'}
-                $voiceText=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String(([string]$voiceRead.content -replace '\s','')))
-                if((Get-CafeVoiceBindingFromCfg -Content $voiceText) -cne $voiceKey){throw 'GitHub did not confirm the requested push-to-talk binding.'}
-            }
             $cfgStatus="updated selected CS2 voice/sensitivity/crosshair"
             Write-Log ("GitHub CFG settings saved to "+$cfgName+"; commit="+$cfgResponse.commit.sha)
+            $cfgReadback=Get-GitHubCfgFromContentsApi -Repo $script:GithubRepo -Branch $script:GithubBranch -Path $cfgName -Headers $headers
+            if($cfgReadback.Sensitivity -cne $finalSensitivity){throw 'GitHub did not confirm the requested CS2 sensitivity.'}
+            if($voiceKey -and (Get-CafeVoiceBindingFromCfg -Content $cfgReadback.Content) -cne $voiceKey){throw 'GitHub did not confirm the requested push-to-talk binding.'}
         }
         $result = Invoke-CafeGitHubRestMethod -Uri $uri -Method Put -Headers $headers -ContentType 'application/json' -Body ($body | ConvertTo-Json -Depth 5 -Compress) -TimeoutSec 25 -MaximumRedirection 0
         if (-not $result.commit.sha) { throw 'GitHub did not return a successful commit.' }
@@ -5398,6 +5410,7 @@ function Sync-ProfileToGitHub {
         if($verifiedProfile.ProfileName -cne $ProfileName -or [int]$verifiedProfile.SchemaVersion -ne 1){
             throw ('GitHub profile read-back identity/schema did not match '+$ProfileName)
         }
+        if($verifiedProfile.PSObject.Properties['CS2Sensitivity']){throw 'GitHub profile still contains the retired CS2Sensitivity field.'}
         foreach($key in @($values.Keys)){
             $remoteProperty=$verifiedProfile.PSObject.Properties[$key]
             if(-not $remoteProperty){throw ('GitHub profile read-back is missing '+$key)}
@@ -5432,6 +5445,7 @@ function Sync-ProfileToGitHub {
         }
         $script:GraphicsPresets[$ProfileName]=$verifiedGraphics
         $script:GamingProfiles[$ProfileName].ScalingMode=[int]$verifiedGraphics.ScalingMode
+        [void]$script:PendingCfgSensitivity.Remove($ProfileName)
         if($script:CapturedCS2Convars.ContainsKey($ProfileName)){[void]$script:CapturedCS2Convars.Remove($ProfileName)}
         $script:VerifiedProfileState[$ProfileName]=@{BlobSha=[string]$remoteProfile.sha;CommitSha=[string]$result.commit.sha}
         $readbackFailed=$false
@@ -5625,6 +5639,14 @@ function Show-ProfileEditor {
         $graphicsPreset=$localGraphics
         Write-Log "$ProfileName editor using explicitly confirmed local CS2 graphics after GitHub refresh failed." 'WARN'
     }
+    try{
+        $cfgSensitivity=Get-ProfileCfgSensitivity -ProfileName $ProfileName -LocalProfileConfirmed:($profileSource -eq 'LocalFallback')
+    }catch{
+        [void][System.Windows.Forms.MessageBox]::Show(
+            ("The selected profile's CS2 CFG sensitivity could not be verified:`n"+$_.Exception.Message),
+            'CS2 Sensitivity Unavailable','OK','Warning')
+        return
+    }
     $p = $script:GamingProfiles[$ProfileName]
     if (-not $p) { throw "Unknown profile: $ProfileName" }
     # GetNewClosure() creates a dynamic module scope, so capture references to the
@@ -5632,8 +5654,10 @@ function Show-ProfileEditor {
     $pendingSyncState = $script:PendingSync
     $graphicsPresetState = $script:GraphicsPresets
     $capturedCS2ConvarsState = $script:CapturedCS2Convars
+    $pendingCfgSensitivityState=$script:PendingCfgSensitivity
     if ($null -eq $pendingSyncState -or $pendingSyncState -isnot [System.Collections.IDictionary] -or
-        $null -eq $capturedCS2ConvarsState -or $capturedCS2ConvarsState -isnot [System.Collections.IDictionary]) {
+        $null -eq $capturedCS2ConvarsState -or $capturedCS2ConvarsState -isnot [System.Collections.IDictionary] -or
+        $null -eq $pendingCfgSensitivityState -or $pendingCfgSensitivityState -isnot [System.Collections.IDictionary]) {
         throw 'Profile editor shared state is missing; cannot safely edit this profile.'
     }
 
@@ -5720,8 +5744,8 @@ function Show-ProfileEditor {
     $logitechDpi=New-EditorTabNumber -Grid $mouseGrid -Title 'Logitech DPI (live, per profile)' -Column 1 -Row 0 -Min 100 -Max 25600 -Value ([int]$p.LogitechDPI)
     $logitechDpi.Increment=50
     $sens=New-Object System.Windows.Forms.TextBox
-    $sens.Text=[string]$p.CS2Sensitivity
-    Add-EditorTabField -Grid $mouseGrid -Title 'CS2 sensitivity (sync updates CS2 .cfg)' -Control $sens -Column 0 -Row 1
+    $sens.Text=[string]$cfgSensitivity.Sensitivity
+    Add-EditorTabField -Grid $mouseGrid -Title 'CS2 sensitivity (profile CFG source)' -Control $sens -Column 0 -Row 1
     $accel=New-Object System.Windows.Forms.CheckBox
     $accel.Text='Enable Windows mouse acceleration (EPP)'
     $accel.Checked= -not [bool]$p.DisableAcceleration
@@ -6204,15 +6228,7 @@ function Show-ProfileEditor {
     $dialog.CancelButton=$cancel
 
     $saveEditorValues = {
-        $sensValue=$sens.Text.Trim()
-        if ($sensValue) {
-            $number=0.0
-            if (-not [double]::TryParse($sensValue,[Globalization.NumberStyles]::Float,[Globalization.CultureInfo]::InvariantCulture,[ref]$number) -or
-                [double]::IsNaN($number) -or $number -le 0 -or $number -gt 20) {
-                throw 'Sensitivity must be blank or between 0 and 20, using a decimal point (e.g. 1.2).'
-            }
-            $sensValue=$number.ToString('0.####',[Globalization.CultureInfo]::InvariantCulture)
-        }
+        $sensValue=ConvertTo-CafeCS2Sensitivity -Value $sens.Text.Trim()
         $readChoiceValue={param($control)[string]$control.Tag[$control.SelectedIndex]}.GetNewClosure()
         $graphicsSettings=[ordered]@{
             Width=[int]$gameWidth.Value;Height=[int]$gameHeight.Value
@@ -6260,7 +6276,7 @@ function Show-ProfileEditor {
         $p.Hue=[int]$hue.Value
         $p.ApplyNvidia=[bool]$nv.Checked
         $p.LaunchApps=[bool]$apps.Checked
-        $p.CS2Sensitivity=$sensValue
+        $pendingCfgSensitivityState[$ProfileName]=$sensValue
         $p.VoicePushToTalkKey=[string]$voiceBox.Tag[$voiceBox.SelectedIndex]
         # Use the captured shared dictionary, not script: scope in this closure.
         $pendingSyncState[$ProfileName] = $true
@@ -6285,13 +6301,11 @@ function Show-ProfileEditor {
         try {
             & $saveEditorValues
             $changes=if($p.VoicePushToTalkKey){
-                "profiles/$ProfileName.json, graphics/$ProfileName.json AND $($p.ConfigFile) (voice key and selected settings)"
+                "profiles/$ProfileName.json, graphics/$ProfileName.json AND $($p.ConfigFile) (profile sensitivity, voice key and selected settings)"
             }elseif($capturedCS2ConvarsState.ContainsKey($ProfileName)){
-                "profiles/$ProfileName.json, graphics/$ProfileName.json AND $($p.ConfigFile) (captured CS2 crosshair/sensitivity)"
-            }elseif($sens.Text.Trim()){
-                "profiles/$ProfileName.json, graphics/$ProfileName.json AND $($p.ConfigFile) (sensitivity only)"
+                "profiles/$ProfileName.json, graphics/$ProfileName.json AND $($p.ConfigFile) (profile sensitivity and captured CS2 crosshair settings)"
             }else{
-                "profiles/$ProfileName.json and graphics/$ProfileName.json (CFG unchanged: sensitivity blank)"
+                "profiles/$ProfileName.json, graphics/$ProfileName.json AND $($p.ConfigFile) (profile sensitivity)"
             }
             $newline=[Environment]::NewLine
             $message="Save these files to GitHub branch $syncTargetBranch?"+$newline+
@@ -6345,7 +6359,7 @@ function Show-ProfileEditor {
                 }
                 $pendingSyncState[$ProfileName] = $false
                 Save-ProfileSettings
-                [System.Windows.Forms.MessageBox]::Show("$ProfileName settings saved locally and synced to GitHub. The CS2 graphics preset was updated or already matched GitHub.`nOther PCs can now download the settings without signing in.`nSelected sensitivity and push-to-talk changes and captured crosshair values are saved in the matching .cfg when present; unrelated binds remain unchanged.", 'GitHub sync complete', 'OK', 'Information') | Out-Null
+                [System.Windows.Forms.MessageBox]::Show("$ProfileName settings saved locally and synced to GitHub. The CS2 graphics preset was updated or already matched GitHub.`nOther PCs can now download the settings without signing in.`nSensitivity is stored in the profile CFG; the profile JSON does not control it. Other captured CFG settings are updated when selected, and unrelated binds remain unchanged.", 'GitHub sync complete', 'OK', 'Information') | Out-Null
                 $dialog.DialogResult=[System.Windows.Forms.DialogResult]::OK
                 $dialog.Close()
             } finally {
@@ -6784,8 +6798,8 @@ function Invoke-GamingProfile {
         }
         # Profile Apply installs its CFG without editing any Steam launch options.
         $steps += @{ Name = "Install CS2 $profileCfgName"; Action = {
-            $cfgInstalled=Install-AtCfg -Silent -CfgName $profileCfgName -DownloadUrl $profileCfgUrl -CloudPreferred:([bool]$profileCfgUrl) -CS2Sensitivity ([string]$profile.CS2Sensitivity)
-            Set-RunOutcome -Run $ProfileName -Setting 'CS2 profile CFG' -Requested $profileCfgName -Target 'Active Steam CS2 cfg folder' -Status $(if($cfgInstalled){'APPLIED'}else{'FAILED'}) -Actual $(if($cfgInstalled){'SHA-256 verified'}else{'not installed'}) -Detail $(if($cfgInstalled){'Selected source copied and verified.'}else{'Install-AtCfg did not confirm installation.'})
+            $cfgInstalled=Install-ProfileCfg -Silent -CfgName $profileCfgName -DownloadUrl $profileCfgUrl -CloudPreferred:([bool]$profileCfgUrl)
+            Set-RunOutcome -Run $ProfileName -Setting 'CS2 profile CFG' -Requested $profileCfgName -Target 'Active Steam CS2 cfg folder' -Status $(if($cfgInstalled){'APPLIED'}else{'FAILED'}) -Actual $(if($cfgInstalled){'SHA-256 verified'}else{'not installed'}) -Detail $(if($cfgInstalled){'Selected source copied and verified.'}else{'Install-ProfileCfg did not confirm installation.'})
             if(-not $cfgInstalled){throw ('CS2 CFG install was not verified: '+$profileCfgName)}
         } }
     }
@@ -6907,7 +6921,7 @@ function Start-CS2WithProfileCfg {
         $url = $script:FabCfgCloudUrl
     }
     Write-Log "$ProfileName Play + Exec: installing $cfgName before starting CS2."
-    $installed = Install-AtCfg -Silent -CfgName $cfgName -DownloadUrl $url -CloudPreferred:([bool]$url) -CS2Sensitivity ([string]$profile.CS2Sensitivity)
+    $installed = Install-ProfileCfg -Silent -CfgName $cfgName -DownloadUrl $url -CloudPreferred:([bool]$url)
     if ($installed -ne $true) {
         Write-Log "$ProfileName Play + Exec cancelled: $cfgName installation did not succeed." 'ERROR'
         [System.Windows.Forms.MessageBox]::Show(
@@ -7297,12 +7311,8 @@ New-Tile "OliMode" 10 { Invoke-GamingProfile -ProfileName 'OliMode' } -Primary -
 
 New-Tile "Mouse Pointer Options" 11 { Open-MousePointerOptions }
 New-Tile "NVIDIA Control Panel" 12 { Open-NvidiaControlPanel }
-# Legacy FabMode-only shortcuts are disabled. Keep these definitions for possible
-# re-enable later; regular profiles can still apply NVIDIA settings and install CFGs.
+# Legacy standalone shortcuts are disabled; profile actions handle NVIDIA and CFG setup.
 # New-Tile "Apply NVIDIA Settings" 13 { Apply-NvidiaGamingSettings } -Primary
-# New-Tile "Install CS2 fab.cfg" 14 {
-#     [void](Install-AtCfg -CfgName 'fab.cfg' -DownloadUrl $script:FabCfgCloudUrl -CloudPreferred)
-# } -Primary
 New-Tile "Detect PC" 15 { Show-PCDiagnostics }
 New-Tile "Check for Updates" 16 { Check-CafeLauncherUpdates -Manual }
 New-Tile "Exit" 17 { $form.Close() }
