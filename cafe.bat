@@ -4,7 +4,7 @@ start "" powershell.exe -NoProfile -ExecutionPolicy Bypass -STA -WindowStyle Hid
 exit /b
 
 # POWERSHELL_GUI
-# CAFE_RELEASE=2026.10.18.8
+# CAFE_RELEASE=2026.10.18.9
 
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
@@ -5568,7 +5568,7 @@ function Show-ProfileEditor {
         [void]$editorTabs.TabPages.Add($page)
     }
 
-    $mouseGrid=New-EditorTabGrid -Page $mousePage -Rows 3
+    $mouseGrid=New-EditorTabGrid -Page $mousePage -Rows 4
     $pointerSpeedValues=@(1,2,4,6,8,10,12,14,16,18,20)
     $pointerSpeedLabels=@(
         '1/11 - Slowest (1)';'2/11 (2)';'3/11 (4)';'4/11 (6)';'5/11 (8)';
@@ -5589,10 +5589,13 @@ function Show-ProfileEditor {
     $pointer.add_SelectionChangeCommitted({$pointerSpeedSelectionState.UserChanged=$true}.GetNewClosure())
     $logitechDpi=New-EditorTabNumber -Grid $mouseGrid -Title 'Logitech DPI (live, per profile)' -Column 1 -Row 0 -Min 100 -Max 25600 -Value ([int]$p.LogitechDPI)
     $logitechDpi.Increment=50
+    $sens=New-Object System.Windows.Forms.TextBox
+    $sens.Text=[string]$p.CS2Sensitivity
+    Add-EditorTabField -Grid $mouseGrid -Title 'CS2 sensitivity (sync updates CS2 .cfg)' -Control $sens -Column 0 -Row 1
     $accel=New-Object System.Windows.Forms.CheckBox
     $accel.Text='Enable Windows mouse acceleration (EPP)'
     $accel.Checked= -not [bool]$p.DisableAcceleration
-    Add-EditorTabWide -Grid $mouseGrid -Control $accel -Row 1
+    Add-EditorTabWide -Grid $mouseGrid -Control $accel -Row 2
     $mouseHint=New-Object System.Windows.Forms.Label
     if($pointerSpeedOriginalValue -in $pointerSpeedValues){
         $mouseHint.Text='Choices match Windows Mouse Properties (11 levels). Live DPI uses better-logihub; profiles do not launch G HUB.'
@@ -5600,7 +5603,7 @@ function Show-ProfileEditor {
         $mouseHint.Text="This profile's custom pointer value ($pointerSpeedOriginalValue) is preserved unless you choose a level. Live DPI uses better-logihub; profiles do not launch G HUB."
     }
     $mouseHint.ForeColor=$MUTED
-    Add-EditorTabWide -Grid $mouseGrid -Control $mouseHint -Row 2
+    Add-EditorTabWide -Grid $mouseGrid -Control $mouseHint -Row 3
 
     $displayGrid=New-EditorTabGrid -Page $displayPage -Rows 5
     $width=New-EditorTabNumber -Grid $displayGrid -Title 'Resolution width' -Column 0 -Row 0 -Min 640 -Max 7680 -Value ([int]$p.Width)
@@ -5622,9 +5625,6 @@ function Show-ProfileEditor {
     $cfgFile.Text=[string]$p.ConfigFile
     $cfgFile.ReadOnly=$true
     Add-EditorTabField -Grid $cs2Grid -Title 'CS2 config filename (fixed)' -Control $cfgFile -Column 0 -Row 0
-    $sens=New-Object System.Windows.Forms.TextBox
-    $sens.Text=[string]$p.CS2Sensitivity
-    Add-EditorTabField -Grid $cs2Grid -Title 'CS2 sensitivity (sync updates .cfg)' -Control $sens -Column 1 -Row 0
     # CFG remains authoritative unless this profile has unsynced local edits.
     $voiceSelected=[string]$p.VoicePushToTalkKey
     if(-not $pendingSyncState[$ProfileName]){
@@ -5984,6 +5984,7 @@ function Show-ProfileEditor {
             $answer=[System.Windows.Forms.MessageBox]::Show($preview,'Capture CS2 Graphics','YesNo','Question')
             if($answer -ne [System.Windows.Forms.DialogResult]::Yes){return}
             [void](& $applyGraphicsPresetToEditor $capture.Preset)
+            $convars=$null
             try{
                 $source=[pscustomobject]@{Path=$capture.Path;AccountID=$capture.AccountID}
                 $convars=Get-CafeCS2UserConvarsCapture -Source $source
@@ -5997,7 +5998,7 @@ function Show-ProfileEditor {
                 Write-Log ('CS2 user convars capture skipped: '+$_.Exception.Message) 'WARN'
                 [void][System.Windows.Forms.MessageBox]::Show(('Graphics captured but crosshair/sensitivity unavailable: '+$_.Exception.Message),'Partial CS2 capture','OK','Warning')
             }
-            $status.Text=('Captured CS2 settings from Steam account '+$capture.AccountID+'. Review them, then Save & Sync to publish; nothing has been saved or applied yet.')
+            $status.Text='Captured CS2 settings from Steam account '+$capture.AccountID+'. '+$(if($convars -and $convars.Values.ContainsKey('sensitivity')){'Sensitivity '+$sens.Text+' is staged on the Mouse tab. '}else{'Sensitivity was not found; the profile value is kept. '})+'Review the captured values, then Save & Sync to publish; nothing has been saved or applied yet.'
             $status.ForeColor=[System.Drawing.Color]::FromArgb(255,190,105)
             Write-Log ('Captured '+$capture.CapturedFields.Count+' CS2 graphics values from '+$capture.Path+' for '+$ProfileName+'; missing values kept the current preset. No game, local profile, or GitHub data was changed.')
         }catch{
