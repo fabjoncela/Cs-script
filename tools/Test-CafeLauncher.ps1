@@ -384,14 +384,29 @@ $startupSource=$dashboardSource.Substring($dashboardSource.IndexOf('$startupTime
 if($startupSource -match 'Refresh-DashboardProfiles|Refresh-ProfileFromGitHub'){
     throw 'Dashboard startup must not spend GitHub requests refreshing all profiles.'
 }
+$pendingChoiceUi=@($psAst.FindAll({param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Show-PendingProfileChoice'},$true))
 $pendingResolver=@($psAst.FindAll({param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Resolve-PendingProfileChanges'},$true))
-if($pendingResolver.Count -ne 1 -or
-   $pendingResolver[0].Extent.Text -notmatch 'YesNoCancel' -or
+$confirmationAt=-1
+$authorizationAt=-1
+if($pendingResolver.Count -eq 1){
+    $confirmationAt=$pendingResolver[0].Extent.Text.IndexOf('$confirmUpload=',[StringComparison]::Ordinal)
+    $authorizationAt=$pendingResolver[0].Extent.Text.IndexOf('$authorization=Get-GitHubSyncAuthorization',[StringComparison]::Ordinal)
+}
+if($pendingChoiceUi.Count -ne 1 -or
+   $pendingChoiceUi[0].Extent.Text -notmatch 'Use GitHub settings' -or
+   $pendingChoiceUi[0].Extent.Text -notmatch 'Upload local edits to GitHub' -or
+   $pendingChoiceUi[0].Extent.Text -notmatch 'Cancel' -or
+   $pendingResolver.Count -ne 1 -or
+   $pendingResolver[0].Extent.Text -notmatch 'Show-PendingProfileChoice' -or
    $pendingResolver[0].Extent.Text -notmatch 'Sync-ProfileToGitHub' -or
-   $pendingResolver[0].Extent.Text -notmatch 'Refresh-ProfileFromGitHub -ProfileName \$ProfileName -NoSave -ForceLoad' -or
-   $pendingResolver[0].Extent.Text -notmatch 'Get-ProfileGraphicsPreset -ProfileName \$ProfileName -RequireGitHub' -or
-   $pendingResolver[0].Extent.Text -notmatch '\$script:PendingSync\[\$ProfileName\]=\$true'){
-    throw 'Pending edits must offer sync/discard/cancel and retain local state if fresh GitHub reads fail.'
+   -not $pendingResolver[0].Extent.Text.Contains('Upload the local profile, graphics, and CFG sensitivity edits') -or
+   -not $pendingResolver[0].Extent.Text.Contains('Button2') -or
+   -not $pendingResolver[0].Extent.Text.Contains('$confirmUpload -ne [System.Windows.Forms.DialogResult]::Yes') -or
+   $confirmationAt -lt 0 -or $authorizationAt -lt $confirmationAt -or
+   -not $pendingResolver[0].Extent.Text.Contains('Refresh-ProfileFromGitHub -ProfileName $ProfileName -NoSave -ForceLoad') -or
+   -not $pendingResolver[0].Extent.Text.Contains('Get-ProfileGraphicsPreset -ProfileName $ProfileName -RequireGitHub') -or
+   -not $pendingResolver[0].Extent.Text.Contains('$script:PendingSync[$ProfileName]=$true')){
+    throw 'Pending edits must offer GitHub-first choices, confirm uploads before authorization, and retain local state if fresh GitHub reads fail.'
 }
 $profileApply=@($psAst.FindAll({param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Invoke-GamingProfile'},$true))
 $graphicsApply=@($psAst.FindAll({param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Invoke-GraphicsOnly'},$true))
