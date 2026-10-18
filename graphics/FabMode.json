@@ -18,10 +18,10 @@
                      "ParticleDetail":  1,
                      "AmbientOcclusion":  0,
                      "HDRDetail":  3,
-                     "NvidiaReflex":  0,
+                     "NvidiaReflex":  2,
                      "TextureFiltering":  3,
-                     "FSRDetail":  1,
-                     "VSync":  1,
+                     "FSRDetail":  4,
+                     "VSync":  0,
                      "CMAA":  0
                  }
 }
