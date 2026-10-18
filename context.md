@@ -3,7 +3,7 @@
 This file gives Codex and maintainers the operational context needed to work safely in this repository. **Always follow the checked-out source tree.** The generated state block below reports the launcher release marker, not whether that code has shipped to `main`.
 
 <!-- BEGIN GENERATED LAUNCHER STATE -->
-- Launcher release: `2026.10.18.8`
+- Launcher release: `2026.10.18.9`
 - Generated from the unique `# CAFE_RELEASE` marker in `cafe.bat` by `tools/Update-Context.ps1`.
 <!-- END GENERATED LAUNCHER STATE -->
 
@@ -43,7 +43,7 @@ Use this map to locate the implementation and focused test. The full verificatio
 
 ## Profile editor and CS2 graphics UI
 
-`Show-ProfileEditor` contains one tab control. Its existing **CS2 / Apps** tab contains CFG sensitivity/URL, app launch options, and per-profile CS2 graphics controls for:
+`Show-ProfileEditor` contains one tab control. The **Mouse** tab contains Windows mouse controls and the per-profile **CS2 sensitivity** field, labeled separately from Windows pointer speed. Typing a value saves it with the selected profile; Save & Sync writes it into that profile's CFG. The **CS2 / Apps** tab contains the CFG filename/URL, app launch options, and per-profile CS2 graphics controls for:
 
 - CS2 resolution width and height, aspect ratio, fullscreen/windowed mode.
 - Highest supported refresh or a user-selected exact Hz.
@@ -67,6 +67,7 @@ The **CS2 / Apps** editor can capture saved settings from the running Steam clie
 - Video capture reads only that account's `userdata/<id>/730/local/cfg/cs2_video.txt`, rechecks the active account after reading, validates recognized keys and ranges, converts refresh numerator/denominator to whole Hz, and preserves profile values for missing settings.
 - It imports CS2 resolution, aspect, fullscreen, and supported video quality values. NVIDIA scaling is outside `cs2_video.txt`, so the profile's current scaling value is retained.
 - It also captures sensitivity and every saved `cl_crosshair*` user-convar with a numeric or boolean value; new crosshair convars do not need an allowlist update. In-game CFG binds are not captured.
+- When saved `sensitivity` is captured, the value is staged in the CS2 sensitivity field on the **Mouse** tab. Capture alone does not save or sync it; the user reviews the values and chooses Save & Sync.
 - Capture does not edit game files or sync immediately. The user reviews the imported values, then chooses Save Locally or Save & Sync. Captured convars stay staged under the selected profile until sync.
 
 The **CS2 / Apps** editor can load the three previous versions of `graphics/<ProfileName>.json` from GitHub commit history.
