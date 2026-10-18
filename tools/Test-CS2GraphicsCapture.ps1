@@ -49,6 +49,14 @@ $video=@'
 }
 '@
 $capture=ConvertFrom-CafeCS2VideoText -ProfileName FabMode -Text $video -BasePreset $base -Path 'fixture\cs2_video.txt' -AccountID '12345'
+$expectedFsrProfileValue=@{0=0;1=4;2=3;3=2;4=1}
+foreach($cs2FsrValue in 0..4){
+    $variant=$video.Replace('"setting.videocfg_fsr_detail" "0"','"setting.videocfg_fsr_detail" "'+$cs2FsrValue+'"')
+    $fsrCapture=ConvertFrom-CafeCS2VideoText -ProfileName FabMode -Text $variant -BasePreset $base
+    if([int]$fsrCapture.Preset.Settings.FSRDetail -ne [int]$expectedFsrProfileValue[$cs2FsrValue]){
+        throw ('CS2 FSR value '+$cs2FsrValue+' did not map back to profile value '+$expectedFsrProfileValue[$cs2FsrValue]+'.')
+    }
+}
 if($capture.Preset.Settings.Width -ne 1280 -or $capture.Preset.Settings.Height -ne 960 -or $capture.Preset.Settings.AspectRatioMode -ne 0){throw 'Capture did not import resolution and aspect ratio.'}
 if($capture.Preset.Settings.RefreshHz -ne 165 -or $capture.Preset.RefreshPolicy -ne 'Exact' -or -not $capture.RefreshWasRounded){throw 'Capture did not convert the rational refresh rate accurately.'}
 if($capture.Preset.Settings.MSAASamples -ne 8 -or $capture.Preset.Settings.CMAA -ne 0 -or $capture.Preset.Settings.NvidiaReflex -ne 2 -or $capture.Preset.ScalingMode -ne 2){throw 'Capture did not import both anti-aliasing fields or preserve the profile scaling mode.'}

@@ -3,7 +3,7 @@
 This file gives Codex and maintainers the operational context needed to work safely in this repository. **Always follow the checked-out source tree.** The generated state block below reports the launcher release marker, not whether that code has shipped to `main`.
 
 <!-- BEGIN GENERATED LAUNCHER STATE -->
-- Launcher release: `2026.10.18.12`
+- Launcher release: `2026.10.19.1`
 - Generated from the unique `# CAFE_RELEASE` marker in `cafe.bat` by `tools/Update-Context.ps1`.
 <!-- END GENERATED LAUNCHER STATE -->
 
@@ -61,8 +61,8 @@ Typing a value or using **Capture CS2** stages a local pending CFG sensitivity. 
 
 ### Potential follow-up: verify CS2 preset application
 
-- If a CS2 preset value appears correct in the editor but does not take effect in game, verify whether changing its `setting.videocfg_*` selector in `cs2_video.txt` also updates the related rendering settings when CS2 loads the file. `graphics/ApplyGraphics.ps1` currently writes the mapped selector fields; examples and guides show some menu choices represented by additional CS2 video settings. For example, FSR examples include `setting.r_csgo_fsr_upsample` and `setting.mat_viewportscale`; ambient occlusion and HDR examples also include related rendering variables.
-- A future fix should confirm the behavior against a config captured before and after changing each setting in CS2. If the selector alone does not apply the choice, map that profile choice to all required video-config fields and make Capture read back the same values. Keep the profile JSON field names stable unless a schema migration is specifically needed.
+- CS2 FSR values are reversed from the editor choice order in `setting.videocfg_fsr_detail`: editor/profile values remain `0=Disabled, 1=Performance, 2=Balanced, 3=Quality, 4=Ultra Quality`, while CS2 stores `0=Disabled, 1=Ultra Quality, 2=Quality, 3=Balanced, 4=Performance`. This was confirmed in-game: applying profile Performance (`1`) showed Ultra Quality, and applying profile Ultra Quality (`4`) showed Performance. `graphics/ApplyGraphics.ps1` translates on apply, and `ConvertFrom-CafeCS2VideoText` translates back on capture; the profile schema and existing profile meanings stay unchanged.
+- For other suspect settings, confirm behavior against a config captured before and after changing each setting in CS2. If a selector alone does not apply the choice, map the profile choice to every required video-config field and make Capture read back those values. Keep profile JSON field names and established meanings stable.
 - References: [CS2 Options Menu config guide](https://steamcommunity.com/sharedfiles/filedetails/?id=3046217806) (community guide; documents menu choices and associated config values); [ValveSoftware CS2 issue #4155](https://github.com/ValveSoftware/csgo-osx-linux/issues/4155) (issue report includes a `cs2_video.txt` sample); [sample `cs2_video.txt` on GitHub](https://github.com/gucu112/cs2-config/blob/master/cs2_video.txt). These are useful investigation references, not an official Valve specification of the setting callbacks.
 
 Each profile's canonical preset is stored independently in `graphics/<ProfileName>.json`: `FabMode`, `ArliMode`, `ArmlMode`, `OliMode`, and `BrileMode`. The editor validates and displays the selected profile's file; Apply Graphics validates that same profile name before using its settings.

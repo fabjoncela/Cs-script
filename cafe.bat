@@ -4,7 +4,7 @@ start "" powershell.exe -NoProfile -ExecutionPolicy Bypass -STA -WindowStyle Hid
 exit /b
 
 # POWERSHELL_GUI
-# CAFE_RELEASE=2026.10.18.12
+# CAFE_RELEASE=2026.10.19.1
 
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
@@ -3842,6 +3842,10 @@ function ConvertFrom-CafeCS2VideoText {
         if(-not [int]::TryParse($matches[0].Groups['value'].Value,[Globalization.NumberStyles]::Integer,[Globalization.CultureInfo]::InvariantCulture,[ref]$value)){
             throw ('Invalid CS2 video value for '+$keyMap[$field]+'. Nothing was imported.')
         }
+        if($field -eq 'FSRDetail'){
+            # Translate CS2's reversed FSR enum back to the editor/profile order.
+            $value=switch($value){0{0}1{4}2{3}3{2}4{1}default{throw 'Unsupported CS2 FSR value; nothing was imported.'}}
+        }
         $settings[$field]=$value
         $captured.Add($field)
     }
@@ -7189,7 +7193,7 @@ function Invoke-GraphicsOnly {
     Start-StepScope -Run $graphicsRun -Step 'Apply Graphics'
     try {
     if(-not (Resolve-PendingProfileChanges -ProfileName $ModeName)){return}
-    $expected='506ae420da2d5ec2226047bd4cc95483568d1edb'
+    $expected='1aa2a754fbba92ab4ff25f9450380f9d98a2e559'
     $source=Add-CafeCacheBust -Uri 'https://raw.githubusercontent.com/fabjoncela/Cs-script/main/graphics/ApplyGraphics.ps1'
     $cache=Join-Path $env:LOCALAPPDATA 'CafeLauncher\graphics-module.ps1'
     $parent=Split-Path -Parent $cache
