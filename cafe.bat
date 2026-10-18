@@ -5928,13 +5928,19 @@ function Show-ProfileEditor {
     Add-EditorTabWide -Grid $cs2Grid -Control $graphicsHint -Row 5
     $gs=$graphicsPreset.Settings
     $copyOptions=@($script:GamingProfiles.Keys|Where-Object{$_ -cne $ProfileName})
-    $copyFromChoice=New-EditorTabChoice -Grid $cs2Grid -Title 'Copy CS2 graphics from profile' -Column 0 -Row 6 -Labels $copyOptions -Values $copyOptions -SelectedValue $copyOptions[0]
+    $copyLabels=@('Choose a profile to copy from...')+$copyOptions
+    $copyValues=@('')+$copyOptions
+    $copyFromChoice=New-EditorTabChoice -Grid $cs2Grid -Title 'Copy CS2 graphics from profile' -Column 0 -Row 6 -Labels $copyLabels -Values $copyValues -SelectedValue ''
     $copyGraphics=New-Object System.Windows.Forms.Button
     $copyGraphics.Text='Copy graphics'
     $copyGraphics.BackColor=[System.Drawing.Color]::FromArgb(58,67,83)
     $copyGraphics.ForeColor=$WHITE
     $copyGraphics.FlatStyle='Flat'
+    $copyGraphics.Enabled=$false
     [void](Add-EditorTabField -Grid $cs2Grid -Title 'Copy selected profile settings' -Control $copyGraphics -Column 1 -Row 6)
+    $copyFromChoice.Add_SelectedIndexChanged({
+        $copyGraphics.Enabled=([string]$copyFromChoice.Tag[$copyFromChoice.SelectedIndex] -ne '')
+    }.GetNewClosure())
     $gameWidth=New-EditorTabNumber -Grid $cs2Grid -Title 'CS2 resolution width' -Column 0 -Row 7 -Min 640 -Max 7680 -Value ([int]$gs.Width)
     $gameHeight=New-EditorTabNumber -Grid $cs2Grid -Title 'CS2 resolution height' -Column 1 -Row 7 -Min 480 -Max 4320 -Value ([int]$gs.Height)
     $aspectChoice=New-EditorTabChoice -Grid $cs2Grid -Title 'CS2 aspect ratio' -Column 0 -Row 8 -Labels @('4:3','16:9','16:10') -Values @('0','1','2') -SelectedValue ([string]$gs.AspectRatioMode)
@@ -6056,6 +6062,11 @@ function Show-ProfileEditor {
 
     $copyGraphics.Add_Click({
         $sourceName=[string]$copyFromChoice.Tag[$copyFromChoice.SelectedIndex]
+        if([string]::IsNullOrWhiteSpace($sourceName)){
+            $status.Text='Choose a source profile before copying CS2 graphics.'
+            $status.ForeColor=$MUTED
+            return
+        }
         try{
             $dialog.Cursor=[System.Windows.Forms.Cursors]::WaitCursor
             $sourcePreset=Get-ProfileGraphicsPreset -ProfileName $sourceName
