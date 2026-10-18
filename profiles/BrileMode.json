@@ -1,7 +1,7 @@
 {
     "SchemaVersion":  1,
     "ProfileName":  "BrileMode",
-    "PointerSpeed":  18,
+    "PointerSpeed":  6,
     "LogitechDPI":  350,
     "DisableAcceleration":  true,
     "ApplyNvidia":  true,
