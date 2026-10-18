@@ -5,7 +5,7 @@ CafeLauncher is a portable Windows setup launcher for CS2 internet cafés. It ru
 [Technical architecture and maintenance notes](./context.md)
 
 <!-- BEGIN GENERATED LAUNCHER RELEASE -->
-> Launcher release: **2026.10.18.11**. Features depend on the PC's hardware, installed programs and user permissions.
+> Launcher release: **2026.10.18.12**. Features depend on the PC's hardware, installed programs and user permissions.
 <!-- END GENERATED LAUNCHER RELEASE -->
 
 ## Download and start

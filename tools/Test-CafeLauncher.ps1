@@ -86,12 +86,12 @@ foreach($requiredEditorFeature in @(
     '$pointerSpeedSelectionState.UserChanged',
     '$p.PointerSpeed=$pointerSpeedOriginalValue',
     '$cs2Page.Text=''CS2 / Apps''',
-    '$cs2Grid=New-EditorTabGrid -Page $cs2Page -Rows 29',
+    '$cs2Grid=New-EditorTabGrid -Page $cs2Page -Rows 28',
     'function Add-EditorTabFullRowField',
     'function New-EditorTabFullRowChoice',
     '$captureGraphics.Text=''Capture from CS2''',
     'Get-CafeCS2GraphicsCapture -ProfileName $ProfileName -BasePreset $graphicsPreset',
-    'New-EditorTabNumber -Grid $cs2Grid -Title ''CS2 resolution width''',
+    'New-EditorTabNumber -Grid $cs2Grid -Title ''CS2 resolution width'' -Column 0 -Row 21',
     'New-EditorTabChoice -Grid $cs2Grid -Title ''Stretch / scaling''',
     'Stretch / scaling',
     'Earlier GitHub file revisions (commit ID shown)',
@@ -135,7 +135,26 @@ foreach($requiredGraphicsCaption in @(
     '$particleChoice=',
     '$aoChoice=',
     '$hdrChoice=',
-    '$fsrChoice='
+    '$fsrChoice=',
+    'function Get-CafeCS2AntiAliasingOptions',
+    'function ConvertTo-CafeCS2AntiAliasingChoiceValue',
+    'function ConvertFrom-CafeCS2AntiAliasingChoiceValue',
+    '$msaaOptions=@(Get-CafeCS2AntiAliasingOptions)',
+    "-Title 'V-Sync' -Row 8 -Labels @('Disabled','Enabled')",
+    "-Title 'NVIDIA Reflex Low Latency' -Row 9 -Labels @('Disabled','Enabled','Enabled + Boost')",
+    "-Title 'Global Shadow Quality' -Row 12 -Labels @('Low','Medium','High','Very High')",
+    "-Title 'Dynamic Shadows' -Row 13 -Labels @('Sun Only','All')",
+    "-Title 'Model / Texture Detail' -Row 14 -Labels @('Low','Medium','High')",
+    "-Title 'Texture Filtering Mode' -Row 15 -Labels @('Bilinear','Trilinear','Anisotropic 2X','Anisotropic 4X','Anisotropic 8X','Anisotropic 16X')",
+    "-Title 'Shader Detail' -Row 16 -Labels @('Low','High')",
+    "-Title 'Particle Detail' -Row 17 -Labels @('Low','Medium','High','Very High')",
+    "-Title 'Ambient Occlusion' -Row 18 -Labels @('Disabled','Medium','High')",
+    "-Title 'High Dynamic Range' -Row 19 -Labels @('Performance','Quality')",
+    "-Title 'FidelityFX Super Resolution' -Row 20 -Labels @('Performance','Balanced','Quality','Ultra Quality','Disabled (Highest Quality)')",
+    'Saved value (preserved):',
+    'ConvertTo-CafeCS2AntiAliasingChoiceValue -MSAASamples ([int]$values.MSAASamples) -CMAA ([int]$values.CMAA)',
+    '$graphicsSettings[''MSAASamples'']=[int]$antiAliasing.MSAASamples',
+    '$graphicsSettings[''CMAA'']=[int]$antiAliasing.CMAA'
 )){
     if(-not $psSource.Contains($requiredGraphicsCaption)){
         throw ('CS2 graphics UI caption or setting variable missing: '+$requiredGraphicsCaption)
@@ -153,13 +172,36 @@ foreach($expectedFullRowField in @(
     "-Title 'Particle Detail' -Row 17",
     "-Title 'Ambient Occlusion' -Row 18",
     "-Title 'High Dynamic Range' -Row 19",
-    "-Title 'FidelityFX Super Resolution' -Row 20",
-    "-Title 'CMAA' -Row 21"
+    "-Title 'FidelityFX Super Resolution' -Row 20"
 )){
     if($psSource -notmatch [regex]::Escape("New-EditorTabFullRowChoice -Grid `$cs2Grid $expectedFullRowField")){
         throw ('CS2 Frame Pacing/Presets field is not assigned its own full-width row: '+$expectedFullRowField)
     }
 }
+if($psSource -match "-Title 'CMAA'" -or $psSource -match "-Labels @\('Off','2×','4×','8×','16×'\)"){
+    throw 'CS2 anti-aliasing must use one menu-matched control without a separate CMAA row or extra sample choices.'
+}
+$antiAliasingFunctionNames=@('Get-CafeCS2AntiAliasingOptions','ConvertTo-CafeCS2AntiAliasingChoiceValue','ConvertFrom-CafeCS2AntiAliasingChoiceValue')
+foreach($functionName in $antiAliasingFunctionNames){
+    $functionAst=@($psAst.FindAll({param($node)$node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -ceq $functionName},$true))
+    if($functionAst.Count -ne 1){throw ('Expected one anti-aliasing mapping function: '+$functionName)}
+    Invoke-Expression $functionAst[0].Extent.Text
+}
+$antiAliasingOptions=@(Get-CafeCS2AntiAliasingOptions)
+$expectedAntiAliasingLabels=@('None','CMAA2','2X MSAA','4X MSAA','8X MSAA')
+$expectedAntiAliasingValues=@('0|0','0|1','2|0','4|0','8|0')
+if($antiAliasingOptions.Count -ne $expectedAntiAliasingLabels.Count){throw 'The CS2 anti-aliasing menu must expose exactly five options.'}
+for($i=0;$i -lt $antiAliasingOptions.Count;$i++){
+    if($antiAliasingOptions[$i].Label -cne $expectedAntiAliasingLabels[$i] -or $antiAliasingOptions[$i].Value -cne $expectedAntiAliasingValues[$i]){
+        throw ('CS2 anti-aliasing menu mapping mismatch at option '+$expectedAntiAliasingLabels[$i]+'.')
+    }
+    $decoded=ConvertFrom-CafeCS2AntiAliasingChoiceValue -Value $antiAliasingOptions[$i].Value
+    $encoded=ConvertTo-CafeCS2AntiAliasingChoiceValue -MSAASamples $decoded.MSAASamples -CMAA $decoded.CMAA
+    if($encoded -cne $expectedAntiAliasingValues[$i]){throw ('CS2 anti-aliasing round trip failed for '+$antiAliasingOptions[$i].Label+'.')}
+}
+$legacyPair=ConvertTo-CafeCS2AntiAliasingChoiceValue -MSAASamples 16 -CMAA 0
+$legacyDecoded=ConvertFrom-CafeCS2AntiAliasingChoiceValue -Value $legacyPair
+if($legacyDecoded.MSAASamples -ne 16 -or $legacyDecoded.CMAA -ne 0){throw 'An older anti-aliasing value was not preserved through the editor mapping.'}
 $pointerValuesAst=@($psAst.FindAll({
     param($node) $node -is [Management.Automation.Language.AssignmentStatementAst] -and
         $node.Left.Extent.Text -eq '$pointerSpeedValues'

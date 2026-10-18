@@ -51,7 +51,7 @@ $video=@'
 $capture=ConvertFrom-CafeCS2VideoText -ProfileName FabMode -Text $video -BasePreset $base -Path 'fixture\cs2_video.txt' -AccountID '12345'
 if($capture.Preset.Settings.Width -ne 1280 -or $capture.Preset.Settings.Height -ne 960 -or $capture.Preset.Settings.AspectRatioMode -ne 0){throw 'Capture did not import resolution and aspect ratio.'}
 if($capture.Preset.Settings.RefreshHz -ne 165 -or $capture.Preset.RefreshPolicy -ne 'Exact' -or -not $capture.RefreshWasRounded){throw 'Capture did not convert the rational refresh rate accurately.'}
-if($capture.Preset.Settings.MSAASamples -ne 8 -or $capture.Preset.Settings.NvidiaReflex -ne 2 -or $capture.Preset.ScalingMode -ne 2){throw 'Capture did not import video quality or preserve the profile scaling mode.'}
+if($capture.Preset.Settings.MSAASamples -ne 8 -or $capture.Preset.Settings.CMAA -ne 0 -or $capture.Preset.Settings.NvidiaReflex -ne 2 -or $capture.Preset.ScalingMode -ne 2){throw 'Capture did not import both anti-aliasing fields or preserve the profile scaling mode.'}
 if($capture.MissingFields.Count -ne 0){throw 'Complete fixture was reported as missing values.'}
 
 $partial=$video -replace '(?m)^\s*"setting\.videocfg_hdr_detail".*\r?\n','' -replace '(?m)^\s*"setting\.refreshrate_(numerator|denominator)".*\r?\n',''
@@ -113,7 +113,7 @@ if(-not $failed){throw 'Capture was allowed to continue after the active Steam a
 $editor=$definitions= $null
 $editorAst=$ast.FindAll({param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Show-ProfileEditor'},$true)|Select-Object -First 1
 $editor=$editorAst.Extent.Text
-foreach($required in @('$cs2Grid=New-EditorTabGrid -Page $cs2Page -Rows 29','$captureGraphics.Text=''Capture from CS2''','Get-CafeCS2GraphicsCapture -ProfileName $ProfileName -BasePreset $graphicsPreset','Save & Sync to publish')){
+foreach($required in @('$cs2Grid=New-EditorTabGrid -Page $cs2Page -Rows 28','$captureGraphics.Text=''Capture from CS2''','Get-CafeCS2GraphicsCapture -ProfileName $ProfileName -BasePreset $graphicsPreset','Save & Sync to publish')){
     if($editor -notmatch [regex]::Escape($required)){throw ('Profile editor capture workflow is missing: '+$required)}
 }
 $sensitivityField="Add-EditorTabField -Grid `$mouseGrid -Title 'CS2 sensitivity (profile CFG source)' -Control `$sens -Column 0 -Row 1"
