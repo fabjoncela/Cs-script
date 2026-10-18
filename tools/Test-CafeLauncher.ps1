@@ -86,7 +86,9 @@ foreach($requiredEditorFeature in @(
     '$pointerSpeedSelectionState.UserChanged',
     '$p.PointerSpeed=$pointerSpeedOriginalValue',
     '$cs2Page.Text=''CS2 / Apps''',
-    '$cs2Grid=New-EditorTabGrid -Page $cs2Page -Rows 23',
+    '$cs2Grid=New-EditorTabGrid -Page $cs2Page -Rows 29',
+    'function Add-EditorTabFullRowField',
+    'function New-EditorTabFullRowChoice',
     '$captureGraphics.Text=''Capture from CS2''',
     'Get-CafeCS2GraphicsCapture -ProfileName $ProfileName -BasePreset $graphicsPreset',
     'New-EditorTabNumber -Grid $cs2Grid -Title ''CS2 resolution width''',
@@ -137,6 +139,25 @@ foreach($requiredGraphicsCaption in @(
 )){
     if(-not $psSource.Contains($requiredGraphicsCaption)){
         throw ('CS2 graphics UI caption or setting variable missing: '+$requiredGraphicsCaption)
+    }
+}
+foreach($expectedFullRowField in @(
+    "-Title 'V-Sync' -Row 8",
+    "-Title 'NVIDIA Reflex Low Latency' -Row 9",
+    "-Title 'Multisampling Anti-Aliasing Mode' -Row 11",
+    "-Title 'Global Shadow Quality' -Row 12",
+    "-Title 'Dynamic Shadows' -Row 13",
+    "-Title 'Model / Texture Detail' -Row 14",
+    "-Title 'Texture Filtering Mode' -Row 15",
+    "-Title 'Shader Detail' -Row 16",
+    "-Title 'Particle Detail' -Row 17",
+    "-Title 'Ambient Occlusion' -Row 18",
+    "-Title 'High Dynamic Range' -Row 19",
+    "-Title 'FidelityFX Super Resolution' -Row 20",
+    "-Title 'CMAA' -Row 21"
+)){
+    if($psSource -notmatch [regex]::Escape("New-EditorTabFullRowChoice -Grid `$cs2Grid $expectedFullRowField")){
+        throw ('CS2 Frame Pacing/Presets field is not assigned its own full-width row: '+$expectedFullRowField)
     }
 }
 $pointerValuesAst=@($psAst.FindAll({

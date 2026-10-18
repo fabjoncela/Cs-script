@@ -113,7 +113,7 @@ if(-not $failed){throw 'Capture was allowed to continue after the active Steam a
 $editor=$definitions= $null
 $editorAst=$ast.FindAll({param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Show-ProfileEditor'},$true)|Select-Object -First 1
 $editor=$editorAst.Extent.Text
-foreach($required in @('$cs2Grid=New-EditorTabGrid -Page $cs2Page -Rows 23','$captureGraphics.Text=''Capture from CS2''','Get-CafeCS2GraphicsCapture -ProfileName $ProfileName -BasePreset $graphicsPreset','Save & Sync to publish')){
+foreach($required in @('$cs2Grid=New-EditorTabGrid -Page $cs2Page -Rows 29','$captureGraphics.Text=''Capture from CS2''','Get-CafeCS2GraphicsCapture -ProfileName $ProfileName -BasePreset $graphicsPreset','Save & Sync to publish')){
     if($editor -notmatch [regex]::Escape($required)){throw ('Profile editor capture workflow is missing: '+$required)}
 }
 $sensitivityField="Add-EditorTabField -Grid `$mouseGrid -Title 'CS2 sensitivity (profile CFG source)' -Control `$sens -Column 0 -Row 1"
