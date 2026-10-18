@@ -4669,13 +4669,78 @@ function Confirm-LocalProfileApply {
     return $false
 }
 
+function Show-PendingProfileChoice {
+    param([Parameter(Mandatory=$true)][string]$ProfileName)
+    $choiceForm=New-Object System.Windows.Forms.Form
+    $choiceForm.Text='Resolve unsynced profile edits'
+    $choiceForm.ClientSize=New-Object System.Drawing.Size(700,278)
+    $choiceForm.StartPosition='CenterParent'
+    $choiceForm.FormBorderStyle='FixedDialog'
+    $choiceForm.MaximizeBox=$false
+    $choiceForm.MinimizeBox=$false
+    $choiceForm.ShowInTaskbar=$false
+    $choiceForm.BackColor=$PANEL
+    $choiceForm.ForeColor=$WHITE
+    $choiceForm.Font=New-Object System.Drawing.Font('Segoe UI',10)
+    $intro=New-Object System.Windows.Forms.Label
+    $intro.Text="$ProfileName has local profile, CS2 graphics, and/or CFG sensitivity edits that have not been synced to GitHub."
+    $intro.Location=New-Object System.Drawing.Point(20,18)
+    $intro.Size=New-Object System.Drawing.Size(660,42)
+    $choiceForm.Controls.Add($intro)
+    $githubDetails=New-Object System.Windows.Forms.Label
+    $githubDetails.Text='Use GitHub settings: discard these local edits and load the latest profile, graphics, and CFG sensitivity from GitHub.'
+    $githubDetails.Location=New-Object System.Drawing.Point(20,70)
+    $githubDetails.Size=New-Object System.Drawing.Size(660,38)
+    $choiceForm.Controls.Add($githubDetails)
+    $localDetails=New-Object System.Windows.Forms.Label
+    $localDetails.Text='Upload local edits to GitHub: replace GitHub settings with this computer''s edits. This can overwrite newer GitHub settings.'
+    $localDetails.Location=New-Object System.Drawing.Point(20,116)
+    $localDetails.Size=New-Object System.Drawing.Size(660,42)
+    $choiceForm.Controls.Add($localDetails)
+    $choiceState=[pscustomobject]@{Value='Cancel'}
+    $githubButton=New-Object System.Windows.Forms.Button
+    $githubButton.Text='Use GitHub settings'
+    $githubButton.Location=New-Object System.Drawing.Point(20,207)
+    $githubButton.Size=New-Object System.Drawing.Size(205,42)
+    $githubButton.BackColor=[System.Drawing.Color]::FromArgb(38,132,102)
+    $githubButton.ForeColor=$WHITE
+    $githubButton.FlatStyle='Flat'
+    $githubButton.Add_Click({$choiceState.Value='GitHub';$choiceForm.Close()}.GetNewClosure())
+    $choiceForm.Controls.Add($githubButton)
+    $uploadButton=New-Object System.Windows.Forms.Button
+    $uploadButton.Text='Upload local edits to GitHub'
+    $uploadButton.Location=New-Object System.Drawing.Point(240,207)
+    $uploadButton.Size=New-Object System.Drawing.Size(265,42)
+    $uploadButton.BackColor=$BLUE
+    $uploadButton.ForeColor=$WHITE
+    $uploadButton.FlatStyle='Flat'
+    $uploadButton.Add_Click({$choiceState.Value='UploadLocal';$choiceForm.Close()}.GetNewClosure())
+    $choiceForm.Controls.Add($uploadButton)
+    $cancelButton=New-Object System.Windows.Forms.Button
+    $cancelButton.Text='Cancel'
+    $cancelButton.Location=New-Object System.Drawing.Point(560,207)
+    $cancelButton.Size=New-Object System.Drawing.Size(120,42)
+    $cancelButton.DialogResult=[System.Windows.Forms.DialogResult]::Cancel
+    $choiceForm.Controls.Add($cancelButton)
+    $choiceForm.AcceptButton=$githubButton
+    $choiceForm.CancelButton=$cancelButton
+    try{[void]$choiceForm.ShowDialog($form);return [string]$choiceState.Value}
+    finally{$choiceForm.Dispose()}
+}
+
 function Resolve-PendingProfileChanges {
     param([Parameter(Mandatory=$true)][string]$ProfileName)
     if(-not $script:PendingSync[$ProfileName]){return $true}
-    $message="$ProfileName has local profile, CS2 graphics, and/or CFG sensitivity edits that are not synced to GitHub.`r`n`r`nYes = Sync these local edits to GitHub, then continue.`r`nNo = Discard them and download the latest profile, graphics, and CFG sensitivity from GitHub.`r`nCancel = leave everything unchanged."
-    $choice=[System.Windows.Forms.MessageBox]::Show($message,'Resolve unsynced profile edits','YesNoCancel','Warning','Button3')
-    if($choice -eq [System.Windows.Forms.DialogResult]::Cancel){Write-Log "$ProfileName action canceled; unsynced local edits were kept.";return $false}
-    if($choice -eq [System.Windows.Forms.DialogResult]::Yes){
+    $choice=Show-PendingProfileChoice -ProfileName $ProfileName
+    if($choice -eq 'Cancel'){Write-Log "$ProfileName action canceled; unsynced local edits were kept.";return $false}
+    if($choice -eq 'UploadLocal'){
+        $confirmUpload=[System.Windows.Forms.MessageBox]::Show(
+            ("Upload the local profile, graphics, and CFG sensitivity edits for $ProfileName to GitHub?`r`n`r`nThis replaces GitHub settings and may overwrite newer values."),
+            'Confirm upload to GitHub','YesNo','Warning','Button2')
+        if($confirmUpload -ne [System.Windows.Forms.DialogResult]::Yes){
+            Write-Log "$ProfileName local edits were not uploaded; the user canceled the overwrite confirmation." 'INFO'
+            return $false
+        }
         $authorization=$null;$token=$null
         try{
             $authorization=Get-GitHubSyncAuthorization -OwnerWindow $form
@@ -4705,7 +4770,7 @@ function Resolve-PendingProfileChanges {
         }finally{$token=$null;$authorization=$null}
     }
 
-    # Discard only after both current GitHub files have been fetched and
+    # Adopt GitHub settings only after both current files have been fetched and
     # validated. Restore the local state if either read fails.
     $profileBefore=@{}
     foreach($key in $script:GamingProfiles[$ProfileName].Keys){$profileBefore[$key]=$script:GamingProfiles[$ProfileName][$key]}
