@@ -7322,7 +7322,7 @@ $manualDpiLabel.ForeColor=$WHITE
 $manualDpiPanel.Controls.Add($manualDpiLabel)
 
 $script:ManualDpiInput=New-Object System.Windows.Forms.TextBox
-$script:ManualDpiInput.Text='800'
+$script:ManualDpiInput.Text=''
 $script:ManualDpiInput.Location=New-Object System.Drawing.Point(12,38)
 $script:ManualDpiInput.Size=New-Object System.Drawing.Size(110,30)
 $script:ManualDpiInput.MaxLength=5

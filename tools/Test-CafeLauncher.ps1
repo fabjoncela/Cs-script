@@ -466,7 +466,7 @@ try {
         throw 'Dashboard must construct two tabs and exactly five profile cards.'
     }
     if($script:SelectedProfileTitle.Text -ne 'FabMode' -or
-       $script:ManualDpiInput.Text -ne '800' -or
+       $script:ManualDpiInput.Text -ne '' -or
        $toolsFlow.Controls.Count -lt 9){
         throw 'Dashboard summary, manual DPI or utility buttons were not created correctly.'
     }

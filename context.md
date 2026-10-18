@@ -158,6 +158,7 @@ Dashboard **Apply Graphics** is a separate action from the normal profile Apply 
 - Steam launches with `+exec cafelauncher_profile_baseline.cfg +exec <profile>.cfg`, so the selected profile runs last. This clears omitted profile binds such as ArliMode's `MWHEELDOWN` and `CAPSLOCK` leftovers without `unbindall`; the baseline is limited to profile-managed settings.
 - If CS2 is already running, the app refreshes/installs the selected CFG and presents both console `exec` commands in order. If the console is off, enable it in Settings > Game first. This action does not persist Steam launch options or apply mouse/display settings.
 - Logitech live DPI uses BetterLogiHub and validates the selected mouse identity before writes and read-backs.
+- The standalone dashboard Change DPI field starts blank because it is independent of saved profiles; entering a supported whole-number DPI is required before applying it.
 - If the ordinary operation fails, only the original PRO X SUPERLIGHT (`pro_x_wireless_mouse`) gets a host-mode fallback: recheck the mouse and current mode, switch to host only when needed, verify the mode, retry DPI, and verify the requested value.
 - A successful fallback leaves the mouse in host mode. If it fails after a mode switch, the launcher attempts and verifies restoration to onboard mode. The PRO X SUPERLIGHT 2 keeps its helper-specific behavior.
 - The fallback does not write onboard DPI memory. Reconnect-triggered reapply remains deferred.
