@@ -20,7 +20,7 @@
                      "HDRDetail":  3,
                      "NvidiaReflex":  2,
                      "TextureFiltering":  3,
-                     "FSRDetail":  4,
+                     "FSRDetail":  0,
                      "VSync":  0,
                      "CMAA":  0
                  }
