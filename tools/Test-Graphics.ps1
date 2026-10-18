@@ -17,7 +17,7 @@ $pinPattern=[regex]::Escape('$expected=')+[char]39+[regex]::Escape($moduleBlobHa
 if($launcher -notmatch $pinPattern){
     throw 'Launcher graphics-module pin does not match the reviewed local module blob.'
 }
-if($source -notmatch 'api\.github\.com/repos/fabjoncela/Cs-script/contents/graphics/\$ModeName\.json\?ref=main' -or
+if($source -notmatch 'api\.github\.com/repos/fabjoncela/Cs-script/contents/graphics/\$ModeName\.json\?ref=main&fresh=\$fresh' -or
    $source -notmatch 'FromBase64String' -or $source -notmatch 'Cache-Control.*no-cache' -or
    $source -notmatch 'Invoke-CafeGitHubRestMethod' -or $source -match 'Invoke-RestMethod' -or
    $launcher -notmatch 'raw\.githubusercontent\.com/fabjoncela/Cs-script/main/graphics/ApplyGraphics\.ps1'){
@@ -318,7 +318,7 @@ try{
     }
     $cloudApplied=Get-CS2ModeGraphicsPreset -ModeName 'FabMode'
     if($cloudApplied.ProfileName -cne 'FabMode' -or
-       $script:GraphicsApiRequest.Uri -notmatch '/contents/graphics/FabMode\.json\?ref=main$' -or
+       $script:GraphicsApiRequest.Uri -notmatch '/contents/graphics/FabMode\.json\?ref=main&fresh=[0-9a-f]{32}$' -or
        $script:GraphicsApiRequest.Headers['Cache-Control'] -ne 'no-cache'){
         throw 'Cloud graphics preset did not use the validated GitHub Contents API response.'
     }
