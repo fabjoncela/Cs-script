@@ -3044,6 +3044,7 @@ $script:ProfileSettingsPath = Join-Path $env:LOCALAPPDATA 'CafeLauncher\profiles
 $script:PendingSync = @{}
 $script:PendingCfgSensitivity = @{}
 $script:VerifiedProfileState = @{}
+$script:ProfileRefreshStatus = @{}
 $script:GraphicsPresets = [ordered]@{}
 foreach ($name in @($script:GamingProfiles.Keys)) { $script:PendingSync[$name] = $false }
 
@@ -4597,6 +4598,7 @@ function Refresh-ProfileFromGitHub {
     if (-not $script:GamingProfiles.Contains($ProfileName)) { throw "Unknown profile: $ProfileName" }
     if ($script:PendingSync[$ProfileName]) {
         Write-Log "$ProfileName profile refresh: decision=local-pending; remote was not checked; keeping localPointer=$($script:GamingProfiles[$ProfileName].PointerSpeed)." 'INFO'
+        $script:ProfileRefreshStatus[$ProfileName]='LocalPending'
         return 'LocalPending'
     }
     $path="profiles/$ProfileName.json"
@@ -4610,16 +4612,19 @@ function Refresh-ProfileFromGitHub {
         $latestCommit=Get-LatestGitHubFileCommit -Repo $script:GithubRepo -Branch $script:GithubBranch -Path $path
         if($verifiedState -and $latestCommit -ceq $verifiedState.CommitSha -and -not $ForceLoad){
             Write-Log "$ProfileName profile refresh: decision=verified-cache; repo=$script:GithubRepo; branch=$script:GithubBranch; path=$path; latestCommit=$latestCommit; verifiedCommit=$($verifiedState.CommitSha); pointer=$priorPointer. Using values verified from this commit."
+            $script:ProfileRefreshStatus[$ProfileName]='VerifiedGitHub'
             return 'VerifiedGitHub'
         }
         if($verifiedState -and $latestCommit -cne $verifiedState.CommitSha){
             $commitOrder=Compare-GitHubCommitOrder -Repo $script:GithubRepo -BaseSha $verifiedState.CommitSha -HeadSha $latestCommit
             if($commitOrder -eq 'behind'){
                 Write-Log "$ProfileName profile refresh: settings are already verified. GitHub returned an older file-history commit, so they were kept unchanged (pointer=$priorPointer). No action needed. decision=ignore-stale-ancestor; repo=$script:GithubRepo; branch=$script:GithubBranch; path=$path; latestCommit=$latestCommit; verifiedCommit=$($verifiedState.CommitSha); comparison=$commitOrder." 'INFO'
+                $script:ProfileRefreshStatus[$ProfileName]='VerifiedGitHub'
                 return 'VerifiedGitHub'
             }
             if($commitOrder -eq 'diverged'){
                 Write-Log "$ProfileName profile refresh: decision=refuse-diverged-history; repo=$script:GithubRepo; branch=$script:GithubBranch; path=$path; latestCommit=$latestCommit; verifiedCommit=$($verifiedState.CommitSha); comparison=$commitOrder; pointer=$priorPointer. Keeping local settings." 'WARN'
+                $script:ProfileRefreshStatus[$ProfileName]='LocalFallback'
                 return 'LocalFallback'
             }
             if($commitOrder -ne 'ahead'){throw 'GitHub commit order could not be verified.'}
@@ -4633,11 +4638,13 @@ function Refresh-ProfileFromGitHub {
         Import-ProfileValues -ProfileName $ProfileName -SavedProfile $remote -SourceLabel 'GitHub'
         if(-not $NoSave){try { Save-ProfileSettings } catch { Write-Log "Unable to cache cloud settings: $($_.Exception.Message)" 'WARN' }}
         Write-Log "$ProfileName settings loaded from GitHub commit $latestCommit (no login needed)."
+        $script:ProfileRefreshStatus[$ProfileName]='GitHub'
         return 'GitHub'
     } catch {
         $verifiedCommitForLog=if($verifiedState){[string]$verifiedState.CommitSha}else{'none'}
         $candidateForLog=if($latestCommit){[string]$latestCommit}else{'unavailable'}
         Write-Log "$ProfileName profile refresh: decision=local-fallback; repo=$script:GithubRepo; branch=$script:GithubBranch; path=$path; latestCommit=$candidateForLog; verifiedCommit=$verifiedCommitForLog; pointerKept=$priorPointer; error=$($_.Exception.Message)" 'WARN'
+        $script:ProfileRefreshStatus[$ProfileName]='LocalFallback'
         return 'LocalFallback'
     }
 }
@@ -7068,8 +7075,24 @@ function Update-SelectedProfileCard {
             [Environment]::NewLine+'Display: '+[string]$p.Width+'x'+[string]$p.Height+' @'+[string]$p.RefreshHz+' Hz')
     }
     if($script:SelectedProfileHint){
-        $script:SelectedProfileHint.Text='Cloud settings refresh when you open Edit or apply this profile.'
+        $refreshStatus=[string]$script:ProfileRefreshStatus[$Name]
+        if($script:PendingSync[$Name]){
+            $script:SelectedProfileHint.Text='Showing local values; changes are pending sync.'
+        }else{
+            switch($refreshStatus){
+                {$_ -in @('GitHub','VerifiedGitHub')} {$script:SelectedProfileHint.Text='Profile values verified from GitHub.';break}
+                'LocalPending' {$script:SelectedProfileHint.Text='Showing local values; changes are pending sync.';break}
+                'LocalFallback' {$script:SelectedProfileHint.Text='GitHub refresh failed; showing local values.';break}
+                default {$script:SelectedProfileHint.Text='Profile values have not been refreshed from GitHub yet.'}
+            }
+        }
     }
+}
+function Refresh-SelectedProfileCard {
+    param([Parameter(Mandatory=$true)][string]$Name)
+    $source=Refresh-ProfileFromGitHub -ProfileName $Name
+    Update-SelectedProfileCard -Name $Name
+    return $source
 }
 $root=New-Object System.Windows.Forms.TableLayoutPanel
 $root.Dock='Fill'
@@ -7228,7 +7251,7 @@ function New-Tile {
         $graphics.Dock='Fill'
         $graphics.Add_Click({
             Update-SelectedProfileCard -Name $selectedProfile
-            try { Invoke-GraphicsOnly -ModeName $selectedProfile }
+            try { [void](Refresh-SelectedProfileCard -Name $selectedProfile); Invoke-GraphicsOnly -ModeName $selectedProfile }
             catch{Write-Log ('Graphics failed for '+$selectedProfile+': '+$_.Exception.Message) 'ERROR'}
         }.GetNewClosure())
         $card.Controls.Add($graphics,2,0)
@@ -7482,7 +7505,7 @@ try {
     foreach($entry in $recentEntries){Add-LiveLogLine -Line $entry}
 }catch{}
 Write-Log ('CafeLauncher dashboard ready. Log file: '+$script:LogPath)
-Update-SelectedProfileCard -Name 'FabMode'
+[void](Refresh-SelectedProfileCard -Name 'FabMode')
 $footer=New-CafeLabel -Text '  CAFE LAUNCHER | production dashboard | %TEMP%\CafeLauncher.log' -FontSize 9
 $root.Controls.Add($footer,0,3)
 
