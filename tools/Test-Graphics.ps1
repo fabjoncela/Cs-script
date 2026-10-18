@@ -53,6 +53,7 @@ $fixture=@'
     "setting.fullscreen" "1"
     "setting.aspectratiomode" "1"
     "setting.msaa_samples" "8"
+    "setting.r_csgo_cmaa_enable" "0"
     "setting.videocfg_shadow_quality" "2"
     "setting.videocfg_texture_detail" "2"
     "setting.shaderquality" "1"
@@ -66,6 +67,11 @@ $result=Update-CS2VideoGraphicsText -Text $fixture -Settings $settings
 if($result.Applied.Count -ne 4 -or -not $result.Changed){throw 'Graphics helper did not update four fields.'}
 if($result.Text -notmatch '"setting\.msaa_samples"\s+"2"' -or
    $result.Text -notmatch '"setting\.r_low_latency"\s+"1"'){throw 'Graphics values not edited correctly.'}
+$cmaaResult=Update-CS2VideoGraphicsText -Text $fixture -Settings ([ordered]@{MSAASamples=0;CMAA=1})
+if($cmaaResult.Text -notmatch '"setting\.msaa_samples"\s+"0"' -or
+   $cmaaResult.Text -notmatch '"setting\.r_csgo_cmaa_enable"\s+"1"'){
+    throw 'The combined CMAA2 menu option did not update both established video settings.'
+}
 foreach($unchanged in @('"VendorID" "4318"','"DeviceID" "12345"','"setting.monitor_index" "2"','"setting.custom_unknown" "keep me"')){
     if(-not $result.Text.Contains($unchanged)){throw ('Unrelated device/video setting changed: '+$unchanged)}
 }

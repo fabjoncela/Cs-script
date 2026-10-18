@@ -3,7 +3,7 @@
 This file gives Codex and maintainers the operational context needed to work safely in this repository. **Always follow the checked-out source tree.** The generated state block below reports the launcher release marker, not whether that code has shipped to `main`.
 
 <!-- BEGIN GENERATED LAUNCHER STATE -->
-- Launcher release: `2026.10.18.11`
+- Launcher release: `2026.10.18.12`
 - Generated from the unique `# CAFE_RELEASE` marker in `cafe.bat` by `tools/Update-Context.ps1`.
 <!-- END GENERATED LAUNCHER STATE -->
 
@@ -56,8 +56,8 @@ Typing a value or using **Capture CS2** stages a local pending CFG sensitivity. 
 - Digital Vibrance uses the extended interface when available. Its legacy fallback queries the supported range, maps the requested percentage to that range, applies it, and verifies read-back. The legacy Digital Vibrance and Hue interfaces are private/undocumented; success is reported only after verification.
 - DRS settings are handled individually: supported values are written and read back, while rejected or unavailable settings are reported. Display resolution uses advertised modes and verifies the selected mode. GPU scaling validates the topology, applies, and reads back.
 - PhysX processor selection, NVIDIA's scaling override checkbox, and the G-SYNC Control Panel checkbox remain manual because the launcher has no reliable supported setter. Profiles do not change brightness; NVIDIA Control Panel's default is 50%.
-- Closed dropdowns and numeric/text inputs in the Mouse, NVIDIA / Display, and CS2 / Apps tabs route the mouse wheel to the tab's scroll area, preventing accidental value or selection changes. An open dropdown retains its normal wheel selection behavior.
-- The editor shows a **Frame Pacing** section before **Presets**; captions use the corresponding CS2 menu names while internal setting properties remain stable. Each Frame Pacing and Presets setting occupies its own full-width row, with its caption on the left and one control on the right. Frame Pacing includes V-Sync and NVIDIA Reflex Low Latency; Presets includes MSAA, shadows, textures, shaders, particles, ambient occlusion, HDR, texture filtering, FSR, and CMAA.
+- While the profile editor is open, wheel messages over the active Mouse, NVIDIA / Display, or CS2 / Apps tab are intercepted and scroll that tab, including when the pointer is over an input or dropdown. The original message is consumed so the control cannot change its value or selection; the filter is removed when the editor closes.
+- The editor shows a **Frame Pacing** section before **Presets**; captions and dropdown options match the CS2 menu. Each setting occupies its own full-width row, with its caption on the left and one control on the right. Anti-aliasing is one dropdown combining the existing `MSAASamples` and `CMAA` profile fields, with no schema change. Older saved values that are no longer offered remain visible as a preserved value until the user chooses a current menu option.
 
 Each profile's canonical preset is stored independently in `graphics/<ProfileName>.json`: `FabMode`, `ArliMode`, `ArmlMode`, `OliMode`, and `BrileMode`. The editor validates and displays the selected profile's file; Apply Graphics validates that same profile name before using its settings.
 
