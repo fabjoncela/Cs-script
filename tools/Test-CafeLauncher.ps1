@@ -363,9 +363,11 @@ $dashboardSource=$psSource.Substring($psSource.IndexOf('# Modern CafeLauncher da
 if($dashboardSource -notmatch 'New-Object System.Windows.Forms.TabControl' -or
    $dashboardSource -notmatch 'Update-SelectedProfileCard' -or
    $dashboardSource -match 'Refresh-DashboardProfiles' -or
+   $dashboardSource -notmatch "Refresh-SelectedProfileCard -Name 'FabMode'" -or
+   $dashboardSource -notmatch 'Refresh-SelectedProfileCard -Name \$selectedProfile' -or
    $dashboardSource -notmatch 'Show Logs' -or
    $dashboardSource -notmatch 'Tools & Apps'){
-    throw 'Main dashboard, profile summary, tools, or collapsible logs are missing, or dashboard still refreshes every profile.'
+    throw 'Main dashboard, selected-profile GitHub refresh, profile summary, tools, or collapsible logs are missing, or dashboard still refreshes every profile.'
 }
 if($editorSource -notmatch 'Refresh-ProfileFromGitHub -ProfileName \$ProfileName' -or
    $editorSource -notmatch 'Get-ProfileGraphicsPreset -ProfileName \$ProfileName -RequireGitHub' -or
@@ -452,6 +454,16 @@ $script:GamingProfiles=[ordered]@{}
 foreach($name in @('FabMode','ArliMode','BrileMode','ArmlMode','OliMode')){
     $script:GamingProfiles[$name]=@{LogitechDPI=800;PointerSpeed=10;Width=1920;Height=1080;RefreshHz=360;ConfigFile=($name.ToLower()+'.cfg')}
 }
+$script:PendingSync=@{}
+$script:ProfileRefreshStatus=@{}
+$script:ProfileRefreshCalls=New-Object System.Collections.ArrayList
+foreach($name in @($script:GamingProfiles.Keys)){$script:PendingSync[$name]=$false}
+function Refresh-ProfileFromGitHub {
+    param([string]$ProfileName)
+    [void]$script:ProfileRefreshCalls.Add($ProfileName)
+    $script:ProfileRefreshStatus[$ProfileName]='GitHub'
+    return 'GitHub'
+}
 $script:LogPath=Join-Path $env:TEMP ('CafeLauncher-dashboard-CI-'+[Guid]::NewGuid().ToString('N')+'.log')
 $script:GitHubRateLimitSnapshot=$null
 $script:GitHubRateLimitLabel=$null
@@ -469,6 +481,21 @@ try {
        $script:ManualDpiInput.Text -ne '' -or
        $toolsFlow.Controls.Count -lt 9){
         throw 'Dashboard summary, manual DPI or utility buttons were not created correctly.'
+    }
+    if($script:ProfileRefreshCalls.Count -ne 1 -or $script:ProfileRefreshCalls[0] -cne 'FabMode' -or
+       $script:SelectedProfileHint.Text -ne 'Profile values verified from GitHub.'){
+        throw 'Dashboard startup must refresh and display only its initially selected profile.'
+    }
+    $script:PendingSync['FabMode']=$true
+    Update-SelectedProfileCard -Name 'FabMode'
+    if($script:SelectedProfileHint.Text -ne 'Showing local values; changes are pending sync.'){
+        throw 'Dashboard must identify selected-profile values with pending local changes.'
+    }
+    $script:PendingSync['FabMode']=$false
+    $script:ProfileRefreshStatus['FabMode']='LocalFallback'
+    Update-SelectedProfileCard -Name 'FabMode'
+    if($script:SelectedProfileHint.Text -ne 'GitHub refresh failed; showing local values.'){
+        throw 'Dashboard must identify local values shown after a failed GitHub refresh.'
     }
     if(-not $script:GitHubRateLimitLabel -or $script:GitHubRateLimitLabel.Text -ne 'GitHub API: waiting for request'){
         throw 'Dashboard must show the API allowance next to the launcher version.'
