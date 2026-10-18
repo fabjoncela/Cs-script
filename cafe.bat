@@ -5689,6 +5689,20 @@ function Add-EditorTabWide {
     $Grid.Controls.Add($Control,0,$Row)
     $Grid.SetColumnSpan($Control,2)
 }
+function Add-EditorTabSectionHeading {
+    param($Grid,[string]$Title,[int]$Row)
+    $Grid.RowStyles[$Row].Height=40
+    $heading=New-Object System.Windows.Forms.Label
+    $heading.Text=$Title
+    $heading.Dock='Fill'
+    $heading.Margin=New-Object System.Windows.Forms.Padding(13,6,13,0)
+    $heading.ForeColor=$WHITE
+    $heading.TextAlign=[System.Drawing.ContentAlignment]::MiddleLeft
+    $heading.Font=New-Object System.Drawing.Font('Segoe UI',10,[System.Drawing.FontStyle]::Bold)
+    $Grid.Controls.Add($heading,0,$Row)
+    $Grid.SetColumnSpan($heading,2)
+    return $heading
+}
 
 function Show-ProfileEditor {
     param([Parameter(Mandatory=$true)][string]$ProfileName,[switch]$CaptureOnOpen)
@@ -5856,7 +5870,7 @@ function Show-ProfileEditor {
     $nv.Checked=[bool]$p.ApplyNvidia
     Add-EditorTabWide -Grid $displayGrid -Control $nv -Row 4
 
-    $cs2Grid=New-EditorTabGrid -Page $cs2Page -Rows 20
+    $cs2Grid=New-EditorTabGrid -Page $cs2Page -Rows 23
     $cfgFile=New-Object System.Windows.Forms.TextBox
     $cfgFile.Text=[string]$p.ConfigFile
     $cfgFile.ReadOnly=$true
@@ -5941,61 +5955,63 @@ function Show-ProfileEditor {
     $copyFromChoice.Add_SelectedIndexChanged({
         $copyGraphics.Enabled=([string]$copyFromChoice.Tag[$copyFromChoice.SelectedIndex] -ne '')
     }.GetNewClosure())
-    $gameWidth=New-EditorTabNumber -Grid $cs2Grid -Title 'CS2 resolution width' -Column 0 -Row 7 -Min 640 -Max 7680 -Value ([int]$gs.Width)
-    $gameHeight=New-EditorTabNumber -Grid $cs2Grid -Title 'CS2 resolution height' -Column 1 -Row 7 -Min 480 -Max 4320 -Value ([int]$gs.Height)
-    $aspectChoice=New-EditorTabChoice -Grid $cs2Grid -Title 'CS2 aspect ratio' -Column 0 -Row 8 -Labels @('4:3','16:9','16:10') -Values @('0','1','2') -SelectedValue ([string]$gs.AspectRatioMode)
-    $fullscreenChoice=New-EditorTabChoice -Grid $cs2Grid -Title 'Display mode' -Column 1 -Row 8 -Labels @('Fullscreen','Windowed') -Values @('1','0') -SelectedValue ([string]$gs.Fullscreen)
-    $refreshPolicyChoice=New-EditorTabChoice -Grid $cs2Grid -Title 'CS2 refresh selection' -Column 0 -Row 9 -Labels @('Highest supported (recommended)','Use specific Hz') -Values @('Highest','Exact') -SelectedValue ([string]$graphicsPreset.RefreshPolicy)
-    $gameRefresh=New-EditorTabNumber -Grid $cs2Grid -Title 'Specific CS2 refresh (Hz)' -Column 1 -Row 9 -Min 24 -Max 600 -Value ([int]$(if($gs.RefreshHz){$gs.RefreshHz}else{360}))
+    [void](Add-EditorTabSectionHeading -Grid $cs2Grid -Title 'Frame Pacing' -Row 7)
+    $vsyncChoice=New-EditorTabChoice -Grid $cs2Grid -Title 'V-Sync' -Column 0 -Row 8 -Labels @('Off','On') -Values @('0','1') -SelectedValue ([string]$gs.VSync)
+    $reflexChoice=New-EditorTabChoice -Grid $cs2Grid -Title 'NVIDIA Reflex Low Latency' -Column 1 -Row 8 -Labels @('Off','On','On + Boost') -Values @('0','1','2') -SelectedValue ([string]$gs.NvidiaReflex)
+    [void](Add-EditorTabSectionHeading -Grid $cs2Grid -Title 'Presets' -Row 9)
+    $msaaChoice=New-EditorTabChoice -Grid $cs2Grid -Title 'Multisampling Anti-Aliasing Mode' -Column 0 -Row 10 -Labels @('Off','2×','4×','8×','16×') -Values @('0','2','4','8','16') -SelectedValue ([string]$gs.MSAASamples)
+    $shadowChoice=New-EditorTabChoice -Grid $cs2Grid -Title 'Global Shadow Quality' -Column 1 -Row 10 -Labels @('Low','Medium','High','Very high') -Values @('0','1','2','3') -SelectedValue ([string]$gs.ShadowQuality)
+    $dynamicShadowChoice=New-EditorTabChoice -Grid $cs2Grid -Title 'Dynamic Shadows' -Column 0 -Row 11 -Labels @('Off','On') -Values @('0','1') -SelectedValue ([string]$gs.DynamicShadows)
+    $textureChoice=New-EditorTabChoice -Grid $cs2Grid -Title 'Model / Texture Detail' -Column 1 -Row 11 -Labels @('Low','Medium','High','Very high') -Values @('0','1','2','3') -SelectedValue ([string]$gs.TextureDetail)
+    $filterChoice=New-EditorTabChoice -Grid $cs2Grid -Title 'Texture Filtering Mode' -Column 0 -Row 12 -Labels @('Level 0','Level 1','Level 2','Level 3','Level 4','Level 5') -Values @('0','1','2','3','4','5') -SelectedValue ([string]$gs.TextureFiltering)
+    $shaderChoice=New-EditorTabChoice -Grid $cs2Grid -Title 'Shader Detail' -Column 1 -Row 12 -Labels @('Low','Medium','High') -Values @('0','1','2') -SelectedValue ([string]$gs.ShaderQuality)
+    $particleChoice=New-EditorTabChoice -Grid $cs2Grid -Title 'Particle Detail' -Column 0 -Row 13 -Labels @('Low','Medium','High','Very high') -Values @('0','1','2','3') -SelectedValue ([string]$gs.ParticleDetail)
+    $aoChoice=New-EditorTabChoice -Grid $cs2Grid -Title 'Ambient Occlusion' -Column 1 -Row 13 -Labels @('Off','Low','Medium','High') -Values @('0','1','2','3') -SelectedValue ([string]$gs.AmbientOcclusion)
+    $hdrChoice=New-EditorTabChoice -Grid $cs2Grid -Title 'High Dynamic Range' -Column 0 -Row 14 -Labels @('Game default','Level 0','Level 1','Level 2','Level 3') -Values @('-1','0','1','2','3') -SelectedValue ([string]$gs.HDRDetail)
+    $fsrChoice=New-EditorTabChoice -Grid $cs2Grid -Title 'FidelityFX Super Resolution' -Column 1 -Row 14 -Labels @('Off','Level 1','Level 2','Level 3','Level 4') -Values @('0','1','2','3','4') -SelectedValue ([string]$gs.FSRDetail)
+    $cmaaChoice=New-EditorTabChoice -Grid $cs2Grid -Title 'CMAA' -Column 0 -Row 15 -Labels @('Off','On') -Values @('0','1') -SelectedValue ([string]$gs.CMAA)
+    $gameWidth=New-EditorTabNumber -Grid $cs2Grid -Title 'CS2 resolution width' -Column 0 -Row 16 -Min 640 -Max 7680 -Value ([int]$gs.Width)
+    $gameHeight=New-EditorTabNumber -Grid $cs2Grid -Title 'CS2 resolution height' -Column 1 -Row 16 -Min 480 -Max 4320 -Value ([int]$gs.Height)
+    $aspectChoice=New-EditorTabChoice -Grid $cs2Grid -Title 'CS2 aspect ratio' -Column 0 -Row 17 -Labels @('4:3','16:9','16:10') -Values @('0','1','2') -SelectedValue ([string]$gs.AspectRatioMode)
+    $fullscreenChoice=New-EditorTabChoice -Grid $cs2Grid -Title 'Display mode' -Column 1 -Row 17 -Labels @('Fullscreen','Windowed') -Values @('1','0') -SelectedValue ([string]$gs.Fullscreen)
+    $refreshPolicyChoice=New-EditorTabChoice -Grid $cs2Grid -Title 'CS2 refresh selection' -Column 0 -Row 18 -Labels @('Highest supported (recommended)','Use specific Hz') -Values @('Highest','Exact') -SelectedValue ([string]$graphicsPreset.RefreshPolicy)
+    $gameRefresh=New-EditorTabNumber -Grid $cs2Grid -Title 'Specific CS2 refresh (Hz)' -Column 1 -Row 18 -Min 24 -Max 600 -Value ([int]$(if($gs.RefreshHz){$gs.RefreshHz}else{360}))
     $gameRefresh.Enabled=([string]$graphicsPreset.RefreshPolicy -eq 'Exact')
     $refreshPolicyChoice.Add_SelectedIndexChanged({
         $gameRefresh.Enabled=([string]$refreshPolicyChoice.Tag[$refreshPolicyChoice.SelectedIndex] -eq 'Exact')
     }.GetNewClosure())
-    $scalingChoice=New-EditorTabChoice -Grid $cs2Grid -Title 'Stretch / scaling' -Column 0 -Row 10 -Labels @('Stretch to fill','Keep aspect ratio','Center without scaling') -Values @('2','5','3') -SelectedValue ([string]$graphicsPreset.ScalingMode)
-    $msaaChoice=New-EditorTabChoice -Grid $cs2Grid -Title 'Anti-aliasing (MSAA)' -Column 1 -Row 10 -Labels @('Off','2×','4×','8×','16×') -Values @('0','2','4','8','16') -SelectedValue ([string]$gs.MSAASamples)
-    $shadowChoice=New-EditorTabChoice -Grid $cs2Grid -Title 'Shadow quality' -Column 0 -Row 11 -Labels @('Low','Medium','High','Very high') -Values @('0','1','2','3') -SelectedValue ([string]$gs.ShadowQuality)
-    $dynamicShadowChoice=New-EditorTabChoice -Grid $cs2Grid -Title 'Dynamic shadows' -Column 1 -Row 11 -Labels @('Off','On') -Values @('0','1') -SelectedValue ([string]$gs.DynamicShadows)
-    $textureChoice=New-EditorTabChoice -Grid $cs2Grid -Title 'Texture detail' -Column 0 -Row 12 -Labels @('Low','Medium','High','Very high') -Values @('0','1','2','3') -SelectedValue ([string]$gs.TextureDetail)
-    $shaderChoice=New-EditorTabChoice -Grid $cs2Grid -Title 'Shader quality' -Column 1 -Row 12 -Labels @('Low','Medium','High') -Values @('0','1','2') -SelectedValue ([string]$gs.ShaderQuality)
-    $particleChoice=New-EditorTabChoice -Grid $cs2Grid -Title 'Particle detail' -Column 0 -Row 13 -Labels @('Low','Medium','High','Very high') -Values @('0','1','2','3') -SelectedValue ([string]$gs.ParticleDetail)
-    $aoChoice=New-EditorTabChoice -Grid $cs2Grid -Title 'Ambient occlusion' -Column 1 -Row 13 -Labels @('Off','Low','Medium','High') -Values @('0','1','2','3') -SelectedValue ([string]$gs.AmbientOcclusion)
-    $hdrChoice=New-EditorTabChoice -Grid $cs2Grid -Title 'HDR detail' -Column 0 -Row 14 -Labels @('Game default','Level 0','Level 1','Level 2','Level 3') -Values @('-1','0','1','2','3') -SelectedValue ([string]$gs.HDRDetail)
-    $reflexChoice=New-EditorTabChoice -Grid $cs2Grid -Title 'NVIDIA Reflex' -Column 1 -Row 14 -Labels @('Off','On','On + Boost') -Values @('0','1','2') -SelectedValue ([string]$gs.NvidiaReflex)
-    $filterChoice=New-EditorTabChoice -Grid $cs2Grid -Title 'Texture filtering level' -Column 0 -Row 15 -Labels @('Level 0','Level 1','Level 2','Level 3','Level 4','Level 5') -Values @('0','1','2','3','4','5') -SelectedValue ([string]$gs.TextureFiltering)
-    $fsrChoice=New-EditorTabChoice -Grid $cs2Grid -Title 'FSR level' -Column 1 -Row 15 -Labels @('Off','Level 1','Level 2','Level 3','Level 4') -Values @('0','1','2','3','4') -SelectedValue ([string]$gs.FSRDetail)
-    $vsyncChoice=New-EditorTabChoice -Grid $cs2Grid -Title 'Vertical sync' -Column 0 -Row 16 -Labels @('Off','On') -Values @('0','1') -SelectedValue ([string]$gs.VSync)
-    $cmaaChoice=New-EditorTabChoice -Grid $cs2Grid -Title 'CMAA' -Column 1 -Row 16 -Labels @('Off','On') -Values @('0','1') -SelectedValue ([string]$gs.CMAA)
+    $scalingChoice=New-EditorTabChoice -Grid $cs2Grid -Title 'Stretch / scaling' -Column 0 -Row 19 -Labels @('Stretch to fill','Keep aspect ratio','Center without scaling') -Values @('2','5','3') -SelectedValue ([string]$graphicsPreset.ScalingMode)
     $historyChoice=New-Object System.Windows.Forms.ComboBox
     $historyChoice.DropDownStyle='DropDownList'
     [void]$historyChoice.Items.Add('Load history first')
     $historyChoice.SelectedIndex=0
     $historyChoice.Enabled=$false
-    [void](Add-EditorTabField -Grid $cs2Grid -Title 'Earlier GitHub file revisions (commit ID shown)' -Control $historyChoice -Column 0 -Row 17)
+    [void](Add-EditorTabField -Grid $cs2Grid -Title 'Earlier GitHub file revisions (commit ID shown)' -Control $historyChoice -Column 0 -Row 20)
     $loadHistory=New-Object System.Windows.Forms.Button
     $loadHistory.Text='Load history'
     $loadHistory.BackColor=[System.Drawing.Color]::FromArgb(58,67,83)
     $loadHistory.ForeColor=$WHITE
     $loadHistory.FlatStyle='Flat'
-    [void](Add-EditorTabField -Grid $cs2Grid -Title 'Cached 24 hours; requires internet' -Control $loadHistory -Column 1 -Row 17)
+    [void](Add-EditorTabField -Grid $cs2Grid -Title 'Cached 24 hours; requires internet' -Control $loadHistory -Column 1 -Row 20)
     $resetGraphics=New-Object System.Windows.Forms.Button
     $resetGraphics.Text='Reset to defaults'
     $resetGraphics.BackColor=[System.Drawing.Color]::FromArgb(70,75,88)
     $resetGraphics.ForeColor=$WHITE
     $resetGraphics.FlatStyle='Flat'
-    [void](Add-EditorTabField -Grid $cs2Grid -Title 'Load canonical profile preset' -Control $resetGraphics -Column 0 -Row 18)
+    [void](Add-EditorTabField -Grid $cs2Grid -Title 'Load canonical profile preset' -Control $resetGraphics -Column 0 -Row 21)
     $restoreHistory=New-Object System.Windows.Forms.Button
     $restoreHistory.Text='Restore selected version'
     $restoreHistory.BackColor=[System.Drawing.Color]::FromArgb(58,67,83)
     $restoreHistory.ForeColor=$WHITE
     $restoreHistory.FlatStyle='Flat'
     $restoreHistory.Enabled=$false
-    [void](Add-EditorTabField -Grid $cs2Grid -Title 'Loads into editor; save to keep' -Control $restoreHistory -Column 1 -Row 18)
+    [void](Add-EditorTabField -Grid $cs2Grid -Title 'Loads into editor; save to keep' -Control $restoreHistory -Column 1 -Row 21)
     $captureGraphics=New-Object System.Windows.Forms.Button
     $captureGraphics.Text='Capture from CS2'
     $captureGraphics.BackColor=[System.Drawing.Color]::FromArgb(58,67,83)
     $captureGraphics.ForeColor=$WHITE
     $captureGraphics.FlatStyle='Flat'
-    [void](Add-EditorTabField -Grid $cs2Grid -Title 'Game must be closed; review, then Save & Sync' -Control $captureGraphics -Column 0 -Row 19)
+    [void](Add-EditorTabField -Grid $cs2Grid -Title 'Game must be closed; review, then Save & Sync' -Control $captureGraphics -Column 0 -Row 22)
 
     $editorFooter=New-Object System.Windows.Forms.TableLayoutPanel
     $editorFooter.Dock='Fill'
