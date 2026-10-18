@@ -4,7 +4,7 @@ start "" powershell.exe -NoProfile -ExecutionPolicy Bypass -STA -WindowStyle Hid
 exit /b
 
 # POWERSHELL_GUI
-# CAFE_RELEASE=2026.10.18.7
+# CAFE_RELEASE=2026.10.18.8
 
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
@@ -5063,8 +5063,38 @@ function Set-CS2CfgSensitivityText {
     return $Content+$separator+'sensitivity "'+$Sensitivity+'"'+$newline
 }
 
+function Get-CafeCfgChangePreview {
+    param([Parameter(Mandatory=$true)][string]$CfgName,[Parameter(Mandatory=$true)][string]$Before,[Parameter(Mandatory=$true)][string]$After)
+    $beforeLines=@($Before -split '\r?\n'|Where-Object {-not [string]::IsNullOrWhiteSpace($_)})
+    $afterLines=@($After -split '\r?\n'|Where-Object {-not [string]::IsNullOrWhiteSpace($_)})
+    $differences=@(Compare-Object -ReferenceObject $beforeLines -DifferenceObject $afterLines)
+    $changes=New-Object 'System.Collections.Generic.List[string]'
+    foreach($item in @($differences|Where-Object {$_.SideIndicator -eq '<='})){$changes.Add('- '+[string]$item.InputObject)}
+    foreach($item in @($differences|Where-Object {$_.SideIndicator -eq '=>'})){$changes.Add('+ '+[string]$item.InputObject)}
+    $lines=New-Object 'System.Collections.Generic.List[string]'
+    $lines.Add('CFG preview: '+$CfgName)
+    if($changes.Count -eq 0){$lines.Add('No CFG lines will change.')}
+    else{
+        $lines.Add('Changes:')
+        $shown=[Math]::Min($changes.Count,24)
+        for($i=0;$i -lt $shown;$i++){$lines.Add($changes[$i])}
+        if($changes.Count -gt $shown){$lines.Add(('... and '+($changes.Count-$shown)+' more line changes.'))}
+    }
+    $oldWeaponGap=$Before -match '(?im)^[ \t]*cl_crosshairgap_useweaponvalue[ \t]+' -and $After -notmatch '(?im)^[ \t]*cl_crosshairgap_useweaponvalue[ \t]+'
+    if($oldWeaponGap){
+        $lines.Add('')
+        $lines.Add('Warning: CS2 removed weapon-based gap and has no replacement. Only the captured cl_crosshair_gap value will remain.')
+    }
+    $oldOutlineThickness=$Before -match '(?im)^[ \t]*cl_crosshair_outlinethickness[ \t]+' -and $After -notmatch '(?im)^[ \t]*cl_crosshair_outlinethickness[ \t]+'
+    if($oldOutlineThickness){
+        $lines.Add('')
+        $lines.Add('Warning: The old outline-thickness value has no direct replacement. The captured cl_crosshair_drawoutline setting will remain.')
+    }
+    return [pscustomobject]@{Text=[string]::Join([Environment]::NewLine,$lines.ToArray());ChangeCount=$changes.Count;HasWarnings=($oldWeaponGap -or $oldOutlineThickness)}
+}
+
 function Sync-ProfileToGitHub {
-    param([Parameter(Mandatory=$true)][string]$ProfileName, [Parameter(Mandatory=$true)][string]$Token)
+    param([Parameter(Mandatory=$true)][string]$ProfileName, [Parameter(Mandatory=$true)][string]$Token,[scriptblock]$ConfirmCfgChanges)
     if (-not $script:GamingProfiles.Contains($ProfileName)) { throw "Unknown profile: $ProfileName" }
     $cfgName=[string]$script:GamingProfiles[$ProfileName].ConfigFile
     $expectedCfg=(($ProfileName -replace 'Mode$','').ToLowerInvariant()+'.cfg')
@@ -5191,6 +5221,12 @@ function Sync-ProfileToGitHub {
         }else{$cfgStatus='already has the requested sensitivity'}
     }
     try {
+        if($cfgBody -and $ConfirmCfgChanges){
+            $cfgPreview=Get-CafeCfgChangePreview -CfgName $cfgName -Before $cfgText -After $newCfgText
+            if(-not (& $ConfirmCfgChanges $cfgPreview)){
+                return [pscustomobject]@{Canceled=$true;Preview=$cfgPreview}
+            }
+        }
         if($cfgBody){
             $cfgResponse=Invoke-CafeGitHubRestMethod -Uri $cfgUri -Method Put -Headers $headers -ContentType 'application/json' -Body ($cfgBody | ConvertTo-Json -Depth 5 -Compress) -TimeoutSec 25 -MaximumRedirection 0
             if(-not $cfgResponse.commit.sha){throw ('CFG write was not confirmed for '+$cfgName)}
@@ -6127,7 +6163,20 @@ function Show-ProfileEditor {
             try {
                 $saveSync.Enabled=$false
                 $dialog.Cursor=[System.Windows.Forms.Cursors]::WaitCursor
-                Sync-ProfileToGitHub -ProfileName $ProfileName -Token $token
+                $confirmCfgChanges={
+                    param($cfgPreview)
+                    $icon=if($cfgPreview.HasWarnings){'Warning'}else{'Question'}
+                    $reviewText=[string]$cfgPreview.Text+[Environment]::NewLine+[Environment]::NewLine+'Sync this CFG together with the profile and graphics settings?'
+                    $review=[System.Windows.Forms.MessageBox]::Show($reviewText,'Review CFG changes','YesNo',$icon)
+                    return ($review -eq [System.Windows.Forms.DialogResult]::Yes)
+                }.GetNewClosure()
+                $syncResult=Sync-ProfileToGitHub -ProfileName $ProfileName -Token $token -ConfirmCfgChanges $confirmCfgChanges
+                if($syncResult -and $syncResult.Canceled){
+                    $status.Text='GitHub sync canceled after CFG review; local edits remain saved.'
+                    $status.ForeColor=[System.Drawing.Color]::FromArgb(255,190,105)
+                    Write-Log "$ProfileName GitHub sync canceled after CFG review; local edits preserved."
+                    return
+                }
                 $pendingSyncState[$ProfileName] = $false
                 Save-ProfileSettings
                 [System.Windows.Forms.MessageBox]::Show("$ProfileName settings saved locally and synced to GitHub. The CS2 graphics preset was updated or already matched GitHub.`nOther PCs can now download the settings without signing in.`nSelected sensitivity and push-to-talk changes and captured crosshair values are saved in the matching .cfg when present; unrelated binds remain unchanged.", 'GitHub sync complete', 'OK', 'Information') | Out-Null
