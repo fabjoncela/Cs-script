@@ -86,7 +86,7 @@ foreach($requiredEditorFeature in @(
     '$pointerSpeedSelectionState.UserChanged',
     '$p.PointerSpeed=$pointerSpeedOriginalValue',
     '$cs2Page.Text=''CS2 / Apps''',
-    '$cs2Grid=New-EditorTabGrid -Page $cs2Page -Rows 20',
+    '$cs2Grid=New-EditorTabGrid -Page $cs2Page -Rows 23',
     '$captureGraphics.Text=''Capture from CS2''',
     'Get-CafeCS2GraphicsCapture -ProfileName $ProfileName -BasePreset $graphicsPreset',
     'New-EditorTabNumber -Grid $cs2Grid -Title ''CS2 resolution width''',
@@ -102,6 +102,41 @@ foreach($requiredEditorFeature in @(
 )){
     if($psSource -notmatch [regex]::Escape($requiredEditorFeature)){
         throw ('CS2 Graphics editor/local/cloud persistence feature missing: '+$requiredEditorFeature)
+    }
+}
+$framePacingIndex=$psSource.IndexOf("-Title 'Frame Pacing'",[StringComparison]::Ordinal)
+$presetsIndex=$psSource.IndexOf("-Title 'Presets'",[StringComparison]::Ordinal)
+if($framePacingIndex -lt 0 -or $presetsIndex -le $framePacingIndex){
+    throw 'CS2 Frame Pacing section must appear before Presets.'
+}
+foreach($requiredGraphicsCaption in @(
+    "-Title 'V-Sync'",
+    "-Title 'NVIDIA Reflex Low Latency'",
+    "-Title 'Multisampling Anti-Aliasing Mode'",
+    "-Title 'Global Shadow Quality'",
+    "-Title 'Dynamic Shadows'",
+    "-Title 'Model / Texture Detail'",
+    "-Title 'Texture Filtering Mode'",
+    "-Title 'Shader Detail'",
+    "-Title 'Particle Detail'",
+    "-Title 'Ambient Occlusion'",
+    "-Title 'High Dynamic Range'",
+    "-Title 'FidelityFX Super Resolution'",
+    '$vsyncChoice=',
+    '$reflexChoice=',
+    '$msaaChoice=',
+    '$shadowChoice=',
+    '$dynamicShadowChoice=',
+    '$textureChoice=',
+    '$filterChoice=',
+    '$shaderChoice=',
+    '$particleChoice=',
+    '$aoChoice=',
+    '$hdrChoice=',
+    '$fsrChoice='
+)){
+    if(-not $psSource.Contains($requiredGraphicsCaption)){
+        throw ('CS2 graphics UI caption or setting variable missing: '+$requiredGraphicsCaption)
     }
 }
 $pointerValuesAst=@($psAst.FindAll({
