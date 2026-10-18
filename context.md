@@ -3,7 +3,7 @@
 This file gives Codex and maintainers the operational context needed to work safely in this repository. **Always follow the checked-out source tree.** The generated state block below reports the launcher release marker, not whether that code has shipped to `main`.
 
 <!-- BEGIN GENERATED LAUNCHER STATE -->
-- Launcher release: `2026.10.18.10`
+- Launcher release: `2026.10.18.11`
 - Generated from the unique `# CAFE_RELEASE` marker in `cafe.bat` by `tools/Update-Context.ps1`.
 <!-- END GENERATED LAUNCHER STATE -->
 
@@ -132,8 +132,8 @@ Dashboard **Apply Graphics** is a separate action from the normal profile Apply 
 - GitHub profile reads and the sync target are configured in `cafe.bat` (`$script:GithubBranch`). Check this before any claim about which remote branch receives profile data.
 - The launcher captures its running `CAFE_RELEASE` at startup. **Check for Updates** compares that version with GitHub `main`, even if a newer BAT has replaced the file on disk while the current PowerShell UI is running.
 - If the newer BAT is already installed, the updater says to close and reopen it; otherwise it offers the verified download.
-- Update checks run only when the user presses **Check for Updates**. Startup does not contact GitHub for updates. Manual checks also report current or failed checks; failures are written to LIVE LOGS.
-- After the dashboard first renders, its read-only PC inventory runs locally. A small centered overlay card shows a rotating GDI+ arc and the current scan phase; the UI processes timer updates between scan steps. This inventory does not refresh GitHub profiles or check for launcher updates.
+- After the dashboard first renders and the local PC inventory completes, startup checks GitHub `main` for launcher updates. A different verified BAT prompts before download; the updater checks GitHub blob SHA, size, and PowerShell syntax before installing it. Manual **Check for Updates** also reports current or failed checks; failures are written to LIVE LOGS.
+- After the dashboard first renders, its read-only PC inventory runs locally. A small centered overlay card shows a rotating GDI+ arc and the current scan phase; the UI processes timer updates between scan steps. This inventory does not refresh GitHub profiles. The automatic launcher update check runs after the inventory completes.
 - The updater classifies HTTP 403/429 as quota exhaustion only when the response body identifies rate limiting or `X-RateLimit-Remaining` is zero. Confirmed quota exhaustion tells the user to wait and retry; other 403 errors remain generic access failures.
 - Quota status affects presentation/logging only. It never bypasses the updater's GitHub SHA, size, and syntax verification.
 - The dashboard's top-right GitHub API allowance indicator reads the remaining/limit headers from requests the launcher already makes; it must not make a separate polling request. It shows the count and when that response was received. This is a display only and does not affect profile selection or settings.
