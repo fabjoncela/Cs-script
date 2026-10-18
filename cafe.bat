@@ -7663,6 +7663,18 @@ $script:LogBox.Font=New-Object System.Drawing.Font('Consolas',9)
 $script:LogBaseColor=$script:LogBox.ForeColor
 $script:LogBaseFont=$script:LogBox.Font
 $script:LogBoldFont=New-Object System.Drawing.Font($script:LogBox.Font,[System.Drawing.FontStyle]::Bold)
+$logContextMenu=New-Object System.Windows.Forms.ContextMenuStrip
+$copyLogSelection=New-Object System.Windows.Forms.ToolStripMenuItem('Copy')
+$copyLogSelection.Add_Click({
+    if($script:LogBox -and -not $script:LogBox.IsDisposed -and $script:LogBox.SelectionLength -gt 0){
+        $script:LogBox.Copy()
+    }
+})
+$logContextMenu.Items.Add($copyLogSelection) | Out-Null
+$logContextMenu.Add_Opening({
+    $copyLogSelection.Enabled=($script:LogBox -and -not $script:LogBox.IsDisposed -and $script:LogBox.SelectionLength -gt 0)
+})
+$script:LogBox.ContextMenuStrip=$logContextMenu
 $logPane.Controls.Add($script:LogBox,0,1)
 $logPane.SetColumnSpan($script:LogBox,4)
 $script:LogBox.Visible=$false
