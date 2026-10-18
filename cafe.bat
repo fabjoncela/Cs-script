@@ -7400,7 +7400,6 @@ New-Tile "OliMode" 10 { Invoke-GamingProfile -ProfileName 'OliMode' } -Primary -
 New-Tile "Mouse Pointer Options" 11 { Open-MousePointerOptions }
 New-Tile "NVIDIA Control Panel" 12 { Open-NvidiaControlPanel }
 # Legacy standalone shortcuts are disabled; profile actions handle NVIDIA and CFG setup.
-# New-Tile "Apply NVIDIA Settings" 13 { Apply-NvidiaGamingSettings } -Primary
 New-Tile "Detect PC" 15 { Show-PCDiagnostics }
 New-Tile "Check for Updates" 16 { Check-CafeLauncherUpdates -Manual }
 New-Tile "Exit" 17 { $form.Close() }
