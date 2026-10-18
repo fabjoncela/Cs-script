@@ -64,7 +64,7 @@ Each profile's canonical preset is stored independently in `graphics/<ProfileNam
 - BrileMode defaults to 1920×1080 16:9 fullscreen.
 - Presets request the highest advertised refresh for the selected CS2 resolution. A saved 360 Hz value does not prove the monitor supports 360 Hz.
 
-The editor can copy only CS2 graphics fields from another profile or reset current editor values from that profile's canonical preset. Neither action saves automatically. Apply Graphics reports confirmed/applied and changed fields, skipped fields, display-mode fallback details, NVIDIA scaling verification, and the backup path. Partial results are shown as warnings.
+The editor can copy only CS2 graphics fields from another profile or reset current editor values from that profile's canonical preset. Copying starts with a **Choose a profile to copy from...** placeholder; **Copy graphics** stays disabled until another profile is selected. Neither action saves automatically. Apply Graphics reports confirmed/applied and changed fields, skipped fields, display-mode fallback details, NVIDIA scaling verification, and the backup path. Partial results are shown as warnings.
 
 The **CS2 / Apps** editor can capture saved settings from the running Steam client's active account after CS2 is closed.
 
