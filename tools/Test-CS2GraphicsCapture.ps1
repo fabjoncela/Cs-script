@@ -116,7 +116,7 @@ $editor=$editorAst.Extent.Text
 foreach($required in @('$cs2Grid=New-EditorTabGrid -Page $cs2Page -Rows 20','$captureGraphics.Text=''Capture from CS2''','Get-CafeCS2GraphicsCapture -ProfileName $ProfileName -BasePreset $graphicsPreset','Save & Sync to publish')){
     if($editor -notmatch [regex]::Escape($required)){throw ('Profile editor capture workflow is missing: '+$required)}
 }
-foreach($required in @('$invokeCS2Capture={','$captureGraphics.Add_Click($invokeCS2Capture)','if($CaptureOnOpen)','$dialog.Add_Shown({ & $invokeCS2Capture }','$capturedCS2ConvarsState = $script:CapturedCS2Convars','$capturedCS2ConvarsState[$ProfileName]=$convars.Values','[void]$capturedCS2ConvarsState.Remove($ProfileName)','$capturedCS2ConvarsState.ContainsKey($ProfileName)')){
+foreach($required in @('$invokeCS2Capture={','$captureGraphics.Add_Click($invokeCS2Capture)','if($CaptureOnOpen)','$dialog.Add_Shown({ & $invokeCS2Capture }','$capturedCS2ConvarsState = $script:CapturedCS2Convars','$capturedCS2ConvarsState[$ProfileName]=$convars.Values','[void]$capturedCS2ConvarsState.Remove($ProfileName)','$capturedCS2ConvarsState.ContainsKey($ProfileName)','-ConfirmCfgChanges $confirmCfgChanges','Review CFG changes','GitHub sync canceled after CFG review')){
     if($editor -notmatch [regex]::Escape($required)){throw ('Shared CS2 capture action is missing: '+$required)}
 }
 

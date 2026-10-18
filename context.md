@@ -3,7 +3,7 @@
 This file gives Codex and maintainers the operational context needed to work safely in this repository. **Always follow the checked-out source tree.** The generated state block below reports the launcher release marker, not whether that code has shipped to `main`.
 
 <!-- BEGIN GENERATED LAUNCHER STATE -->
-- Launcher release: `2026.10.18.7`
+- Launcher release: `2026.10.18.8`
 - Generated from the unique `# CAFE_RELEASE` marker in `cafe.bat` by `tools/Update-Context.ps1`.
 <!-- END GENERATED LAUNCHER STATE -->
 
@@ -94,6 +94,7 @@ Dashboard **Apply Graphics** is a separate action from the normal profile Apply 
 - It may also update the selected profile's CFG with captured sensitivity, crosshair convars, and push-to-talk changes. Unrelated binds and commands are preserved; captured crosshair values are never copied to another profile.
 - Modern CS2 crosshair aliases are migrated: `cl_crosshairgap` → `cl_crosshair_gap`, `cl_crosshairsize` → `cl_crosshair_length`, and `cl_crosshairthickness` → `cl_crosshair_thickness`. If both old and modern names were captured, the modern value wins and the old command is removed. Legacy-only capture remains supported.
 - During Save & Sync, obsolete crosshair commands are removed only from the selected profile CFG and only when Capture CS2 includes the current corresponding control: old `cl_crosshaircolor` requires all captured RGB channels; old alpha/use-alpha requires `cl_crosshaircolor_a`; weapon-value gap requires `cl_crosshair_gap`; outline thickness requires `cl_crosshair_drawoutline`. Partial captures leave those old lines intact. No guessed conversion is made for removed behaviors.
+- Before a selected CFG write, the editor previews exact line changes and asks for confirmation. Removing weapon-based gap or old outline thickness shows a warning that the old behavior/value has no direct replacement; canceling the preview leaves GitHub unchanged and keeps local edits pending.
 - **Refresh safeguard:** a previous stale-read regression showed that a unique query to `raw.githubusercontent.com` did not guarantee the latest profile. Always refresh profile and graphics JSON through the GitHub Contents API with no-cache headers.
 - Validate the returned path, type, blob SHA, base64 encoding, and size; decode only the validated response. Never fall back to mutable raw-CDN profile or graphics JSON.
 - If a Contents API read fails, retain local cache for recovery but do not silently use it for normal Apply. Normal Apply must verify the selected profile's latest graphics file or cancel. Apply Graphics uses its explicit local-fallback confirmation path.

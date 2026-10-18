@@ -10,7 +10,7 @@ $code=[string]::Join([Environment]::NewLine,[string[]]$lines[($marker+1)..($line
 $tokens=$null;$errors=$null
 $ast=[Management.Automation.Language.Parser]::ParseInput($code,[ref]$tokens,[ref]$errors)
 if(@($errors).Count){throw ('Launcher syntax failed: '+$errors[0].Message)}
-foreach($name in @('Get-CafeVoiceBindingFromCfg','Set-CafeVoiceBindingInCfg','Set-CS2CfgSensitivityText','Get-CafeCS2UserConvarsCapture','Set-CafeCapturedConvarsInCfg','Sync-ProfileToGitHub','Export-ProfileValues','Get-ProfileGraphicsPreset','Get-GitHubJsonFromContentsApi','ConvertTo-CafeGraphicsPreset','Refresh-ProfileFromGitHub','Get-LatestGitHubFileCommit','Compare-GitHubCommitOrder','Import-ProfileValues')){
+foreach($name in @('Get-CafeVoiceBindingFromCfg','Set-CafeVoiceBindingInCfg','Set-CS2CfgSensitivityText','Get-CafeCS2UserConvarsCapture','Set-CafeCapturedConvarsInCfg','Get-CafeCfgChangePreview','Sync-ProfileToGitHub','Export-ProfileValues','Get-ProfileGraphicsPreset','Get-GitHubJsonFromContentsApi','ConvertTo-CafeGraphicsPreset','Refresh-ProfileFromGitHub','Get-LatestGitHubFileCommit','Compare-GitHubCommitOrder','Import-ProfileValues')){
     $funcs=@($ast.FindAll({param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst]},$true) |
         Where-Object {$_.Name -eq $name})
     if($funcs.Count -ne 1){throw ('Missing or duplicate sync function: '+$name)}
@@ -52,6 +52,12 @@ Assert-True ($newVoice -notmatch '(?m)^bind "V" "\+voicerecord"') 'Old voice bin
 Assert-True ($newVoice.Contains('bind "r" "+reload"')) 'Voice update modified an unrelated bind.'
 Assert-True ($newVoice -notmatch '(?<!\r)\n') 'Voice update lost CRLF line endings.'
 Assert-True ((Set-CafeVoiceBindingInCfg -Content $newVoice -Key 'MOUSE4') -ceq $newVoice) 'Unchanged voice key should not rewrite CFG.'
+$previewBefore='cl_crosshairgap_useweaponvalue true'+$crlf+'  cl_crosshairgap "-2"'+$crlf+'cl_crosshair_outlinethickness "1"'+$crlf+'bind "r" "+reload"'+$crlf
+$previewAfter='cl_crosshair_gap "-2"'+$crlf+'cl_crosshair_drawoutline "2"'+$crlf+'bind "r" "+reload"'+$crlf
+$cfgPreview=Get-CafeCfgChangePreview -CfgName 'fab.cfg' -Before $previewBefore -After $previewAfter
+Assert-True ($cfgPreview.Text.Contains('- cl_crosshairgap_useweaponvalue true') -and $cfgPreview.Text.Contains('+ cl_crosshair_gap "-2"')) 'CFG preview did not show exact retired and replacement lines.'
+Assert-True ($cfgPreview.HasWarnings -and $cfgPreview.Text.Contains('no replacement') -and $cfgPreview.Text.Contains('cl_crosshair_gap')) 'CFG preview did not warn that weapon-based gap behavior is lost.'
+Assert-True ($cfgPreview.Text.Contains('- cl_crosshair_outlinethickness "1"') -and $cfgPreview.Text.Contains('no direct replacement') -and $cfgPreview.Text.Contains('cl_crosshair_drawoutline')) 'CFG preview did not warn that outline thickness has no direct replacement.'
 $collisionCfg='bind "V" "+voicerecord"'+$lf+'bind "MOUSE4" "+jump"'+$lf
 $voiceConflict=$false
 try{[void](Set-CafeVoiceBindingInCfg -Content $collisionCfg -Key 'MOUSE4')}catch{$voiceConflict=$true}
@@ -252,6 +258,13 @@ Assert-True ($syncedFabCfg -notmatch '(?m)^\s*cl_crosshairgap\s' -and $syncedFab
 Assert-True ($syncedFabCfg -notmatch '(?im)^\s*cl_crosshaircolor\s' -and $syncedFabCfg -notmatch '(?im)^\s*cl_crosshairalpha\s' -and $syncedFabCfg -notmatch '(?im)^\s*cl_crosshairusealpha\s' -and $syncedFabCfg -notmatch '(?im)^\s*cl_crosshairgap_useweaponvalue\s' -and $syncedFabCfg -notmatch '(?im)^\s*cl_crosshair_outlinethickness\s') 'Captured modern crosshair controls left retired commands in fab.cfg.'
 $incompleteRetiredCleanup=Set-CafeCapturedConvarsInCfg -Content ('cl_crosshairalpha "200"'+$lf+'cl_crosshair_outlinethickness "1"'+$lf) -Values @{cl_crosshaircolor_r='0'}
 Assert-True ($incompleteRetiredCleanup.Contains('cl_crosshairalpha "200"') -and $incompleteRetiredCleanup.Contains('cl_crosshair_outlinethickness "1"')) 'A partial capture removed retired settings without their modern control.'
+$script:FakeFiles['fab.cfg']+='cl_crosshairgap_useweaponvalue true'+$lf
+$script:CapturedCS2Convars['FabMode']=@{cl_crosshair_gap='0'}
+$script:FakeWrites.Clear()
+$script:ReceivedCfgPreview=$null
+$canceledSync=Sync-ProfileToGitHub -ProfileName 'FabMode' -Token ('testtoken-'+'x'*22) -ConfirmCfgChanges {param($preview);$script:ReceivedCfgPreview=$preview;return $false}
+Assert-True ($canceledSync.Canceled -and $script:ReceivedCfgPreview.HasWarnings) 'Rejecting the CFG preview did not cancel the sync.'
+Assert-True ($script:FakeWrites.Count -eq 0) 'Canceling the CFG preview still wrote files to GitHub.'
 $legacyOnly=Set-CafeCapturedConvarsInCfg -Content ('cl_crosshairgap "-3.7"'+$lf) -Values @{cl_crosshairgap='-2'}
 Assert-True ($legacyOnly.Contains('cl_crosshairgap "-2"') -and -not $legacyOnly.Contains('cl_crosshair_gap')) 'A legacy-only capture should remain supported without inventing a modern setting.'
 
