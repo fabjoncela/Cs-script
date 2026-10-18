@@ -11,6 +11,7 @@ on:
       - 'tools/Test-GitHubSyncAuth.ps1'
       - 'tools/Test-SteamLaunchOptions.ps1'
       - 'tools/Test-CS2GraphicsCapture.ps1'
+      - 'tools/Test-CrosshairShareCode.ps1'
       - 'tools/Test-Graphics.ps1'
       - 'tools/Test-GraphicsHistory.ps1'
       - 'tools/Test-GraphicsHistoryAsync.ps1'
@@ -45,6 +46,7 @@ on:
       - 'tools/Test-GitHubSyncAuth.ps1'
       - 'tools/Test-SteamLaunchOptions.ps1'
       - 'tools/Test-CS2GraphicsCapture.ps1'
+      - 'tools/Test-CrosshairShareCode.ps1'
       - 'tools/Test-Graphics.ps1'
       - 'tools/Test-GraphicsHistory.ps1'
       - 'tools/Test-GraphicsHistoryAsync.ps1'
@@ -131,6 +133,10 @@ jobs:
         shell: powershell
         run: |
           & "$env:GITHUB_WORKSPACE\tools\Test-CS2GraphicsCapture.ps1"
+      - name: Test CS2 crosshair share-code import
+        shell: powershell
+        run: |
+          & "$env:GITHUB_WORKSPACE\tools\Test-CrosshairShareCode.ps1"
       - name: Test graphics history
         shell: powershell
         run: |

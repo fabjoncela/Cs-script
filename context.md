@@ -3,7 +3,7 @@
 This file gives Codex and maintainers the operational context needed to work safely in this repository. **Always follow the checked-out source tree.** The generated state block below reports the launcher release marker, not whether that code has shipped to `main`.
 
 <!-- BEGIN GENERATED LAUNCHER STATE -->
-- Launcher release: `2026.10.18.9`
+- Launcher release: `2026.10.18.10`
 - Generated from the unique `# CAFE_RELEASE` marker in `cafe.bat` by `tools/Update-Context.ps1`.
 <!-- END GENERATED LAUNCHER STATE -->
 
@@ -33,7 +33,7 @@ Main project files:
 | --- | --- | --- |
 | Profile editor, persistence, and GitHub sync | `cafe.bat`: `Show-ProfileEditor`, `Refresh-ProfileFromGitHub`, `Sync-ProfileToGitHub` | `Test-ProfileSave.ps1`, `Test-GitHubSyncAuth.ps1`, `Test-CfgSensitivitySync.ps1` |
 | CS2 graphics apply and history | `graphics/ApplyGraphics.ps1`; `cafe.bat`: `Invoke-GraphicsOnly`, `Get-ProfileGraphicsHistory` | `Test-Graphics.ps1`, `Test-GraphicsHistory.ps1`, `Test-NvidiaCompatibility.ps1`, `Test-NvidiaDvcFallback.ps1` |
-| CS2 settings capture | `cafe.bat`: `Get-CafeCS2GraphicsCapture`, `Get-CafeCS2UserConvarsCapture` | `Test-CS2GraphicsCapture.ps1` |
+| CS2 settings capture and crosshair share-code import | `cafe.bat`: `Get-CafeCS2GraphicsCapture`, `Get-CafeCS2UserConvarsCapture`, `ConvertFrom-CafeCS2CrosshairShareCode` | `Test-CS2GraphicsCapture.ps1`, `Test-CrosshairShareCode.ps1` |
 | Steam/CS2 discovery and Play + Exec | `cafe.bat`: `Get-SteamLibraryRoots`, `Get-CS2SteamLaunchArguments`, `Start-CS2WithProfileCfg` | `Test-SteamPathDiscovery.ps1`, `Test-SteamLaunchOptions.ps1` |
 | Workshop cleanup | `cafe.bat`: `Get-CafeWorkshopCleanupSnapshot`, `Remove-CafeWorkshopItems`, `Show-CafeWorkshopCleanupDialog` | `Test-WorkshopCleanup.ps1` |
 | Logitech live DPI | `cafe.bat`: `Set-LogitechLiveDPI`, `Invoke-LogitechDPISetAndReadback` | `Test-LogitechDPI.ps1`, `Test-SuperlightDevice.ps1` |
@@ -69,6 +69,9 @@ The **CS2 / Apps** editor can capture saved settings from the running Steam clie
 - It also captures sensitivity and every saved `cl_crosshair*` user-convar with a numeric or boolean value; new crosshair convars do not need an allowlist update. In-game CFG binds are not captured.
 - When saved `sensitivity` is captured, the value is staged in the CS2 sensitivity field on the **Mouse** tab. Capture alone does not save or sync it; the user reviews the values and chooses Save & Sync.
 - Capture does not edit game files or sync immediately. The user reviews the imported values, then chooses Save Locally or Save & Sync. Captured convars stay staged under the selected profile until sync.
+- The Mouse tab can import a pasted crosshair share code offline. It supports legacy `CSGO-...` versions 1, 3, and 4 plus current `CS...` version 1, validates the base-57 code and checksum, and previews the decoded convars and any conversion notes before staging.
+- Share-code import stages crosshair and scope-dot convars for only the selected profile. It preserves an already staged sensitivity value, changes no game files, and waits for Save & Sync and the existing CFG diff confirmation before publishing. Legacy-v1 codes lack a source-resolution field and can only be approximated; weapon-dependent gap and retired outline thickness are called out when present.
+- The decoder is a local PowerShell implementation based on the documented layouts in `akiver/csgo-sharecode` (MIT); CafeLauncher does not require Node.js or network access to decode. Attribution and license text are in `THIRD_PARTY_NOTICES.md`. Current scope-dot convars are allowed through the selected profile CFG writer.
 
 The **CS2 / Apps** editor can load the three previous versions of `graphics/<ProfileName>.json` from GitHub commit history.
 
