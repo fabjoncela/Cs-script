@@ -58,6 +58,7 @@ $fixture=@'
     "setting.videocfg_texture_detail" "2"
     "setting.shaderquality" "1"
     "setting.videocfg_hdr_detail" "-1"
+    "setting.videocfg_fsr_detail" "0"
     "setting.r_low_latency" "0"
     "setting.custom_unknown" "keep me"
 }
@@ -71,6 +72,14 @@ $cmaaResult=Update-CS2VideoGraphicsText -Text $fixture -Settings ([ordered]@{MSA
 if($cmaaResult.Text -notmatch '"setting\.msaa_samples"\s+"0"' -or
    $cmaaResult.Text -notmatch '"setting\.r_csgo_cmaa_enable"\s+"1"'){
     throw 'The combined CMAA2 menu option did not update both established video settings.'
+}
+$fsrExpected=@{0='0';1='4';2='3';3='2';4='1'}
+foreach($profileFsrValue in 0..4){
+    $fsrResult=Update-CS2VideoGraphicsText -Text $fixture -Settings ([ordered]@{FSRDetail=$profileFsrValue})
+    $expectedGameValue=$fsrExpected[$profileFsrValue]
+    if($fsrResult.Text -notmatch ('"setting\.videocfg_fsr_detail"\s+"'+$expectedGameValue+'"')){
+        throw ('FSR profile value '+$profileFsrValue+' did not map to CS2 value '+$expectedGameValue+'.')
+    }
 }
 foreach($unchanged in @('"VendorID" "4318"','"DeviceID" "12345"','"setting.monitor_index" "2"','"setting.custom_unknown" "keep me"')){
     if(-not $result.Text.Contains($unchanged)){throw ('Unrelated device/video setting changed: '+$unchanged)}

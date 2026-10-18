@@ -200,6 +200,11 @@ function Update-CS2VideoGraphicsText {
         if($null -eq $match){$skipped.Add($field+' (not present in this CS2 version)');continue}
         $v=$match.Groups['value']
         $newValue=[string]$Settings[$field]
+        if($field -eq 'FSRDetail'){
+            # Profile values follow the editor's logical order; CS2 stores the
+            # enabled quality modes in reverse order (verified in-game).
+            $newValue=switch([int]$Settings[$field]){0{'0'}1{'4'}2{'3'}3{'2'}4{'1'}}
+        }
         if($v.Value -cne $newValue){$changedFields.Add($field)}
         $modified=$modified.Remove($v.Index,$v.Length).Insert($v.Index,$newValue)
         $applied.Add($field)
@@ -433,7 +438,15 @@ function Apply-CS2ModeGraphics {
         if($edit.Changed){Write-Log ("Applied "+$edit.Applied.Count+' graphics keys for '+$ModeName+' (Steam '+$active.AccountID+'). Backup: '+$backup)}
         else{Write-Log ("Verified/applied NVIDIA scaling mode for "+$ModeName+' (Steam '+$active.AccountID+').')}
         $allSkipped=@($edit.Skipped)+@($hardwareSkipped.ToArray())
-        $appliedDetails=@($edit.Applied | ForEach-Object { $field=[string]$_; $field+'='+[string]$settings[$field] })
+        $appliedDetails=@($edit.Applied | ForEach-Object {
+            $field=[string]$_
+            if($field -eq 'FSRDetail'){
+                $profileFsrValue=[int]$settings[$field]
+                $menuFsrLabel=switch($profileFsrValue){0{'Disabled (Highest Quality)'}1{'Performance'}2{'Balanced'}3{'Quality'}4{'Ultra Quality'}}
+                $cs2FsrValue=if($profileFsrValue -eq 0){0}else{5-$profileFsrValue}
+                $field+'='+$menuFsrLabel+' (CS2 value '+$cs2FsrValue+')'
+            }else{$field+'='+[string]$settings[$field]}
+        })
         $summary=Format-CS2GraphicsResultSummary -ProfileName $ModeName -AccountID $active.AccountID `
             -Applied $appliedDetails -Skipped $allSkipped -ChangedFields @($edit.ChangedFields) `
             -DisplaySummary $displaySummary -ScalingSummary $scalingReport -BackupPath $backup `
