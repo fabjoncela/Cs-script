@@ -31,7 +31,7 @@ Main project files:
 
 | Area | Implementation | Focused verification |
 | --- | --- | --- |
-| Profile editor, persistence, and GitHub sync | `cafe.bat`: `Show-ProfileEditor`, `Refresh-ProfileFromGitHub`, `Sync-ProfileToGitHub` | `Test-ProfileSave.ps1`, `Test-GitHubSyncAuth.ps1`, `Test-CfgSensitivitySync.ps1` |
+| Profile editor, persistence, and GitHub sync | `cafe.bat`: `Show-ProfileEditor`, `Refresh-ProfileFromGitHub`, `Sync-ProfileToGitHub` | `Test-ProfileSave.ps1`, `Test-GitHubSyncAuth.ps1`, `Test-CfgSensitivitySync.ps1`, `Test-ProfileCfgSensitivity.ps1` |
 | CS2 graphics apply and history | `graphics/ApplyGraphics.ps1`; `cafe.bat`: `Invoke-GraphicsOnly`, `Get-ProfileGraphicsHistory` | `Test-Graphics.ps1`, `Test-GraphicsHistory.ps1`, `Test-NvidiaCompatibility.ps1`, `Test-NvidiaDvcFallback.ps1` |
 | CS2 settings capture and crosshair share-code import | `cafe.bat`: `Get-CafeCS2GraphicsCapture`, `Get-CafeCS2UserConvarsCapture`, `ConvertFrom-CafeCS2CrosshairShareCode` | `Test-CS2GraphicsCapture.ps1`, `Test-CrosshairShareCode.ps1` |
 | Steam/CS2 discovery and Play + Exec | `cafe.bat`: `Get-SteamLibraryRoots`, `Get-CS2SteamLaunchArguments`, `Start-CS2WithProfileCfg` | `Test-SteamPathDiscovery.ps1`, `Test-SteamLaunchOptions.ps1` |
@@ -43,7 +43,11 @@ Use this map to locate the implementation and focused test. The full verificatio
 
 ## Profile editor and CS2 graphics UI
 
-`Show-ProfileEditor` contains one tab control. The **Mouse** tab contains Windows mouse controls and the per-profile **CS2 sensitivity** field, labeled separately from Windows pointer speed. Typing a value saves it with the selected profile; Save & Sync writes it into that profile's CFG. The **CS2 / Apps** tab contains the CFG filename/URL, app launch options, and per-profile CS2 graphics controls for:
+`Show-ProfileEditor` contains one tab control. The **Mouse** tab contains Windows mouse controls and the per-profile **CS2 sensitivity** field, labeled separately from Windows pointer speed. The selected profile's CFG is the only saved source of truth: Edit reads its `sensitivity` command from the validated GitHub Contents API, and Apply installs that CFG without a JSON override. Legacy `CS2Sensitivity` values in older profile JSON are ignored; exports omit the field. Every profile CFG must contain exactly one valid sensitivity command, checked on read, before Apply, and in CI.
+
+Profile Apply and **Play + Exec** install the selected named CFG through `Install-ProfileCfg`. It validates the CFG sensitivity and installs a matching local or downloaded profile file with backup and hash verification; the retired standalone `at.cfg` workflow and embedded fallback are removed.
+
+Typing a value or using **Capture CS2** stages a local pending CFG sensitivity. **Save Locally** keeps that draft in the local profile cache as `PendingCfgSensitivity`, never in the cloud profile JSON. **Save & Sync** previews and writes the selected CFG, verifies its read-back, and then clears the draft. Capture CS2 is the explicit action that reads the active Steam account's saved sensitivity; opening Edit defaults to the selected profile CFG. The **CS2 / Apps** tab contains the CFG filename/URL, app launch options, and per-profile CS2 graphics controls for:
 
 - CS2 resolution width and height, aspect ratio, fullscreen/windowed mode.
 - Highest supported refresh or a user-selected exact Hz.
@@ -67,7 +71,7 @@ The **CS2 / Apps** editor can capture saved settings from the running Steam clie
 - Video capture reads only that account's `userdata/<id>/730/local/cfg/cs2_video.txt`, rechecks the active account after reading, validates recognized keys and ranges, converts refresh numerator/denominator to whole Hz, and preserves profile values for missing settings.
 - It imports CS2 resolution, aspect, fullscreen, and supported video quality values. NVIDIA scaling is outside `cs2_video.txt`, so the profile's current scaling value is retained.
 - It also captures sensitivity and every saved `cl_crosshair*` user-convar with a numeric or boolean value; new crosshair convars do not need an allowlist update. In-game CFG binds are not captured.
-- When saved `sensitivity` is captured, the value is staged in the CS2 sensitivity field on the **Mouse** tab. Capture alone does not save or sync it; the user reviews the values and chooses Save & Sync.
+- When saved `sensitivity` is captured, it replaces the selected profile's staged sensitivity in the **Mouse** tab. Capture alone does not save or sync it; the user reviews the values and chooses Save Locally or Save & Sync.
 - Capture does not edit game files or sync immediately. The user reviews the imported values, then chooses Save Locally or Save & Sync. Captured convars stay staged under the selected profile until sync.
 - The Mouse tab can import a pasted crosshair share code offline. It supports legacy `CSGO-...` versions 1, 3, and 4 plus current `CS...` version 1, validates the base-57 code and checksum, and previews the decoded convars and any conversion notes before staging.
 - Share-code import stages crosshair and scope-dot convars for only the selected profile. It preserves an already staged sensitivity value, changes no game files, and waits for Save & Sync and the existing CFG diff confirmation before publishing. Legacy-v1 codes lack a source-resolution field and can only be approximated; weapon-dependent gap and retired outline thickness are called out when present.
@@ -224,6 +228,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tools\Test-CafeLaunche
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tools\Test-GitHubSyncAuth.ps1
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tools\Test-ProfileSave.ps1
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tools\Test-CfgSensitivitySync.ps1
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tools\Test-ProfileCfgSensitivity.ps1
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tools\Test-Graphics.ps1
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tools\Test-GraphicsHistory.ps1
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tools\Test-NvidiaCompatibility.ps1
@@ -251,6 +256,7 @@ The checks cover:
 
 - Parser/formatting and profile Apply's GitHub-authoritative graphics scaling and fail-closed behavior.
 - Mocked persistence and GitHub sync, device-flow worker compilation, and in-memory token clearing without network or GUI.
+- Per-profile CFG sensitivity presence/format, CFG-backed editor/apply contracts, and legacy JSON-field removal.
 - Graphics fixtures, legacy DVC range mapping without hardware writes, read-only NVIDIA capability inventory, mocked Steam launch arguments, and status reporting.
 
 A real CS2/Steam account and monitor smoke test remains separate.

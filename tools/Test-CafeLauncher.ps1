@@ -67,7 +67,7 @@ if($psSource -match '(?i)Invoke-RestMethod\s+-Uri\s+(?!''https://api\.steampower
 
 # Regression: legacy main-menu shortcut tiles must remain commented out, but
 # profile workflows and their underlying functions stay available.
-foreach($tile in @('Apply NVIDIA Settings','Install CS2 fab.cfg')){
+foreach($tile in @('Apply NVIDIA Settings')){
     $escaped=[regex]::Escape($tile)
     if($psSource -notmatch ('(?m)^# New-Tile "'+$escaped+'" \d+')){
         throw ('Legacy main-menu tile must be commented out: '+$tile)
@@ -76,13 +76,12 @@ foreach($tile in @('Apply NVIDIA Settings','Install CS2 fab.cfg')){
         throw ('Legacy main-menu tile was inadvertently re-enabled: '+$tile)
     }
 }
-if($psSource -notmatch '(?m)^#\s+\[void\]\(Install-AtCfg.*-CfgName ''fab\.cfg''' -or
-   $psSource -notmatch '(?m)^# \} -Primary'){
-    throw 'All lines of the former Install CS2 fab.cfg shortcut must be commented out.'
+if($psSource -match '(?i)at\.cfg|Install-AtCfg|Get-AtCfgSource|EmbeddedAtCfgBase64'){
+    throw 'The retired standalone at.cfg workflow must be removed.'
 }
 if($psSource -notmatch 'function Apply-NvidiaGamingSettings' -or
-   $psSource -notmatch 'function Install-AtCfg' -or
-   $psSource -notmatch 'Install-AtCfg -Silent -CfgName \$profileCfgName' -or
+   $psSource -notmatch 'function Install-ProfileCfg' -or
+   $psSource -notmatch 'Install-ProfileCfg -Silent -CfgName \$profileCfgName' -or
    $psSource -notmatch 'Apply-NvidiaGamingSettings -Width'){
     throw 'Profile-level NVIDIA and CS2 CFG functions must remain accessible.'
 }
@@ -155,7 +154,7 @@ if($quotaMessage -notmatch 'API quota limit reached' -or
     throw 'Updater must identify confirmed API rate limits without mislabeling other 403 failures.'
 }
 foreach($freshReadFunctionName in @(
-    'Install-AtCfg',
+    'Install-ProfileCfg',
     'Check-CafeLauncherUpdates','Invoke-GraphicsOnly'
 )){
     $freshReadFunction=@($psAst.FindAll({

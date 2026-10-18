@@ -35,9 +35,10 @@ foreach($name in @('Export-ProfileValues','Save-ProfileSettings')){
     Invoke-Expression $found[0].Extent.Text
 }
 function Write-Log {param([string]$Message,[string]$Level='INFO');Write-Host $Message}
-$p=@{PointerSpeed=10;LogitechDPI=800;DisableAcceleration=$true;ApplyNvidia=$true;Width=1920;Height=1080;RefreshHz=360;Vibrance=75;Hue=-1;ScalingMode=2;CS2Sensitivity='';CfgDownloadUrl='';LaunchApps=$true}
+$p=@{PointerSpeed=10;LogitechDPI=800;DisableAcceleration=$true;ApplyNvidia=$true;Width=1920;Height=1080;RefreshHz=360;Vibrance=75;Hue=-1;ScalingMode=2;CfgDownloadUrl='';LaunchApps=$true}
 $script:GamingProfiles=[ordered]@{FabMode=$p.Clone();OliMode=$p.Clone()}
 $script:PendingSync=@{FabMode=$false;OliMode=$false}
+$script:PendingCfgSensitivity=@{OliMode='1.35'}
 $script:VerifiedProfileState=@{OliMode=@{BlobSha=('a'*40);CommitSha=('b'*40)}}
 $script:GraphicsPresets=[ordered]@{OliMode=[pscustomobject]@{SchemaVersion=1;ProfileName='OliMode';RefreshPolicy='Highest';ScalingMode=2;Settings=[ordered]@{Width=1280;Height=960;MSAASamples=8}}}
 $folder=Join-Path $env:TEMP ('CafeLauncher-SaveTest-'+[guid]::NewGuid().ToString('N'))
@@ -56,10 +57,10 @@ function Test-CapturedSave {
 try {
     Test-CapturedSave 'OliMode' $true
     $result=Get-Content -LiteralPath $script:ProfileSettingsPath -Raw | ConvertFrom-Json
-    if($result.OliMode.SyncPending -ne $true -or $result.OliMode.PointerSpeed -ne 10 -or $result.OliMode.LogitechDPI -ne 800 -or $result.OliMode.GraphicsSettings.Settings.MSAASamples -ne 8 -or $result.OliMode.GitHubVerifiedProfileSha -ne $script:VerifiedProfileState['OliMode'].BlobSha -or $result.OliMode.GitHubVerifiedCommitSha -ne $script:VerifiedProfileState['OliMode'].CommitSha){throw 'Local save did not persist profile, CS2 graphics, and verified GitHub version metadata.'}
+    if($result.OliMode.SyncPending -ne $true -or $result.OliMode.PointerSpeed -ne 10 -or $result.OliMode.LogitechDPI -ne 800 -or $result.OliMode.PendingCfgSensitivity -ne '1.35' -or $result.OliMode.GraphicsSettings.Settings.MSAASamples -ne 8 -or $result.OliMode.GitHubVerifiedProfileSha -ne $script:VerifiedProfileState['OliMode'].BlobSha -or $result.OliMode.GitHubVerifiedCommitSha -ne $script:VerifiedProfileState['OliMode'].CommitSha -or $result.OliMode.PSObject.Properties['CS2Sensitivity']){throw 'Local save did not persist profile, CFG sensitivity draft, CS2 graphics, or verified GitHub version metadata without legacy JSON sensitivity.'}
     $script:GamingProfiles['OliMode']['LogitechDPI']=1600
     Test-CapturedSave 'OliMode' $false
     $result=Get-Content -LiteralPath $script:ProfileSettingsPath -Raw | ConvertFrom-Json
-    if($result.OliMode.SyncPending -ne $false -or $result.OliMode.LogitechDPI -ne 1600){throw 'Synced-state save or edited DPI did not persist.'}
+    if($result.OliMode.SyncPending -ne $false -or $result.OliMode.LogitechDPI -ne 1600 -or $result.OliMode.PSObject.Properties['PendingCfgSensitivity']){throw 'Synced-state save or edited DPI did not persist, or retained a stale CFG sensitivity draft.'}
     Write-Host 'PASS: captured profile editor save state and JSON persistence.'
 }finally{Remove-Item -LiteralPath $folder -Force -Recurse -ErrorAction SilentlyContinue}
