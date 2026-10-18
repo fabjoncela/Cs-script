@@ -16,7 +16,7 @@ foreach($name in @('ConvertTo-CafeCS2Sensitivity','Get-CafeCS2CfgSensitivity')){
 }
 function Assert-True {param([bool]$Value,[string]$Message);if(-not $Value){throw $Message}}
 
-$expected=[ordered]@{'fab.cfg'='1.1';'arli.cfg'='1';'arml.cfg'='1';'brile.cfg'='1.2';'oli.cfg'='1.2'}
+$expected=[ordered]@{'fab.cfg'='1.2';'arli.cfg'='1';'arml.cfg'='1';'brile.cfg'='1.2';'oli.cfg'='1.2'}
 foreach($cfgName in $expected.Keys){
     $path=Join-Path $root $cfgName
     if(-not (Test-Path -LiteralPath $path -PathType Leaf)){throw ('Missing profile CFG: '+$cfgName)}

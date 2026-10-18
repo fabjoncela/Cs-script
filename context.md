@@ -225,17 +225,25 @@ Run from the repository root in Windows PowerShell 5.1:
 
 ```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tools\Test-CafeLauncher.ps1
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tools\Test-ContextFreshness.ps1
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tools\Test-GitHubSyncAuth.ps1
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tools\Test-GitHubRateLimit.ps1
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tools\Test-ProfileSave.ps1
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tools\Test-CfgSensitivitySync.ps1
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tools\Test-ProfileCfgSensitivity.ps1
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tools\Test-CrosshairShareCode.ps1
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tools\Test-Graphics.ps1
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tools\Test-GraphicsHistory.ps1
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tools\Test-GraphicsHistoryAsync.ps1
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tools\Test-NvidiaCompatibility.ps1
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tools\Test-NvidiaDvcFallback.ps1
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tools\Test-SteamPathDiscovery.ps1
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tools\Test-WorkshopCleanup.ps1
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tools\Test-CS2GraphicsCapture.ps1
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tools\Test-EditorComboWheel.ps1
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tools\Test-LogitechDPI.ps1
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tools\Test-SteamLaunchOptions.ps1
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tools\Test-SuperlightDevice.ps1
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tools\Test-StepResults.ps1
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tools\Update-Context.ps1 -Check
 ```
