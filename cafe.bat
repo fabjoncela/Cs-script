@@ -4027,6 +4027,297 @@ function Set-CafeProfileCrosshairImportStage {
     $State[$ProfileName]=$staged
     return [pscustomobject]@{ProfileName=$ProfileName;Values=$staged;Count=$Values.Count}
 }
+function ConvertTo-CafeCS2CrosshairPreviewModel {
+    param([Parameter(Mandatory=$true)]$Values)
+    if($Values -isnot [System.Collections.IDictionary]){throw 'Decoded crosshair values are unavailable for the visual preview.'}
+    $warnings=New-Object 'System.Collections.Generic.List[string]'
+    $readNumber={
+        param([string]$Name,[double]$Minimum,[double]$Maximum,[bool]$Required,[double]$Fallback)
+        if(-not $Values.Contains($Name)){
+            if($Required){throw ('The decoded crosshair is missing '+$Name+'.')}
+            return $Fallback
+        }
+        $text=[string]$Values[$Name]
+        $number=0.0
+        $parsed=[double]::TryParse($text,[Globalization.NumberStyles]::Float,[Globalization.CultureInfo]::InvariantCulture,[ref]$number)
+        if(-not $parsed -or [double]::IsNaN($number) -or [double]::IsInfinity($number) -or $number -lt $Minimum -or $number -gt $Maximum){
+            throw ('The decoded crosshair has an invalid '+$Name+' value.')
+        }
+        return $number
+    }.GetNewClosure()
+    $readFlag={
+        param([string]$Name,[bool]$Fallback)
+        if(-not $Values.Contains($Name)){return $Fallback}
+        $text=[string]$Values[$Name]
+        if($text -in @('1','true')){return $true}
+        if($text -in @('0','false')){return $false}
+        throw ('The decoded crosshair has an invalid '+$Name+' value.')
+    }.GetNewClosure()
+    $length=& $readNumber 'cl_crosshair_length' 0 255 $true 0
+    $gap=& $readNumber 'cl_crosshair_gap' -3840 3840 $true 0
+    $thickness=& $readNumber 'cl_crosshair_thickness' 0 32 $true 0
+    $style=& $readNumber 'cl_crosshairstyle' 0 9 $true 0
+    $outline=& $readNumber 'cl_crosshair_drawoutline' 0 2 $true 0
+    $red=& $readNumber 'cl_crosshaircolor_r' 0 255 $true 0
+    $green=& $readNumber 'cl_crosshaircolor_g' 0 255 $true 0
+    $blue=& $readNumber 'cl_crosshaircolor_b' 0 255 $true 0
+    $alpha=& $readNumber 'cl_crosshaircolor_a' 0 255 $true 0
+    $outlineRed=& $readNumber 'cl_crosshairoutline_r' 0 255 $false 0
+    $outlineGreen=& $readNumber 'cl_crosshairoutline_g' 0 255 $false 0
+    $outlineBlue=& $readNumber 'cl_crosshairoutline_b' 0 255 $false 0
+    $outlineAlpha=& $readNumber 'cl_crosshairoutline_a' 0 255 $false 255
+    $sourceHeight=& $readNumber 'cl_crosshair_screen_height' 240 7680 $false 1080
+    $quadrantSize=& $readNumber 'cl_crosshair_dynamic_maxdist_splitratio' 0 1 ($style -in @(7,9)) 1
+    foreach($integerValue in @(@('cl_crosshairstyle',$style),@('cl_crosshair_drawoutline',$outline),@('cl_crosshaircolor_r',$red),@('cl_crosshaircolor_g',$green),@('cl_crosshaircolor_b',$blue),@('cl_crosshaircolor_a',$alpha),@('cl_crosshairoutline_r',$outlineRed),@('cl_crosshairoutline_g',$outlineGreen),@('cl_crosshairoutline_b',$outlineBlue),@('cl_crosshairoutline_a',$outlineAlpha),@('cl_crosshair_screen_height',$sourceHeight))){
+        if([double]$integerValue[1] -ne [Math]::Truncate([double]$integerValue[1]) -and $Values.Contains([string]$integerValue[0])){throw ('The decoded crosshair has an invalid '+[string]$integerValue[0]+' value.')}
+    }
+    if(-not $Values.Contains('cl_crosshair_screen_height')){$warnings.Add('The share code has no source resolution; the preview uses a 1080p reference scale.')}
+    if($outline -eq 2){$warnings.Add('Half outlines are shown as full outlines in this preview.')}
+    if($gap -lt 0){$warnings.Add('Negative gaps overlap crosshair parts; the preview approximates this overlap.')}
+    return [pscustomobject]@{
+        Length=$length;Gap=$gap;Thickness=$thickness;Style=[int]$style;Outline=($outline -gt 0)
+        Color=[System.Drawing.Color]::FromArgb([int]$alpha,[int]$red,[int]$green,[int]$blue)
+        OutlineColor=[System.Drawing.Color]::FromArgb([int]$outlineAlpha,[int]$outlineRed,[int]$outlineGreen,[int]$outlineBlue)
+        Dot=(& $readFlag 'cl_crosshairdot' $true);TShape=(& $readFlag 'cl_crosshair_t' $true)
+        SourceHeight=$sourceHeight;QuadrantSize=$quadrantSize;Warnings=@($warnings.ToArray())
+    }
+}
+function New-CafeCS2StaticQuadrantRaster {
+    param([Parameter(Mandatory=$true)]$Model,[Parameter(Mandatory=$true)][System.Drawing.Color]$BackgroundColor,[bool]$TransparentBackground=$false)
+    # Geometry follows the CS2 client port in setposgg/cs2-crosshair. Pixel
+    # coverage and linear-light compositing follow the public crosshair.club
+    # reconstruction of csgo_crosshair.vfx; no external renderer is loaded.
+    $thickness=[double]$Model.Thickness
+    $outer=[Math]::Max(1.0,[double]$Model.Gap)+$thickness
+    $radius=[int][Math]::Ceiling($outer+3.0)
+    if($radius -gt 512){throw 'This quadrant gap is too large for the visual preview.'}
+    $size=2*$radius
+    $image=[System.Drawing.Bitmap]::new($size,$size,[System.Drawing.Imaging.PixelFormat]::Format32bppArgb)
+    $smooth={
+        param([double]$edge0,[double]$edge1,[double]$value)
+        if($edge0 -eq $edge1){return 0.0}
+        $t=[Math]::Max(0.0,[Math]::Min(1.0,($value-$edge0)/($edge1-$edge0)))
+        return $t*$t*(3.0-2.0*$t)
+    }
+    $linear={param([int]$value)$v=$value/255.0;if($v -le 0.04045){return $v/12.92};return [Math]::Pow(($v+0.055)/1.055,2.4)}
+    $srgb={param([double]$value)$v=[Math]::Max(0.0,[Math]::Min(1.0,$value));$n=if($v -le 0.0031308){12.92*$v}else{1.055*[Math]::Pow($v,1.0/2.4)-0.055};return [int][Math]::Round($n*255.0,[MidpointRounding]::AwayFromZero)}
+    $fillChannels=@((& $linear $Model.Color.R),(& $linear $Model.Color.G),(& $linear $Model.Color.B))
+    $outlineChannels=@((& $linear $Model.OutlineColor.R),(& $linear $Model.OutlineColor.G),(& $linear $Model.OutlineColor.B))
+    $backgroundChannels=@((& $linear $BackgroundColor.R),(& $linear $BackgroundColor.G),(& $linear $BackgroundColor.B))
+    $fillOpacity=[double]$Model.Color.A/255.0
+    $outlineOpacity=if($Model.Outline){[double]$Model.OutlineColor.A/255.0}else{0.0}
+    $wholeThickness=[Math]::Max(1,[int][Math]::Round($thickness,[MidpointRounding]::AwayFromZero))
+    $before=[int][Math]::Floor(($wholeThickness+1)/2.0)
+    $after=$wholeThickness-$before
+    $arcCenter=$radius-$(if(($wholeThickness%2) -eq 0){0.5}else{1.0})
+    $inner=$outer-$thickness
+    $halfAngle=[Math]::Max(0.0,[Math]::Min(1.0,[double]$Model.QuadrantSize))*[Math]::PI/4.0
+    $outerLimit=($outer+2.0)*($outer+2.0)
+    $innerLimit=[Math]::Pow([Math]::Max(0.0,$inner-2.0),2)
+    try{
+        if(-not $TransparentBackground){$backgroundGraphics=[System.Drawing.Graphics]::FromImage($image);try{$backgroundGraphics.Clear($BackgroundColor)}finally{$backgroundGraphics.Dispose()}}
+        $channels=New-Object int[] 3
+        for($y=0;$y -lt $size;$y++){
+            for($x=0;$x -lt $size;$x++){
+                $dx=$x-$arcCenter;$dy=$y-$arcCenter
+                $distanceSquared=$dx*$dx+$dy*$dy
+                $nearArc=($distanceSquared -ge $innerLimit -and $distanceSquared -le $outerLimit)
+                $nearDot=($Model.Dot -and $x -ge ($radius-$before-1) -and $x -lt ($radius+$after+1) -and $y -ge ($radius-$before-1) -and $y -lt ($radius+$after+1))
+                if(-not $nearArc -and -not $nearDot){continue}
+                $arcFill=0.0;$arcOutline=0.0
+                if($nearArc){
+                    $distance=[Math]::Sqrt($distanceSquared)
+                    $angle=[Math]::Atan2($dx,-$dy)
+                    $quadrantAngle=[Math]::Abs($angle-[Math]::Floor($angle/([Math]::PI/2.0))*([Math]::PI/2.0)-[Math]::PI/4.0)
+                    $inverseRadius=1.0/[Math]::Max(1.0,$distance)
+                    $fillRadial=(& $smooth ($outer+0.5) ($outer-0.5) $distance)*(& $smooth ($inner-0.5) ($inner+0.5) $distance)
+                    $fillAngular=& $smooth ($halfAngle+0.5*$inverseRadius) ($halfAngle-0.5*$inverseRadius) $quadrantAngle
+                    $arcFill=$fillRadial*$fillAngular
+                    if($Model.Outline){
+                        $outlineRadial=(& $smooth ($outer+1.5) ($outer+0.5) $distance)*(& $smooth ($inner-1.5) ($inner-0.5) $distance)
+                        $outlineAngular=& $smooth ($halfAngle+1.5*$inverseRadius) ($halfAngle+0.5*$inverseRadius) $quadrantAngle
+                        $arcOutline=$outlineRadial*$outlineAngular
+                    }
+                }
+                $dotFill=($Model.Dot -and $thickness -gt 0 -and $x -ge ($radius-$before) -and $x -lt ($radius+$after) -and $y -ge ($radius-$before) -and $y -lt ($radius+$after))
+                $dotOutline=($Model.Outline -and $dotFill)
+                if($Model.Outline -and $Model.Dot -and $thickness -gt 0){$dotOutline=($x -ge ($radius-$before-1) -and $x -lt ($radius+$after+1) -and $y -ge ($radius-$before-1) -and $y -lt ($radius+$after+1))}
+                $fillAlpha=[Math]::Max($arcFill*$fillOpacity,$(if($dotFill){$fillOpacity}else{0.0}))
+                $outlineAlpha=[Math]::Max($arcOutline*$outlineOpacity,$(if($dotOutline){$outlineOpacity}else{0.0}))
+                # The game's shader attenuates the outline before combining
+                # it with the fill, then applies the fill's opacity again.
+                $outlineBelowFill=(1.0-$fillAlpha)*(1.0-$fillAlpha)*$outlineAlpha
+                $alpha=$fillAlpha+$outlineBelowFill
+                if($alpha -le 0 -and $TransparentBackground){continue}
+                for($channel=0;$channel -lt 3;$channel++){
+                    $light=$fillChannels[$channel]*$fillAlpha+$outlineChannels[$channel]*$outlineBelowFill
+                    if($TransparentBackground){$light/=[Math]::Max($alpha,0.000001)}else{$light+=$backgroundChannels[$channel]*(1.0-$alpha)}
+                    $channels[$channel]=& $srgb $light
+                }
+                $byteAlpha=if($TransparentBackground){[int][Math]::Round($alpha*255.0,[MidpointRounding]::AwayFromZero)}else{255}
+                $image.SetPixel($x,$y,[System.Drawing.Color]::FromArgb($byteAlpha,$channels[0],$channels[1],$channels[2]))
+            }
+        }
+        return $image
+    }catch{$image.Dispose();throw}
+}
+function Draw-CafeCS2CrosshairPreview {
+    param(
+        [Parameter(Mandatory=$true)][System.Drawing.Graphics]$Graphics,
+        [Parameter(Mandatory=$true)][System.Drawing.Rectangle]$Bounds,
+        [Parameter(Mandatory=$true)]$Model,
+        [ValidateSet('Stone','Dark','Light','Foliage')][string]$Background='Stone',
+        [double]$OffsetX=0,
+        [double]$OffsetY=0,
+        [System.Collections.IDictionary]$RasterCache=$null
+    )
+    if($Bounds.Width -lt 1 -or $Bounds.Height -lt 1){return}
+    $rasterBackground=[System.Drawing.Color]::FromArgb(42,46,54)
+    switch($Background){
+        'Stone' {$rasterBackground=[System.Drawing.Color]::FromArgb(183,170,164);$Graphics.Clear($rasterBackground)}
+        'Light' {$rasterBackground=[System.Drawing.Color]::FromArgb(222,218,205);$Graphics.Clear($rasterBackground)}
+        'Foliage' {
+            $rasterBackground=[System.Drawing.Color]::FromArgb(47,75,49);$Graphics.Clear($rasterBackground)
+            $leaf1=New-Object System.Drawing.SolidBrush([System.Drawing.Color]::FromArgb(255,75,102,61))
+            $leaf2=New-Object System.Drawing.SolidBrush([System.Drawing.Color]::FromArgb(255,31,59,43))
+            try{
+                for($i=0;$i -lt 7;$i++){
+                    $x=$Bounds.X+(($i*83+19)%[Math]::Max(1,$Bounds.Width))
+                    $y=$Bounds.Y+(($i*47+11)%[Math]::Max(1,$Bounds.Height))
+                    $brush=if(($i%2)-eq 0){$leaf1}else{$leaf2}
+                    $Graphics.FillEllipse($brush,[single]$x,[single]$y,[single](46+($i%3)*17),[single](30+($i%2)*19))
+                }
+            }finally{$leaf1.Dispose();$leaf2.Dispose()}
+        }
+        default {$Graphics.Clear($rasterBackground)}
+    }
+    $cx=[double]$Bounds.X+($Bounds.Width/2.0)+$OffsetX
+    $cy=[double]$Bounds.Y+($Bounds.Height/2.0)+$OffsetY
+    $armExtent=if($Model.Style -eq 9){[Math]::Max(1.0,[Math]::Max(1.0,[double]$Model.Gap)+[double]$Model.Thickness+2)}else{[Math]::Max(1.0,[Math]::Abs([double]$Model.Gap)+[double]$Model.Length+[double]$Model.Thickness+2)}
+    $fitScale=([Math]::Min($Bounds.Width,$Bounds.Height)*0.34)/$armExtent
+    $resolutionScale=1080.0/[double]$Model.SourceHeight
+    $scale=[Math]::Min(6.0,$fitScale/$resolutionScale)*$resolutionScale
+    $scale=[Math]::Max(0.05,$scale)
+    $half=[Math]::Max(0.5,([double]$Model.Thickness*$scale)/2.0)
+    $innerGap=[Math]::Max(0.0,[double]$Model.Gap*$scale)
+    $armLength=[Math]::Max(0.0,[double]$Model.Length*$scale)
+    $outlineWidth=if($Model.Outline){[Math]::Max(1.0,$scale*0.75)}else{0.0}
+    if($Model.Style -eq 9){
+        # Keep each authored-resolution pixel an integer-sized preview block.
+        if($scale -ge 1.0){$scale=[Math]::Max(1.0,[Math]::Min(8.0,[Math]::Round($scale,[MidpointRounding]::AwayFromZero)))}
+        $raster=$null
+        $disposeRaster=($null -eq $RasterCache)
+        if($disposeRaster -or -not $RasterCache.Contains($Background)){
+            $raster=New-CafeCS2StaticQuadrantRaster -Model $Model -BackgroundColor $rasterBackground -TransparentBackground ($Background -eq 'Foliage')
+            if(-not $disposeRaster){$RasterCache[$Background]=$raster}
+        }else{$raster=$RasterCache[$Background]}
+        try{
+            $oldInterpolation=$Graphics.InterpolationMode;$oldPixelOffset=$Graphics.PixelOffsetMode
+            try{
+                $Graphics.InterpolationMode=[System.Drawing.Drawing2D.InterpolationMode]::NearestNeighbor
+                $Graphics.PixelOffsetMode=[System.Drawing.Drawing2D.PixelOffsetMode]::Half
+                $destination=[System.Drawing.RectangleF]::new([single]([Math]::Floor($cx-$raster.Width*$scale/2.0)),[single]([Math]::Floor($cy-$raster.Height*$scale/2.0)),[single]($raster.Width*$scale),[single]($raster.Height*$scale))
+                $source=[System.Drawing.RectangleF]::new(0,0,$raster.Width,$raster.Height)
+                $Graphics.DrawImage($raster,$destination,$source,[System.Drawing.GraphicsUnit]::Pixel)
+            }finally{$Graphics.InterpolationMode=$oldInterpolation;$Graphics.PixelOffsetMode=$oldPixelOffset}
+        }finally{if($disposeRaster){$raster.Dispose()}}
+        return
+    }elseif($Model.Style -in @(1,3,8)){
+        $radius=[Math]::Max($half+1.0,([double]$Model.Gap+[double]$Model.Length+[double]$Model.Thickness/2.0)*$scale)
+        $stroke=[single]($half*2.0)
+        $shapePens=New-Object 'System.Collections.Generic.List[System.Drawing.Pen]'
+        try{
+            if($outlineWidth -gt 0){$shapePens.Add([System.Drawing.Pen]::new($Model.OutlineColor,[single]($stroke+2*$outlineWidth)))}
+            $shapePens.Add([System.Drawing.Pen]::new($Model.Color,$stroke))
+            foreach($pen in $shapePens){
+                if($Model.Style -in @(1,3)){
+                    $Graphics.DrawEllipse($pen,[single]($cx-$radius),[single]($cy-$radius),[single](2*$radius),[single](2*$radius))
+                }elseif($Model.Style -eq 8){
+                    $Graphics.DrawRectangle($pen,[single]($cx-$radius),[single]($cy-$radius),[single](2*$radius),[single](2*$radius))
+                }
+            }
+        }finally{foreach($pen in $shapePens){$pen.Dispose()}}
+    }elseif($Model.Style -ne 6){
+        $segments=New-Object 'System.Collections.Generic.List[System.Drawing.RectangleF]'
+        if($armLength -gt 0){
+            $segments.Add([System.Drawing.RectangleF]::new([single]($cx+$innerGap),[single]($cy-$half),[single]$armLength,[single]($half*2)))
+            $segments.Add([System.Drawing.RectangleF]::new([single]($cx-$innerGap-$armLength),[single]($cy-$half),[single]$armLength,[single]($half*2)))
+            $segments.Add([System.Drawing.RectangleF]::new([single]($cx-$half),[single]($cy+$innerGap),[single]($half*2),[single]$armLength))
+            if(-not $Model.TShape){$segments.Add([System.Drawing.RectangleF]::new([single]($cx-$half),[single]($cy-$innerGap-$armLength),[single]($half*2),[single]$armLength))}
+        }
+        if($outlineWidth -gt 0){
+            $outlineBrush=New-Object System.Drawing.SolidBrush($Model.OutlineColor)
+            try{foreach($segment in $segments){$outer=[System.Drawing.RectangleF]::new($segment.X-$outlineWidth,$segment.Y-$outlineWidth,$segment.Width+($outlineWidth*2),$segment.Height+($outlineWidth*2));$Graphics.FillRectangle($outlineBrush,$outer)}}finally{$outlineBrush.Dispose()}
+        }
+        $armBrush=New-Object System.Drawing.SolidBrush($Model.Color)
+        try{foreach($segment in $segments){$Graphics.FillRectangle($armBrush,$segment)}}finally{$armBrush.Dispose()}
+    }
+    $crosshairBrush=New-Object System.Drawing.SolidBrush($Model.Color)
+    try{
+        if($Model.Dot -or $Model.Style -eq 6){
+            $dotSize=[Math]::Max(1.0,$half*2.0)
+            if($outlineWidth -gt 0){$dotOutline=New-Object System.Drawing.SolidBrush($Model.OutlineColor);try{$Graphics.FillRectangle($dotOutline,[single]($cx-$dotSize/2-$outlineWidth),[single]($cy-$dotSize/2-$outlineWidth),[single]($dotSize+2*$outlineWidth),[single]($dotSize+2*$outlineWidth))}finally{$dotOutline.Dispose()}}
+            $Graphics.FillRectangle($crosshairBrush,[single]($cx-$dotSize/2),[single]($cy-$dotSize/2),[single]$dotSize,[single]$dotSize)
+        }
+    }finally{$crosshairBrush.Dispose()}
+}
+function Show-CafeCS2CrosshairPreviewDialog {
+    param([Parameter(Mandatory=$true)]$Decoded,[Parameter(Mandatory=$true)][string]$ProfileName,[Parameter(Mandatory=$true)]$OwnerWindow)
+    $model=ConvertTo-CafeCS2CrosshairPreviewModel -Values $Decoded.Values
+    $dialog=New-Object System.Windows.Forms.Form
+    $dialog.Text='Preview Crosshair Import - CafeLauncher'
+    $dialog.ClientSize=[System.Drawing.Size]::new(900,610)
+    $dialog.MinimumSize=[System.Drawing.Size]::new(820,560)
+    $dialog.StartPosition='CenterParent';$dialog.FormBorderStyle='FixedDialog';$dialog.MaximizeBox=$false;$dialog.MinimizeBox=$false
+    $dialog.BackColor=$BG;$dialog.ForeColor=$WHITE;$dialog.Font=New-Object System.Drawing.Font('Segoe UI',9)
+    $heading=New-CafeLabel -Text ('Review '+$Decoded.Format+' crosshair for '+$ProfileName+'. Import only stages it for this profile.') -FontSize 9
+    $heading.Location=[System.Drawing.Point]::new(16,12);$heading.Size=[System.Drawing.Size]::new(860,25);$heading.Anchor='Top,Left,Right';$dialog.Controls.Add($heading)
+    $preview=New-Object System.Windows.Forms.Panel
+    $preview.Location=[System.Drawing.Point]::new(16,48);$preview.Size=[System.Drawing.Size]::new(560,410);$preview.Anchor='Top,Bottom,Left';$preview.BackColor=[System.Drawing.Color]::FromArgb(183,170,164);$preview.BorderStyle='FixedSingle';$dialog.Controls.Add($preview)
+    $backgroundLabel=New-CafeLabel -Text 'Background' -FontSize 9
+    $backgroundLabel.Location=[System.Drawing.Point]::new(16,468);$backgroundLabel.Size=[System.Drawing.Size]::new(90,24);$dialog.Controls.Add($backgroundLabel)
+    $backgroundChoice=New-Object System.Windows.Forms.ComboBox
+    $backgroundChoice.DropDownStyle='DropDownList';[void]$backgroundChoice.Items.AddRange([object[]]@('Stone','Dark','Light','Foliage'));$backgroundChoice.SelectedIndex=0
+    $backgroundChoice.Location=[System.Drawing.Point]::new(106,466);$backgroundChoice.Size=[System.Drawing.Size]::new(150,26);$backgroundChoice.BackColor=$PANEL;$backgroundChoice.ForeColor=$WHITE;$dialog.Controls.Add($backgroundChoice)
+    $recenter=New-Object System.Windows.Forms.Button;$recenter.Text='Recenter';$recenter.Location=[System.Drawing.Point]::new(270,464);$recenter.Size=[System.Drawing.Size]::new(100,30);Style-CafeButton -Button $recenter;$dialog.Controls.Add($recenter)
+    $previewNote=if($model.Style -eq 9){'Static Quadrant uses reconstructed CS2 pixel shading. Game scaling may differ. Drag to inspect contrast; dragging does not change imported values.'}else{'Approximate static preview. Dynamic movement/recoil is shown at rest. Drag the crosshair to inspect contrast; dragging does not change imported values.'}
+    $note=New-CafeLabel -Text $previewNote -FontSize 8
+    $note.Location=[System.Drawing.Point]::new(16,504);$note.Size=[System.Drawing.Size]::new(560,54);$note.Anchor='Bottom,Left';$note.ForeColor=$MUTED;$dialog.Controls.Add($note)
+    $summary=New-Object System.Windows.Forms.TextBox
+    $summary.Location=[System.Drawing.Point]::new(592,48);$summary.Size=[System.Drawing.Size]::new(292,510);$summary.Anchor='Top,Bottom,Left,Right'
+    $summary.Multiline=$true;$summary.ReadOnly=$true;$summary.ScrollBars='Vertical';$summary.BackColor=$PANEL;$summary.ForeColor=$WHITE;$summary.BorderStyle='FixedSingle';$summary.Font=New-Object System.Drawing.Font('Consolas',8)
+    $summaryLines=New-Object 'System.Collections.Generic.List[string]'
+    $summaryLines.Add('Decoded settings:')
+    foreach($name in @($Decoded.Values.Keys|Sort-Object)){$summaryLines.Add(([string]$name+' = '+[string]$Decoded.Values[$name]))}
+    if($Decoded.Warnings.Count -or $model.Warnings.Count){$summaryLines.Add('');$summaryLines.Add('Notes:');foreach($warning in @($Decoded.Warnings)+@($model.Warnings)){$summaryLines.Add([string]$warning)}}
+    $summaryLines.Add('');$summaryLines.Add('Import stages these values for this profile only. Nothing is saved, synced, or applied to CS2 here.')
+    $summary.Text=[string]::Join([Environment]::NewLine,$summaryLines.ToArray());$dialog.Controls.Add($summary)
+    $importButton=New-Object System.Windows.Forms.Button;$importButton.Text='Import';$importButton.Location=[System.Drawing.Point]::new(680,566);$importButton.Size=[System.Drawing.Size]::new(95,32);Style-CafeButton -Button $importButton -Primary;$importButton.Enabled=$false;$importButton.Anchor='Bottom,Right';$dialog.Controls.Add($importButton)
+    $cancelButton=New-Object System.Windows.Forms.Button;$cancelButton.Text='Cancel';$cancelButton.Location=[System.Drawing.Point]::new(785,566);$cancelButton.Size=[System.Drawing.Size]::new(95,32);Style-CafeButton -Button $cancelButton;$cancelButton.Anchor='Bottom,Right';$dialog.Controls.Add($cancelButton)
+    $dialog.AcceptButton=$importButton;$dialog.CancelButton=$cancelButton
+    $previewState=[pscustomobject]@{OffsetX=0.0;OffsetY=0.0;Dragging=$false;StartX=0.0;StartY=0.0;Rendered=$false}
+    $previewRasters=@{}
+    $paintPreview={
+        param($sender,$eventArgs)
+        try{
+            Draw-CafeCS2CrosshairPreview -Graphics $eventArgs.Graphics -Bounds $sender.ClientRectangle -Model $model -Background ([string]$backgroundChoice.SelectedItem) -OffsetX $previewState.OffsetX -OffsetY $previewState.OffsetY -RasterCache $previewRasters
+            $previewState.Rendered=$true;$importButton.Enabled=$true
+            $note.Text=$previewNote;$note.ForeColor=$MUTED
+        }catch{
+            $previewState.Rendered=$false;$importButton.Enabled=$false
+            $note.Text=('Preview could not be drawn: '+$_.Exception.Message);$note.ForeColor=[System.Drawing.Color]::FromArgb(255,150,130)
+        }
+    }.GetNewClosure()
+    $preview.Add_Paint($paintPreview)
+    $backgroundChoice.Add_SelectedIndexChanged({$previewState.Rendered=$false;$importButton.Enabled=$false;$preview.Invalidate()}.GetNewClosure())
+    $recenter.Add_Click({$previewState.OffsetX=0.0;$previewState.OffsetY=0.0;$previewState.Rendered=$false;$importButton.Enabled=$false;$preview.Invalidate()}.GetNewClosure())
+    $importButton.Add_Click({if($previewState.Rendered){$dialog.DialogResult=[System.Windows.Forms.DialogResult]::OK;$dialog.Close()}}.GetNewClosure())
+    $cancelButton.Add_Click({$dialog.DialogResult=[System.Windows.Forms.DialogResult]::Cancel;$dialog.Close()}.GetNewClosure())
+    $preview.Add_MouseDown({param($sender,$eventArgs)if($eventArgs.Button -eq [System.Windows.Forms.MouseButtons]::Left){$previewState.Dragging=$true;$previewState.StartX=$eventArgs.X-$previewState.OffsetX;$previewState.StartY=$eventArgs.Y-$previewState.OffsetY;$sender.Capture=$true}}.GetNewClosure())
+    $preview.Add_MouseMove({param($sender,$eventArgs)if($previewState.Dragging){$previewState.OffsetX=[Math]::Max(-($sender.Width/2.0),[Math]::Min($sender.Width/2.0,$eventArgs.X-$previewState.StartX));$previewState.OffsetY=[Math]::Max(-($sender.Height/2.0),[Math]::Min($sender.Height/2.0,$eventArgs.Y-$previewState.StartY));$sender.Invalidate()}}.GetNewClosure())
+    $preview.Add_MouseUp({param($sender,$eventArgs)if($eventArgs.Button -eq [System.Windows.Forms.MouseButtons]::Left){$previewState.Dragging=$false;$sender.Capture=$false}}.GetNewClosure())
+    try{return ($dialog.ShowDialog($OwnerWindow) -eq [System.Windows.Forms.DialogResult]::OK)}finally{foreach($raster in $previewRasters.Values){$raster.Dispose()};$dialog.Dispose()}
+}
 function Get-CafeCS2UserConvarsCapture {
     param($Source)
     if(@(Get-Process -Name 'cs2' -ErrorAction SilentlyContinue).Count){throw 'Close CS2 before capture.'}
@@ -6399,19 +6690,8 @@ function Show-ProfileEditor {
     $importCrosshair.Add_Click({
         try{
             $decoded=ConvertFrom-CafeCS2CrosshairShareCode -ShareCode ([string]$crosshairShareCode.Text)
-            $previewLines=New-Object 'System.Collections.Generic.List[string]'
-            $previewLines.Add(('Detected code format: '+$decoded.Format))
-            $previewLines.Add(('Values to stage for '+$ProfileName+':'))
-            foreach($name in @($decoded.Values.Keys|Sort-Object)){$previewLines.Add(('  '+$name+' = '+[string]$decoded.Values[$name]))}
-            if($decoded.Warnings.Count){
-                $previewLines.Add('')
-                $previewLines.Add('Notes:')
-                foreach($warning in $decoded.Warnings){$previewLines.Add(('  '+[string]$warning))}
-            }
-            $previewLines.Add('')
-            $previewLines.Add('Yes stages these values for this profile. Nothing is saved or synced until you choose Save & Sync.')
-            $answer=[System.Windows.Forms.MessageBox]::Show([string]::Join([Environment]::NewLine,$previewLines.ToArray()),'Preview Crosshair Import','YesNo',$(if($decoded.Warnings.Count){'Warning'}else{'Question'}))
-            if($answer -ne [System.Windows.Forms.DialogResult]::Yes){return}
+            $confirmed=Show-CafeCS2CrosshairPreviewDialog -Decoded $decoded -ProfileName $ProfileName -OwnerWindow $dialog
+            if(-not $confirmed){return}
             $staged=Set-CafeProfileCrosshairImportStage -ProfileName $ProfileName -Values $decoded.Values -State $capturedCS2ConvarsState
             $status.Text=('Imported '+$decoded.Format+' crosshair values for '+$ProfileName+'. Review them, then Save & Sync; other profiles and CS2 are unchanged.')
             $status.ForeColor=[System.Drawing.Color]::FromArgb(255,190,105)
