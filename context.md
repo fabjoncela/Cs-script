@@ -33,7 +33,7 @@ Main project files:
 | --- | --- | --- |
 | Profile editor, persistence, and GitHub sync | `cafe.bat`: `Show-ProfileEditor`, `Refresh-ProfileFromGitHub`, `Sync-ProfileToGitHub` | `Test-ProfileSave.ps1`, `Test-GitHubSyncAuth.ps1`, `Test-CfgSensitivitySync.ps1`, `Test-ProfileCfgSensitivity.ps1` |
 | CS2 graphics apply and history | `graphics/ApplyGraphics.ps1`; `cafe.bat`: `Invoke-GraphicsOnly`, `Get-ProfileGraphicsHistory` | `Test-Graphics.ps1`, `Test-GraphicsHistory.ps1`, `Test-NvidiaCompatibility.ps1`, `Test-NvidiaDvcFallback.ps1` |
-| CS2 settings capture and crosshair share-code import/preview | `cafe.bat`: `Get-CafeCS2GraphicsCapture`, `Get-CafeCS2UserConvarsCapture`, `ConvertFrom-CafeCS2CrosshairShareCode`, `ConvertTo-CafeCS2CrosshairPreviewModel`, `Draw-CafeCS2CrosshairPreview`, `Show-CafeCS2CrosshairPreviewDialog` | `Test-CS2GraphicsCapture.ps1`, `Test-CrosshairShareCode.ps1` |
+| CS2 settings capture, Extras editor, and crosshair share-code import/preview | `cafe.bat`: `Get-CafeCS2GraphicsCapture`, `Get-CafeCS2UserConvarsCapture`, `Get-CafeCS2UserKeysCapture`, `ConvertFrom-CafeCS2UserConvarsText`, `ConvertFrom-CafeCS2UserKeysText`, `Show-CafeCS2CaptureOptionsDialog`, `Show-CafeCS2CaptureReviewDialog`, `Invoke-CafeCS2CaptureReview`, `Show-CafeCS2ExtrasDialog`, `ConvertFrom-CafeCS2CrosshairShareCode`, `ConvertTo-CafeCS2CrosshairPreviewModel`, `Draw-CafeCS2CrosshairPreview`, `Show-CafeCS2CrosshairPreviewDialog` | `Test-CS2GraphicsCapture.ps1`, `Test-CfgSensitivitySync.ps1`, `Test-CrosshairShareCode.ps1` |
 | Steam/CS2 discovery and Play + Exec | `cafe.bat`: `Get-SteamLibraryRoots`, `Get-CS2SteamLaunchArguments`, `Start-CS2WithProfileCfg` | `Test-SteamPathDiscovery.ps1`, `Test-SteamLaunchOptions.ps1` |
 | Workshop cleanup | `cafe.bat`: `Get-CafeWorkshopCleanupSnapshot`, `Remove-CafeWorkshopItems`, `Show-CafeWorkshopCleanupDialog` | `Test-WorkshopCleanup.ps1` |
 | Logitech live DPI | `cafe.bat`: `Set-LogitechLiveDPI`, `Invoke-LogitechDPISetAndReadback` | `Test-LogitechDPI.ps1`, `Test-SuperlightDevice.ps1` |
@@ -73,28 +73,29 @@ Each profile's canonical preset is stored independently in `graphics/<ProfileNam
 
 The editor can copy only CS2 graphics fields from another profile or reset current editor values from that profile's canonical preset. Copying starts with a **Choose a profile to copy from...** placeholder; **Copy graphics** stays disabled until another profile is selected. Neither action saves automatically. Apply Graphics reports confirmed/applied and changed fields, skipped fields, display-mode fallback details, NVIDIA scaling verification, and the backup path. Partial results are shown as warnings.
 
-The **CS2 / Apps** editor can capture saved settings from the running Steam client's active account after CS2 is closed.
+The **CS2 / Apps** editor's **Capture from CS2** action first asks which groups to read: **Graphics**, **Sensitivity**, **Crosshair**, **Viewmodel**, **HUD and Radar**, **Audio**, and individual bind groups for **Movement**, **Jump**, **Crouch**, **Walk**, **Use**, **Voice**, **Reload**, **Inspect**, **Scoreboard**, **Attack**, **Secondary attack**, **Drop**, **Weapon slots**, **Grenade keys**, and **Scroll wheel**.
 
-- Video capture reads only that account's `userdata/<id>/730/local/cfg/cs2_video.txt`, rechecks the active account after reading, validates recognized keys and ranges, converts refresh numerator/denominator to whole Hz, and preserves profile values for missing settings.
-- It imports CS2 resolution, aspect, fullscreen, and supported video quality values. NVIDIA scaling is outside `cs2_video.txt`, so the profile's current scaling value is retained.
-- It also captures sensitivity and every saved `cl_crosshair*` user-convar with a numeric or boolean value; new crosshair convars do not need an allowlist update. In-game CFG binds are not captured.
-- When saved `sensitivity` is captured, it replaces the selected profile's staged sensitivity in the **Mouse** tab. Capture alone does not save or sync it; the user reviews the values and chooses Save Locally or Save & Sync.
-- Capture does not edit game files or sync immediately. The user reviews the imported values, then chooses Save Locally or Save & Sync. Captured convars stay staged under the selected profile until sync.
-- The Mouse tab can import a pasted crosshair share code offline. It supports legacy `CSGO-...` versions 1, 3, and 4 plus current `CS...` version 1, validates the base-57 code and checksum, and shows the decoded convars and conversion notes before staging.
-- Share-code import stages crosshair and scope-dot convars for only the selected profile. It preserves an already staged sensitivity value, changes no game files, and waits for Save & Sync and the existing CFG diff confirmation before publishing. Legacy-v1 codes lack a source-resolution field and can only be approximated; weapon-dependent gap and retired outline thickness are called out when present.
+- Capture requires CS2 to be closed. It reads selected values from the active Steam account's `cs2_video.txt`, `cs2_user_convars_0_slot0.vcfg`, and `cs2_user_keys_0_slot0.vcfg` as applicable, then rechecks the active account. Readers validate file sizes, supported names and values; missing entries leave the profile's current values alone.
+- A review table compares the selected profile value with the saved CS2 value. Graphics options use readable choices (including the existing CS2-to-profile FSR mapping); console variables show their CS2 menu label and command name. Bind rows show the key, current profile action, captured action, and **Will replace** status for a key collision.
+- The user can uncheck individual rows and choose **Import selected** or **Cancel**. Cancel leaves staged data unchanged. Import stages only accepted rows in the selected profile's editor state. Capture does not save, sync, or modify game files.
+- Reviewed graphics values flow through the existing graphics preset controls. Reviewed console variables and binds stay pending for the selected profile CFG and use the existing Save Locally / Save & Sync flow, including the exact CFG diff confirmation before a remote write. Other CFG binds remain untouched; duplicate bindings for an imported key are rejected as ambiguous.
+- Supported console-variable groups include sensitivity, crosshair, viewmodel, HUD/radar, and the explicit numeric/boolean audio set. The current capture schema accepts every saved `cl_crosshair*` value that passes validation. Bind actions use an explicit allowlist for common movement, combat, interaction, weapon-slot, grenade-slot, voice, and reload groups; scroll-wheel keys can use a single supported action. Explicit saved unbinds are reviewed when they match a supported current profile or launcher-baseline action. If a captured action is also still bound to another key that CS2 did not list, Capture shows an optional **Possible leftover** row that can be checked to clear the old key; the user decides whether to remove that old bind. Missing saved binds are never cleared automatically.
+- When sensitivity is imported, it appears on the **Mouse** tab. A captured push-to-talk key also updates the profile's existing voice-key field so Save & Sync does not overwrite it with an older value.
+- The implementation and parser/review fixtures are in `tools/Test-CS2GraphicsCapture.ps1` and `tools/Test-CfgSensitivitySync.ps1`; the graphics fixture retains FSR mapping checks.
+
+### CS2 Extras editor
+
+The **CS2 / Apps** profile editor has an **Edit Extras** action that opens a separate modal window with Crosshair, Viewmodel, HUD and Radar, Audio, and Binds sections. It reads the selected profile CFG plus the launcher's baseline, overlays any already-staged values, and shows CS2-style setting names beside command names. The convar catalog includes the supported capture names and recognized settings already in the selected profile CFG.
+
+- Each setting can be edited directly; entering `0` is a real numeric value. Blank values and the **Reset selected to default**, **Reset section to defaults**, or **Reset selected group** buttons stage removal of that profile's override. Reset is stored as a separate pending sentinel and removes the matching CFG line during Save & Sync; it does not write `0` or `unbind`.
+- Binds show the current profile action and editable action. Common movement, jump, crouch, walk, use, reload, voice, inspect, scoreboard, attack, drop, weapon-slot, grenade-slot, and scroll-wheel actions are available through an explicit action list.
+- Staging bind replacements asks for confirmation and names the key/action changes. Moving push-to-talk identifies the old key that will be removed and keeps the profile's separate voice-key field in sync. Only one push-to-talk key may remain active.
+- The existing **Push-to-talk key (CFG)** selector and Extras Binds editor share the same staged PTT choice. Extras displays the selector's current choice. If the selector disagrees with a staged PTT bind, saving removes that stale generic bind and sync uses the selected profile voice-key value; matching PTT actions staged by Extras or Capture remain intact. Explicit reset markers and unrelated staged binds are preserved.
+- Extras stages into the same per-profile pending convar/bind maps as Capture CS2. It changes no CS2 files and performs no GitHub writes. **Save Locally** persists the pending maps; **Save & Sync** applies them to the selected profile CFG with the existing exact diff confirmation and read-back verification.
+- Regression fixtures for CFG reset sentinels, numeric zero, added bind groups, and editor wiring are in `tools/Test-CfgSensitivitySync.ps1` and `tools/Test-CS2GraphicsCapture.ps1`.
+
+The **Mouse** tab can also import a pasted crosshair share code offline. It supports legacy `CSGO-...` versions 1, 3, and 4 plus current `CS...` version 1, validates the base-57 code and checksum, and shows the decoded convars and conversion notes before staging. Share-code import merges decoded crosshair and scope-dot convars into the selected profile’s staged settings, preserving sensitivity and any other staged groups while incoming crosshair values replace matching staged crosshair keys. It changes no game files and waits for Save & Sync and the existing CFG diff confirmation before publishing. Legacy-v1 codes lack a source-resolution field and can only be approximated; weapon-dependent gap and retired outline thickness are called out when present.
 - The decoder is a local PowerShell implementation based on the documented layouts in `akiver/csgo-sharecode` (MIT); CafeLauncher does not require Node.js or network access to decode. Attribution and license text are in `THIRD_PARTY_NOTICES.md`. Current scope-dot convars are allowed through the selected profile CFG writer.
-
-### Planned: Capture CS2 group selection and review (not implemented)
-
-Extend the existing **Capture CS2** action in the selected profile editor with a review step before settings are staged.
-
-- On click, show a group-selection dialog with **Graphics**, **Sensitivity**, **Crosshair**, **Viewmodel**, **HUD and Radar**, **Audio**, and **Binds**. Under **Binds**, allow selecting the supported actions/keys: jump, voice, reload, grenade keys, and scroll wheel.
-- After the user continues, require CS2 to be closed. Read only the selected settings from the active Steam account's saved files: `cs2_video.txt` for graphics, `cs2_user_convars_0_slot0.vcfg` for console variables, and `cs2_user_keys_0_slot0.vcfg` for binds. Recheck the active account after reading, validate supported fields and ranges, and preserve existing profile values for missing or unsupported settings.
-- Show a review window before importing. Compare the current selected-profile value with the captured value. Use names that match CS2's menu labels where available (for example **Global Shadow Quality**, **Viewmodel FOV**, **Radar Scale**, and **Master Volume**), and show the console-variable name in smaller text where useful. Display graphics choices as readable labels, including the existing FSR value translation.
-- For each selected bind, show the key, its current action in the selected profile CFG, and the captured action. Label a key collision **Will replace** and show both actions. Preserve unrelated CFG lines. If the profile CFG has duplicate or ambiguous bindings for a key, require review rather than guessing. Represent an explicit saved unbind when the source file supports it; never infer an unbind from a missing entry.
-- Provide **Import selected** and **Cancel**. Only **Import selected** stages the reviewed values for the selected profile. Canceling or closing the window leaves all prior staged values unchanged.
-- Keep the existing **Save Locally** / **Save & Sync** workflow. Route reviewed graphics through the existing graphics preset staging, and reviewed console variables/binds through the selected profile CFG staging and existing CFG diff confirmation. Capture itself must not edit CS2 files, save locally, authorize GitHub, or sync.
-- Extend fixture-based verification for each saved-file parser; readable value conversion; CS2-running rejection; account changes during capture; partial/missing values; quoted and duplicate binds; same-key replacement previews; explicit unbind handling; and cancel-versus-import staging behavior. Retain the current FSR capture mapping coverage.
 
 ### CS2 crosshair visual preview
 
@@ -119,10 +120,10 @@ Dashboard **Apply Graphics** is a separate action from the normal profile Apply 
 
 ### Local and GitHub persistence
 
-- **Save Locally** writes the profile settings and `GraphicsSettings` snapshot to `%LOCALAPPDATA%\CafeLauncher\profiles.json`, and marks that profile `SyncPending`.
+- **Save Locally** writes the profile settings, `GraphicsSettings`, and pending captured CS2 console variables/binds to `%LOCALAPPDATA%\CafeLauncher\profiles.json`, and marks that profile `SyncPending`.
 - **Apply Graphics** uses a validated pending local `GraphicsSettings` preset first, including while offline. This prevents a cloud fetch from overwriting unsynced edits.
 - **Save & Sync to GitHub** confirms the destination, then updates `profiles/<ProfileName>.json` and `graphics/<ProfileName>.json`.
-- It may also update the selected profile's CFG with captured sensitivity, crosshair convars, and push-to-talk changes. Unrelated binds and commands are preserved; captured crosshair values are never copied to another profile.
+- It may also update the selected profile's CFG with captured sensitivity, selected console variables and binds, and push-to-talk changes. Bind collisions are shown before import and again in the exact CFG diff; unrelated binds and commands are preserved. Captured values are never copied to another profile.
 - Modern CS2 crosshair aliases are migrated: `cl_crosshairgap` → `cl_crosshair_gap`, `cl_crosshairsize` → `cl_crosshair_length`, and `cl_crosshairthickness` → `cl_crosshair_thickness`. If both old and modern names were captured, the modern value wins and the old command is removed. Legacy-only capture remains supported.
 - During Save & Sync, obsolete crosshair commands are removed only from the selected profile CFG and only when Capture CS2 includes the current corresponding control: old `cl_crosshaircolor` requires all captured RGB channels; old alpha/use-alpha requires `cl_crosshaircolor_a`; weapon-value gap requires `cl_crosshair_gap`; outline thickness requires `cl_crosshair_drawoutline`. Partial captures leave those old lines intact. No guessed conversion is made for removed behaviors.
 - Before a selected CFG write, the editor previews exact line changes and asks for confirmation. Removing weapon-based gap or old outline thickness shows a warning that the old behavior/value has no direct replacement; canceling the preview leaves GitHub unchanged and keeps local edits pending.
@@ -291,3 +292,37 @@ The checks cover:
 - Graphics fixtures, legacy DVC range mapping without hardware writes, read-only NVIDIA capability inventory, mocked Steam launch arguments, and status reporting.
 
 A real CS2/Steam account and monitor smoke test remains separate.
+
+## Plan: Add CS2 Extras to Edit Profile
+
+Add an **Edit Extras** button to each profile’s **Edit Profile → CS2 / Apps** tab. It opens a separate window for settings that don’t fit the existing graphics or sensitivity controls.
+
+| Section | What it would edit |
+|---|---|
+| Crosshair | Supported crosshair and grenade-crosshair settings |
+| Viewmodel | FOV, offsets, preset position, recoil, and preferred hand |
+| HUD and Radar | HUD scale, target ID, radar scale and behavior, safe zone, and loadout display |
+| Audio | Master and voice volume, music and round sounds, and supported audio options |
+| Binds | Separate groups for Jump, Voice / push-to-talk, Reload, Grenade keys, and Scroll wheel, plus additional common groups after their commands are verified |
+
+Use CS2-style setting names in the window, and show the underlying command where it helps identify exactly what will change. For binds, show the key and action, and warn when saving would replace another bind—including a different push-to-talk key.
+
+### Reset behavior
+
+Give each setting and group a **Reset to CS2 default** option. Reset should remove that profile’s override so the normal CS2 or launcher baseline value takes effect.
+
+A numeric value of `0` should be available only where zero is a valid setting. It shouldn’t be treated as a universal reset: for example, zero volume means mute. For binds, reset should restore the baseline binding; it shouldn’t blindly write `unbind`.
+
+### Save flow
+
+Edits should be staged for the selected profile. The user reviews them, then uses the existing **Save Locally** or **Save & Sync** flow. Opening or editing Extras should not itself write to CS2 files or sync anything.
+
+### Suggested implementation order
+
+1. Check how the existing profile CFG and Play + Exec baseline handle overrides and defaults.
+2. Add the Extras window for crosshair, viewmodel, HUD / radar, and audio.
+3. Add bind editing with a verified command allowlist and clear replacement warnings.
+4. Add per-setting and per-group reset behavior.
+5. Test staging, local save, sync, bind conflicts, and reset behavior.
+
+The Extras window is implemented in `cafe.bat`, with focused regression fixtures updated. The Windows PowerShell 5.1 tests still need to run in a Windows environment.

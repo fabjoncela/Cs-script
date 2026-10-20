@@ -3897,6 +3897,8 @@ function Get-CafeCS2GraphicsCapture {
 
 # CS2 user settings captured only on demand; keyed by target profile.
 $script:CapturedCS2Convars=@{}
+$script:CapturedCS2Binds=@{}
+$script:CafeCS2ResetToDefaultMarker='__CAFE_RESET_TO_DEFAULT__'
 function ConvertFrom-CafeCS2CrosshairShareCode {
     param([Parameter(Mandatory=$true)][string]$ShareCode)
     # Share-code layouts documented by akiver/csgo-sharecode (MIT):
@@ -4016,7 +4018,7 @@ function Set-CafeProfileCrosshairImportStage {
     $staged=@{}
     if($State.Contains($ProfileName)){
         $existing=$State[$ProfileName]
-        if($existing -is [System.Collections.IDictionary] -and $existing.Contains('sensitivity')){$staged['sensitivity']=[string]$existing['sensitivity']}
+        if($existing -is [System.Collections.IDictionary]){foreach($name in $existing.Keys){$staged[[string]$name]=[string]$existing[$name]}}
     }
     foreach($name in $Values.Keys){
         if([string]$name -notmatch '^cl_(?:crosshair[a-z0-9_]*|ironsight_(?:dot_scale|usecrosshaircolor))$'){throw ('Unexpected crosshair share-code setting: '+[string]$name)}
@@ -4318,8 +4320,44 @@ function Show-CafeCS2CrosshairPreviewDialog {
     $preview.Add_MouseUp({param($sender,$eventArgs)if($eventArgs.Button -eq [System.Windows.Forms.MouseButtons]::Left){$previewState.Dragging=$false;$sender.Capture=$false}}.GetNewClosure())
     try{return ($dialog.ShowDialog($OwnerWindow) -eq [System.Windows.Forms.DialogResult]::OK)}finally{foreach($raster in $previewRasters.Values){$raster.Dispose()};$dialog.Dispose()}
 }
+function Get-CafeCS2ConvarGroup {
+    param([string]$Name)
+    if($Name -match '^(?:sensitivity|sensitivity_y_scale|zoom_sensitivity_ratio)$'){return 'Sensitivity'}
+    if($Name -match '^(?:crosshair|cl_(?:crosshair[a-z0-9_]*|grenadecrosshair[a-z0-9_]*|ironsight_(?:dot_scale|usecrosshaircolor)))$'){return 'Crosshair'}
+    if($Name -match '^(?:viewmodel_(?:fov|offset_[xyz]|presetpos|recoil)|cl_prefer_lefthanded)$'){return 'Viewmodel'}
+    if($Name -match '^(?:hud_scaling|hud_showtargetid|cl_hud_color|cl_hud_radar_scale|cl_hud_radar_background_alpha|cl_radar_(?:always_centered|scale|icon_scale_min|rotate|square_with_scoreboard)|safezonex|safezoney|cl_showloadout)$'){return 'HUD and Radar'}
+    if($Name -match '^(?:volume|voice_scale|voice_modenable|snd_(?:headphone_eq|mapobjective_volume|menumap_volume|menumusic_volume|musicvolume|othermusic_volume|mvp_volume|roundend_volume|roundstart_volume|roundaction_volume|tensecondwarning_volume|deathcamera_volume|mute_losefocus|mixahead|spatialize_lerp|steamaudio_enable_perspective_correction))$'){return 'Audio'}
+    return ''
+}
+function ConvertFrom-CafeCS2UserConvarsText {
+    param([Parameter(Mandatory=$true)][string]$Text,[string[]]$Groups=@('Sensitivity','Crosshair'))
+    if($Text.Length -gt 1048576 -or $Text -notmatch '(?m)^\s*\{\s*$' -or $Text -notmatch '(?m)^\s*\}\s*$'){
+        throw 'Unrecognized or oversized user convars KeyValues file.'
+    }
+    $values=@{}
+    $rx='(?im)^\s*"(?<name>[a-z][a-z0-9_]*)"\s+"(?<v>[^"\r\n]{1,40})"\s*$'
+    foreach($match in [regex]::Matches($Text,$rx)){
+        $name=[string]$match.Groups['name'].Value
+        $group=Get-CafeCS2ConvarGroup -Name $name
+        if(-not $group -or $group -notin $Groups){continue}
+        $value=[string]$match.Groups['v'].Value
+        if($values.ContainsKey($name)){throw ('Duplicate CS2 saved '+$name+' values.')}
+        if($value -notmatch '^(true|false|-?[0-9]+(\.[0-9]+)?)$'){
+            throw ('Unexpected '+$name+' in convars.')
+        }
+        $number=0.0
+        if($value -match '^-?[0-9]+(?:\.[0-9]+)?$' -and
+           (-not [double]::TryParse($value,[Globalization.NumberStyles]::Float,[Globalization.CultureInfo]::InvariantCulture,[ref]$number) -or
+            [double]::IsNaN($number) -or [double]::IsInfinity($number) -or [Math]::Abs($number) -gt 100000)){
+            throw ('Out-of-range '+$name+' in convars.')
+        }
+        if($name -ceq 'sensitivity' -and ($number -le 0 -or $number -gt 20)){throw 'Out-of-range sensitivity in saved CS2 convars.'}
+        $values[$name]=$value
+    }
+    return $values
+}
 function Get-CafeCS2UserConvarsCapture {
-    param($Source)
+    param($Source,[string[]]$Groups=@('Sensitivity','Crosshair'))
     if(@(Get-Process -Name 'cs2' -ErrorAction SilentlyContinue).Count){throw 'Close CS2 before capture.'}
     $path=Join-Path (Split-Path -Parent $Source.Path) 'cs2_user_convars_0_slot0.vcfg'
     if(-not (Test-Path -LiteralPath $path -PathType Leaf)){throw ('No saved CS2 user convars for Steam account '+$Source.AccountID)}
@@ -4327,21 +4365,480 @@ function Get-CafeCS2UserConvarsCapture {
     if($file.Length -lt 10 -or $file.Length -gt 1048576){throw 'Invalid user convars file size.'}
     $reader=New-Object IO.StreamReader($path,$true)
     try{$content=$reader.ReadToEnd()}finally{$reader.Dispose()}
-    if($content -notmatch '(?m)^\s*\{\s*$' -or $content -notmatch '(?m)^\s*\}\s*$'){throw 'Unrecognized user convars KeyValues format.'}
-    $values=@{}
-    $rx='(?im)^\s*"(?<name>sensitivity|cl_crosshair[a-z0-9_]*)"\s+"(?<v>[^"\r\n]{1,40})"\s*$'
-    foreach($match in [regex]::Matches($content,$rx)){
-        $name=[string]$match.Groups['name'].Value
-        $value=[string]$match.Groups['v'].Value
-        if($values.ContainsKey($name)){throw ('Duplicate CS2 saved '+$name+' values.')}
-        if($value -notmatch '^(true|false|-?[0-9]+(\.[0-9]+)?)$'){
-            throw ('Unexpected '+$name+' in convars.')
-        }
-        $values[$name]=$value
-    }
+    $values=ConvertFrom-CafeCS2UserConvarsText -Text $content -Groups $Groups
     $active=Get-CafeActiveSteamVideoFile
     if($active.AccountID -cne $Source.AccountID -or $active.Path -ine $Source.Path){throw 'Steam account changed during capture.'}
     return [pscustomobject]@{Values=$values;Path=$path}
+}
+function Get-CafeCS2BindGroup {
+    param([string]$Key,[string]$Command)
+    if($Key -in @('MWHEELUP','MWHEELDOWN')){return 'Scroll wheel'}
+    $groups=@{
+        '+forward'='Movement';'+back'='Movement';'+moveleft'='Movement';'+moveright'='Movement'
+        '+jump'='Jump';'+duck'='Crouch';'+sprint'='Walk';'+use'='Use';'+reload'='Reload'
+        '+voicerecord'='Voice';'+lookatweapon'='Inspect';'+showscores'='Scoreboard'
+        '+attack'='Attack';'+attack2'='Secondary attack';'drop'='Drop'
+    }
+    if($groups.ContainsKey($Command)){return [string]$groups[$Command]}
+    if($Command -match '^slot([1-5])$'){return 'Weapon slots'}
+    if($Command -match '^slot(?:6|7|8|9|10)$'){return 'Grenade keys'}
+    return ''
+}
+function Set-CafeCS2PendingVoiceBind {
+    param([string]$ProfileName,[string]$Key,$BindsByProfile)
+    if($null -eq $BindsByProfile -or $BindsByProfile -isnot [System.Collections.IDictionary]){throw 'Pending CS2 binds must be a profile dictionary.'}
+    $normalized=[string]$Key.ToUpperInvariant()
+    if($normalized -and $normalized -notmatch '^(?:[A-Z]|[0-9]|F(?:[1-9]|1[0-2])|MOUSE[1-5]|CAPSLOCK|ALT|SHIFT|CTRL|SPACE|TAB)$'){throw ('Unsupported push-to-talk key: '+$normalized)}
+    $next=[ordered]@{}
+    if($BindsByProfile.Contains($ProfileName)){foreach($bindKey in $BindsByProfile[$ProfileName].Keys){$next[[string]$bindKey.ToUpperInvariant()]=$BindsByProfile[$ProfileName][$bindKey]}}
+    foreach($bindKey in @($next.Keys)){if([string]$next[$bindKey] -ceq '+voicerecord'){[void]$next.Remove($bindKey)}}
+    if($normalized){$next[$normalized]='+voicerecord'}
+    if($next.Count){$BindsByProfile[$ProfileName]=$next}else{[void]$BindsByProfile.Remove($ProfileName)}
+    return ,$next
+}
+function Remove-CafeCS2PendingVoiceBindActions {
+    param([string]$ProfileName,$BindsByProfile)
+    if($null -eq $BindsByProfile -or $BindsByProfile -isnot [System.Collections.IDictionary]){throw 'Pending CS2 binds must be a profile dictionary.'}
+    if(-not $BindsByProfile.Contains($ProfileName)){return ([ordered]@{})}
+    $next=[ordered]@{}
+    foreach($bindKey in $BindsByProfile[$ProfileName].Keys){
+        $command=[string]$BindsByProfile[$ProfileName][$bindKey]
+        if($command -ceq '+voicerecord'){continue}
+        $next[[string]$bindKey.ToUpperInvariant()]=$command
+    }
+    if($next.Count){$BindsByProfile[$ProfileName]=$next}else{[void]$BindsByProfile.Remove($ProfileName)}
+    return ,$next
+}
+function ConvertFrom-CafeCS2UserKeysText {
+    param([Parameter(Mandatory=$true)][string]$Text,[string[]]$Groups=@('Movement','Jump','Crouch','Walk','Use','Voice','Reload','Inspect','Scoreboard','Attack','Secondary attack','Drop','Weapon slots','Grenade keys','Scroll wheel'),[switch]$IncludeUnbound)
+    if($Text.Length -gt 1048576){throw 'Saved CS2 binds file exceeds the 1 MB safety limit.'}
+    $section=[regex]::Match($Text,'(?ims)"bindings"\s*\{(?<body>.*?)^\s*\}')
+    if(-not $section.Success){throw 'Saved CS2 binds file has no recognized bindings section.'}
+    $values=[ordered]@{}
+    $rx='(?im)^[ \t]*"(?<key>[A-Z0-9_]{1,24})"[ \t]+"(?<command>(?:\\.|[^"\\]){0,180})"[ \t]*$'
+    foreach($match in [regex]::Matches($section.Groups['body'].Value,$rx)){
+        $key=[string]$match.Groups['key'].Value.ToUpperInvariant()
+        $command=[string]$match.Groups['command'].Value
+        $command=$command.Replace([string][char]92+[string][char]34,[string][char]34).Replace([string][char]92+[string][char]92,[string][char]92)
+        if($command.Contains('"') -or $command.Contains(';') -or $command.IndexOfAny([char[]]@([char]10,[char]13)) -ge 0 -or $command.Length -gt 180){throw ('Unsafe or unsupported saved bind for '+$key+'.')}
+        $group=Get-CafeCS2BindGroup -Key $key -Command $command
+        if($values.Contains($key)){throw ('Duplicate saved CS2 binding for '+$key+'.')}
+        if(-not $command -and $IncludeUnbound -and $key -notin @('MWHEELUP','MWHEELDOWN')){$values[$key]=$command;continue}
+        if(-not $group -or $group -notin $Groups){continue}
+        $values[$key]=$command
+        if(@($values.Values|Where-Object{$_ -ceq '+voicerecord'}).Count -gt 1){throw 'Multiple saved CS2 push-to-talk bindings were found; review them manually.'}
+    }
+    return $values
+}
+function Get-CafeCS2UserKeysCapture {
+    param($Source,[string[]]$Groups=@('Movement','Jump','Crouch','Walk','Use','Voice','Reload','Inspect','Scoreboard','Attack','Secondary attack','Drop','Weapon slots','Grenade keys','Scroll wheel'))
+    if(@(Get-Process -Name 'cs2' -ErrorAction SilentlyContinue).Count){throw 'Close CS2 before capture.'}
+    $path=Join-Path (Split-Path -Parent $Source.Path) 'cs2_user_keys_0_slot0.vcfg'
+    if(-not (Test-Path -LiteralPath $path -PathType Leaf)){throw ('No saved CS2 key bindings for Steam account '+$Source.AccountID)}
+    $file=Get-Item -LiteralPath $path -ErrorAction Stop
+    if($file.Length -lt 10 -or $file.Length -gt 1048576){throw 'Invalid saved CS2 binds file size.'}
+    $reader=New-Object IO.StreamReader($path,$true)
+    try{$content=$reader.ReadToEnd()}finally{$reader.Dispose()}
+    $values=ConvertFrom-CafeCS2UserKeysText -Text $content -Groups $Groups -IncludeUnbound
+    $active=Get-CafeActiveSteamVideoFile
+    if($active.AccountID -cne $Source.AccountID -or $active.Path -ine $Source.Path){throw 'Steam account changed during capture.'}
+    return [pscustomobject]@{Values=$values;Path=$path}
+}
+function Get-CafeCS2CfgBindMap {
+    param([string]$Content,[string[]]$Keys=@())
+    $values=@{}
+    $rx='(?im)^[ \t]*(?:bind[ \t]+"?(?<key>[A-Z0-9_]{1,24})"?[ \t]+"(?<command>(?:\\.|[^"\\])*)"|unbind[ \t]+"?(?<unboundKey>[A-Z0-9_]{1,24})"?)[ \t]*(?://[^\r\n]*)?(?=\r?$)'
+    foreach($match in [regex]::Matches($Content,$rx)){
+        $key=if($match.Groups['key'].Success){[string]$match.Groups['key'].Value.ToUpperInvariant()}else{[string]$match.Groups['unboundKey'].Value.ToUpperInvariant()}
+        if($Keys.Count -and $key -notin $Keys){continue}
+        if($values.ContainsKey($key)){throw ('Multiple profile CFG binds for '+$key+'; resolve them manually before importing.')}
+        $values[$key]=if($match.Groups['command'].Success){[string]$match.Groups['command'].Value}else{''}
+    }
+    return $values
+}
+function Set-CafeCapturedBindsInCfg {
+    param([string]$Content,$Binds)
+    $text=$Content
+    if($null -eq $Binds){return $text}
+    $newline=if($text.Contains(([string][char]13+[string][char]10))){[string][char]13+[string][char]10}else{[string][char]10}
+    $capturedVoice=$false
+    foreach($capturedCommand in $Binds.Values){if([string]$capturedCommand -ceq '+voicerecord'){$capturedVoice=$true;break}}
+    if($capturedVoice){
+        $voicePattern='(?im)^[ \t]*bind[ \t]+"?[A-Z0-9_]{1,24}"?[ \t]+"?\+voicerecord"?[ \t]*(?://[^\r\n]*)?(?:\r\n|\n|$)'
+        $text=[regex]::Replace($text,$voicePattern,'')
+    }
+    foreach($key in @($Binds.Keys|Sort-Object)){
+        $normalized=[string]$key.ToUpperInvariant()
+        if($normalized -notmatch '^[A-Z0-9_]{1,24}$'){throw ('Unsupported captured bind key: '+$key)}
+        $command=[string]$Binds[$key]
+        if($command -ceq $script:CafeCS2ResetToDefaultMarker){
+            $existingResetBind=Get-CafeCS2CfgBindMap -Content $text -Keys @($normalized)
+            if($existingResetBind.ContainsKey($normalized) -and -not (Get-CafeCS2BindGroup -Key $normalized -Command ([string]$existingResetBind[$normalized]))){throw ('Refusing to reset unsupported profile CFG bind '+$normalized+'.')}
+            $resetRx='(?im)^[ \t]*(?:bind[ \t]+"?'+[regex]::Escape($normalized)+'"?[ \t]+"(?:\\.|[^"\\])*"|unbind[ \t]+"?'+[regex]::Escape($normalized)+'"?)[ \t]*(?://[^\r\n]*)?(?:\r\n|\n|$)'
+            $resetMatches=[regex]::Matches($text,$resetRx)
+            if($resetMatches.Count -gt 1){throw ('Duplicate profile CFG bind for '+$normalized+'.')}
+            if($resetMatches.Count -eq 1){$resetMatch=$resetMatches[0];$text=$text.Remove($resetMatch.Index,$resetMatch.Length)}
+            continue
+        }
+        if($command.Contains('"') -or $command.Contains(';') -or $command.IndexOfAny([char[]]@([char]10,[char]13)) -ge 0 -or $command.Length -gt 180){throw ('Unsafe captured bind command for '+$normalized)}
+        if($command -and -not (Get-CafeCS2BindGroup -Key $normalized -Command $command)){throw ('Unsupported captured action for '+$normalized)}
+        # Empty actions are explicit CS2 unbinds or reviewed cleanup rows. The key is
+        # validated above and the exact CFG diff remains subject to user confirmation.
+        [void](Get-CafeCS2CfgBindMap -Content $text -Keys @($normalized))
+        $escapedKey=[regex]::Escape($normalized)
+        $rx='(?im)^[ \t]*(?:bind[ \t]+"?'+$escapedKey+'"?[ \t]+"(?:\\.|[^"\\])*"|unbind[ \t]+"?'+$escapedKey+'"?)[ \t]*(?://[^\r\n]*)?(?:\r\n|\n|$)'
+        $matches=[regex]::Matches($text,$rx)
+        if($matches.Count -gt 1){throw ('Duplicate profile CFG bind for '+$normalized+'.')}
+        $line=if($command){'bind "'+$normalized+'" "'+$command+'"'}else{'unbind "'+$normalized+'"'}
+        if($matches.Count){$m=$matches[0];$text=$text.Remove($m.Index,$m.Length).Insert($m.Index,$line+$newline)}
+        else{if($text.Length -and -not $text.EndsWith([string][char]10)){$text+=$newline};$text+=$line+$newline}
+    }
+    return $text
+}
+function Get-CafeCS2CfgConvarValue {
+    param([string]$Content,[string]$Name)
+    $rx='(?im)^[ \t]*'+[regex]::Escape($Name)+'[ \t]+"(?<value>[^"\r\n]*)"[ \t]*(?://[^\r\n]*)?(?=\r?$)'
+    $matches=[regex]::Matches($Content,$rx)
+    if($matches.Count -gt 1){throw ('Multiple profile CFG values for '+$Name+'.')}
+    if(-not $matches.Count){return $null}
+    return [string]$matches[0].Groups['value'].Value
+}
+function Get-CafeCS2CfgConvarMap {
+    param([string]$Content)
+    $values=[ordered]@{}
+    $rx='(?im)^[ \t]*(?<name>[a-z][a-z0-9_]*)[ \t]+"?(?<value>true|false|-?[0-9]+(?:\.[0-9]+)?)"?[ \t]*(?://[^\r\n]*)?(?=\r?$)'
+    foreach($match in [regex]::Matches($Content,$rx)){
+        $name=[string]$match.Groups['name'].Value
+        if(-not (Get-CafeCS2ConvarGroup -Name $name)){continue}
+        if($values.Contains($name)){throw ('Multiple profile CFG values for '+$name+'.')}
+        $values[$name]=[string]$match.Groups['value'].Value
+    }
+    return $values
+}
+function Get-CafeCS2CaptureDisplayName {
+    param([string]$Name)
+    $labels=@{
+        Width='Resolution width';Height='Resolution height';RefreshHz='Refresh Rate';AspectRatioMode='Aspect Ratio';Fullscreen='Display Mode'
+        MSAASamples='Multisampling Anti-Aliasing';ShadowQuality='Global Shadow Quality';DynamicShadows='Dynamic Shadows';TextureDetail='Model / Texture Detail'
+        ShaderQuality='Shader Detail';ParticleDetail='Particle Detail';AmbientOcclusion='Ambient Occlusion';HDRDetail='High Dynamic Range';NvidiaReflex='NVIDIA Reflex Low Latency'
+        TextureFiltering='Texture Filtering';FSRDetail='FidelityFX Super Resolution';VSync='Vertical Sync';CMAA='CMAA2'
+        sensitivity='Sensitivity';crosshair='Enable Crosshair';cl_crosshair_drawoutline='Draw Crosshair Outline';cl_crosshair_recoil='Follow Recoil';cl_crosshair_sniper_width='Sniper Scope Width';cl_crosshair_t='T Style';cl_crosshairalpha='Crosshair Alpha';cl_crosshaircolor='Crosshair Color';cl_crosshaircolor_a='Crosshair Alpha';cl_crosshaircolor_r='Crosshair Red';cl_crosshaircolor_g='Crosshair Green';cl_crosshaircolor_b='Crosshair Blue';cl_crosshairdot='Center Dot';cl_crosshairgap='Crosshair Gap';cl_crosshair_gap='Crosshair Gap';cl_crosshair_length='Crosshair Size';cl_crosshair_thickness='Crosshair Thickness';cl_crosshairgap_useweaponvalue='Follow Weapon Accuracy';cl_crosshairsize='Crosshair Size';cl_crosshairstyle='Crosshair Style';cl_crosshairthickness='Crosshair Thickness';cl_crosshairusealpha='Use Custom Alpha';cl_crosshair_dynamic_maxdist_splitratio='Dynamic Split Ratio';cl_crosshair_dynamic_splitalpha_innermod='Inner Split Alpha';cl_crosshair_dynamic_splitalpha_outermod='Outer Split Alpha';cl_crosshair_dynamic_splitdist='Dynamic Split Distance';cl_fixedcrosshairgap='Fixed Crosshair Gap';cl_grenadecrosshair_decoy='Decoy Grenade Crosshair';cl_grenadecrosshair_explosive='HE Grenade Crosshair';cl_grenadecrosshair_fire='Fire Grenade Crosshair';cl_grenadecrosshair_flash='Flashbang Crosshair';cl_grenadecrosshair_keepusercrosshair='Keep User Crosshair';cl_grenadecrosshair_smoke='Smoke Grenade Crosshair';cl_grenadecrosshairdelay_decoy='Decoy Crosshair Delay';cl_grenadecrosshairdelay_explosive='HE Crosshair Delay';cl_grenadecrosshairdelay_fire='Fire Crosshair Delay';cl_grenadecrosshairdelay_flash='Flashbang Crosshair Delay';cl_grenadecrosshairdelay_smoke='Smoke Crosshair Delay';cl_ironsight_dot_scale='Iron Sight Dot Scale';cl_ironsight_usecrosshaircolor='Use Crosshair Color for Iron Sights';viewmodel_fov='Viewmodel FOV';viewmodel_offset_x='Viewmodel Offset X';viewmodel_offset_y='Viewmodel Offset Y';viewmodel_offset_z='Viewmodel Offset Z'
+        viewmodel_presetpos='Viewmodel preset position';viewmodel_recoil='Viewmodel recoil';cl_prefer_lefthanded='Preferred hand'
+        hud_scaling='HUD scale';hud_showtargetid='Show Target ID';cl_hud_color='HUD Color';cl_hud_radar_scale='Radar HUD Scale';cl_hud_radar_background_alpha='Radar Background Opacity';cl_radar_scale='Radar Scale';cl_radar_always_centered='Radar Always Centered';cl_radar_square_with_scoreboard='Square Radar with Scoreboard'
+        cl_radar_icon_scale_min='Radar Icon Scale';cl_radar_rotate='Radar Rotates';cl_showloadout='Always Show Inventory';safezonex='HUD safe zone X';safezoney='HUD safe zone Y'
+        volume='Master Volume';voice_scale='VOIP Volume';voice_modenable='Enable Voice';snd_headphone_eq='EQ Profile';snd_mapobjective_volume='Map Objective Volume';snd_menumap_volume='Menu Map Volume';snd_menumusic_volume='Menu Music Volume';snd_musicvolume='Music Volume';snd_othermusic_volume='Other Music Volume';snd_mvp_volume='MVP Music Volume'
+        snd_roundend_volume='Round end volume';snd_roundstart_volume='Round start volume';snd_roundaction_volume='Round action volume';snd_tensecondwarning_volume='10 second warning volume';snd_deathcamera_volume='Death camera volume';snd_mute_losefocus='Play audio when game is in background';snd_mixahead='Audio mix ahead';snd_spatialize_lerp='L/R Isolation';snd_steamaudio_enable_perspective_correction='Perspective correction'
+    }
+    if($labels.ContainsKey($Name)){return [string]$labels[$Name]}
+    return $Name
+}
+function Format-CafeCS2CaptureValue {
+    param([string]$Name,[string]$Value)
+    if($Name -in @('AspectRatioMode','Fullscreen','FSRDetail')){
+        $maps=@{AspectRatioMode=@('4:3','16:9','16:10');Fullscreen=@('Windowed','Fullscreen');FSRDetail=@('Disabled','Performance','Balanced','Quality','Ultra Quality')}
+        $index=[int]$Value;$map=[string[]]$maps[$Name]
+        if($index -ge 0 -and $index -lt $map.Count){return $map[$index]}
+    }
+    if($Name -eq 'MSAASamples'){if([int]$Value -eq 0){return 'None'};return ($Value+'x MSAA')}
+    if($Value -ceq 'true'){return 'On'}
+    if($Value -ceq 'false'){return 'Off'}
+    return $Value
+}
+function Show-CafeCS2ExtrasDialog {
+    param([string]$ProfileName,[string]$ProfileCfg,$PendingConvars,$PendingBinds,$OwnerWindow)
+    $resetMarker=[string]$script:CafeCS2ResetToDefaultMarker
+    $baseConvars=Get-CafeCS2CfgConvarMap -Content $ProfileCfg
+    $launcherBaseline=Get-CS2ProfileBaselineCfgText
+    $baselineConvars=Get-CafeCS2CfgConvarMap -Content $launcherBaseline
+    $effectiveConvars=[ordered]@{};foreach($key in $baseConvars.Keys){$effectiveConvars[$key]=$baseConvars[$key]}
+    if($PendingConvars){foreach($key in $PendingConvars.Keys){if([string]$PendingConvars[$key] -ceq $resetMarker){[void]$effectiveConvars.Remove([string]$key)}else{$effectiveConvars[[string]$key]=[string]$PendingConvars[$key]}}}
+    $baseBinds=Get-CafeCS2CfgBindMap -Content $ProfileCfg
+    $baselineBinds=Get-CafeCS2CfgBindMap -Content $launcherBaseline
+    $effectiveBinds=[ordered]@{};foreach($key in $baseBinds.Keys){$effectiveBinds[$key]=$baseBinds[$key]}
+    if($PendingBinds){foreach($key in $PendingBinds.Keys){if([string]$PendingBinds[$key] -ceq $resetMarker){[void]$effectiveBinds.Remove([string]$key)}else{$effectiveBinds[[string]$key.ToUpperInvariant()]=[string]$PendingBinds[$key]}}}
+    $initialEffectiveBinds=[ordered]@{};foreach($key in $effectiveBinds.Keys){$initialEffectiveBinds[$key]=$effectiveBinds[$key]}
+
+    $catalog=@(
+        'crosshair','cl_crosshair_drawoutline','cl_crosshair_recoil','cl_crosshair_sniper_width','cl_crosshair_t','cl_crosshairalpha','cl_crosshaircolor','cl_crosshaircolor_b','cl_crosshaircolor_g','cl_crosshaircolor_r','cl_crosshairdot','cl_crosshairgap','cl_crosshair_gap','cl_crosshair_length','cl_crosshair_thickness','cl_crosshaircolor_a','cl_crosshairgap_useweaponvalue','cl_crosshairsize','cl_crosshairstyle','cl_crosshairthickness','cl_crosshairusealpha','cl_crosshair_dynamic_maxdist_splitratio','cl_crosshair_dynamic_splitalpha_innermod','cl_crosshair_dynamic_splitalpha_outermod','cl_crosshair_dynamic_splitdist','cl_fixedcrosshairgap','cl_grenadecrosshair_decoy','cl_grenadecrosshair_explosive','cl_grenadecrosshair_fire','cl_grenadecrosshair_flash','cl_grenadecrosshair_keepusercrosshair','cl_grenadecrosshair_smoke','cl_grenadecrosshairdelay_decoy','cl_grenadecrosshairdelay_explosive','cl_grenadecrosshairdelay_fire','cl_grenadecrosshairdelay_flash','cl_grenadecrosshairdelay_smoke','cl_ironsight_dot_scale','cl_ironsight_usecrosshaircolor',
+        'viewmodel_fov','viewmodel_offset_x','viewmodel_offset_y','viewmodel_offset_z','viewmodel_presetpos','viewmodel_recoil','cl_prefer_lefthanded',
+        'hud_scaling','hud_showtargetid','cl_hud_color','cl_hud_radar_scale','cl_hud_radar_background_alpha','cl_radar_always_centered','cl_radar_scale','cl_radar_icon_scale_min','cl_radar_rotate','cl_radar_square_with_scoreboard','safezonex','safezoney','cl_showloadout',
+        'volume','voice_scale','voice_modenable','snd_headphone_eq','snd_mapobjective_volume','snd_menumap_volume','snd_menumusic_volume','snd_musicvolume','snd_othermusic_volume','snd_mvp_volume','snd_roundend_volume','snd_roundstart_volume','snd_roundaction_volume','snd_tensecondwarning_volume','snd_deathcamera_volume','snd_mute_losefocus','snd_mixahead','snd_spatialize_lerp','snd_steamaudio_enable_perspective_correction'
+    )
+    $catalogExtraNames=@($baseConvars.Keys);if($PendingConvars){$catalogExtraNames+=@($PendingConvars.Keys)}
+    foreach($name in $catalogExtraNames){if($name -ne 'sensitivity' -and (Get-CafeCS2ConvarGroup -Name $name) -and $name -notin $catalog){$catalog+=([string]$name)}}
+    $groups=@('Crosshair','Viewmodel','HUD and Radar','Audio')
+    $form=New-Object System.Windows.Forms.Form
+    $form.Text='Extras - '+$ProfileName+' CS2 profile';$form.ClientSize=New-Object System.Drawing.Size(980,660);$form.MinimumSize=New-Object System.Drawing.Size(830,540)
+    $form.StartPosition='CenterParent';$form.BackColor=$PANEL;$form.ForeColor=$WHITE;$form.Font=New-Object System.Drawing.Font('Segoe UI',9)
+    $tabs=New-Object System.Windows.Forms.TabControl;$tabs.Dock='Fill';$form.Controls.Add($tabs)
+    $grids=@{}
+    foreach($group in $groups){
+        $page=New-Object System.Windows.Forms.TabPage;$page.Text=$group;$page.BackColor=$PANEL;$page.AutoScroll=$true;[void]$tabs.TabPages.Add($page)
+        $grid=New-Object System.Windows.Forms.DataGridView;$grid.Location=[System.Drawing.Point]::new(10,10);$grid.Size=[System.Drawing.Size]::new(940,520);$grid.Anchor='Top,Bottom,Left,Right'
+        $grid.AllowUserToAddRows=$false;$grid.AllowUserToDeleteRows=$false;$grid.AllowUserToResizeRows=$false;$grid.RowHeadersVisible=$false;$grid.MultiSelect=$false;$grid.SelectionMode='FullRowSelect';$grid.AutoSizeRowsMode='AllCells';$grid.BackgroundColor=$CARD;$grid.ForeColor=$BLACK
+        foreach($spec in @(@('Setting',190),@('CS2 command',290),@('Current profile',210),@('Edit value (blank = default)',220))){$column=New-Object System.Windows.Forms.DataGridViewTextBoxColumn;$column.Name=$spec[0];$column.HeaderText=$spec[0];$column.Width=[int]$spec[1];$column.ReadOnly=($spec[0] -ne 'Edit value (blank = default)');[void]$grid.Columns.Add($column)}
+        $page.Controls.Add($grid);$grids[$group]=$grid
+        $names=@($catalog|Where-Object{(Get-CafeCS2ConvarGroup -Name $_) -eq $group}|Sort-Object -Unique)
+        foreach($name in $names){
+            $hasBase=$baseConvars.Contains($name);$baseValue=if($hasBase){[string]$baseConvars[$name]}else{''}
+            $editValue=if($effectiveConvars.Contains($name)){[string]$effectiveConvars[$name]}else{''}
+            $defaultValue=if($baselineConvars.Contains($name)){[string]$baselineConvars[$name]}else{$null}
+            $current=if($hasBase){Format-CafeCS2CaptureValue $name $baseValue}elseif($null -ne $defaultValue){(Format-CafeCS2CaptureValue $name $defaultValue)+' (launcher baseline)'}else{'CS2 default'}
+            $row=$grid.Rows.Add((Get-CafeCS2CaptureDisplayName $name),$name,$current,$editValue);$grid.Rows[$row].Tag=[pscustomobject]@{Name=$name;BaseValue=$baseValue;HasBase=$hasBase}
+        }
+        $resetSelected=New-Object System.Windows.Forms.Button;$resetSelected.Text='Reset selected to default';$resetSelected.Location=[System.Drawing.Point]::new(12,540);$resetSelected.Size=[System.Drawing.Size]::new(165,30);$resetSelected.Anchor='Bottom,Left'
+        $resetGroup=New-Object System.Windows.Forms.Button;$resetGroup.Text='Reset section to defaults';$resetGroup.Location=[System.Drawing.Point]::new(185,540);$resetGroup.Size=[System.Drawing.Size]::new(175,30);$resetGroup.Anchor='Bottom,Left'
+        $page.Controls.Add($resetSelected);$page.Controls.Add($resetGroup)
+        $resetSelected.Add_Click({if($grid.SelectedRows.Count){$grid.SelectedRows[0].Cells['Edit value (blank = default)'].Value=''}}.GetNewClosure())
+        $resetGroup.Add_Click({foreach($row in $grid.Rows){$row.Cells['Edit value (blank = default)'].Value=''}}.GetNewClosure())
+    }
+
+    $bindPage=New-Object System.Windows.Forms.TabPage;$bindPage.Text='Binds';$bindPage.BackColor=$PANEL;$bindPage.AutoScroll=$true;[void]$tabs.TabPages.Add($bindPage)
+    $bindGrid=New-Object System.Windows.Forms.DataGridView;$bindGrid.Location=[System.Drawing.Point]::new(10,10);$bindGrid.Size=[System.Drawing.Size]::new(940,450);$bindGrid.Anchor='Top,Bottom,Left,Right'
+    $bindGrid.AllowUserToAddRows=$false;$bindGrid.AllowUserToDeleteRows=$false;$bindGrid.AllowUserToResizeRows=$false;$bindGrid.RowHeadersVisible=$false;$bindGrid.MultiSelect=$false;$bindGrid.SelectionMode='FullRowSelect';$bindGrid.AutoSizeRowsMode='AllCells';$bindGrid.BackgroundColor=$CARD;$bindGrid.ForeColor=$BLACK
+    foreach($spec in @(@('Group',150),@('Key',150),@('Current profile action',260),@('Edit action (blank = default)',330))){$column=New-Object System.Windows.Forms.DataGridViewTextBoxColumn;$column.Name=$spec[0];$column.HeaderText=$spec[0];$column.Width=[int]$spec[1];$column.ReadOnly=($spec[0] -ne 'Edit action (blank = default)');[void]$bindGrid.Columns.Add($column)}
+    $bindPage.Controls.Add($bindGrid)
+    $bindKeys=@($baseBinds.Keys)+@($baselineBinds.Keys);if($PendingBinds){$bindKeys+=@($PendingBinds.Keys)};$bindKeys=@($bindKeys|Sort-Object -Unique)
+    foreach($key in $bindKeys){
+        $key=[string]$key.ToUpperInvariant();$baseAction=if($baseBinds.ContainsKey($key)){[string]$baseBinds[$key]}else{''}
+        $action=if($effectiveBinds.Contains($key)){[string]$effectiveBinds[$key]}else{''}
+        $groupAction=if($action){$action}elseif($baseAction){$baseAction}elseif($baselineBinds.ContainsKey($key)){[string]$baselineBinds[$key]}else{''}
+        $group=Get-CafeCS2BindGroup -Key $key -Command $groupAction
+        if(-not $group -or $group -eq 'Scroll wheel' -and $key -notin @('MWHEELUP','MWHEELDOWN')){continue}
+        $defaultAction=if($baselineBinds.ContainsKey($key)){[string]$baselineBinds[$key]}else{$null}
+        $current=if($baseAction){$baseAction}elseif($null -ne $defaultAction){$defaultAction+' (launcher baseline)'}else{'CS2 default'}
+        $row=$bindGrid.Rows.Add($group,$key,$current,$action);$bindGrid.Rows[$row].Tag=[pscustomobject]@{Key=$key;HasBase=$baseBinds.ContainsKey($key);BaseAction=$baseAction}
+    }
+    $keyLabel=New-Object System.Windows.Forms.Label;$keyLabel.Text='New key';$keyLabel.Location=[System.Drawing.Point]::new(12,464);$keyLabel.Size=[System.Drawing.Size]::new(130,22);$keyLabel.Anchor='Bottom,Left';$bindPage.Controls.Add($keyLabel)
+    $actionLabel=New-Object System.Windows.Forms.Label;$actionLabel.Text='CS2 action';$actionLabel.Location=[System.Drawing.Point]::new(150,464);$actionLabel.Size=[System.Drawing.Size]::new(360,22);$actionLabel.Anchor='Bottom,Left';$bindPage.Controls.Add($actionLabel)
+    $keyInput=New-Object System.Windows.Forms.TextBox;$keyInput.Location=[System.Drawing.Point]::new(12,490);$keyInput.Size=[System.Drawing.Size]::new(130,28);$keyInput.Anchor='Bottom,Left'
+    $actionChoice=New-Object System.Windows.Forms.ComboBox;$actionChoice.DropDownStyle='DropDownList';$actionChoice.Location=[System.Drawing.Point]::new(150,490);$actionChoice.Size=[System.Drawing.Size]::new(360,28);$actionChoice.Anchor='Bottom,Left';$actionChoice.BackColor=$CARD;$actionChoice.ForeColor=$BLACK
+    $actionOptions=@('+forward','+back','+moveleft','+moveright','+jump','+duck','+sprint','+use','+reload','+voicerecord','+lookatweapon','+showscores','+attack','+attack2','drop','slot1','slot2','slot3','slot4','slot5','slot6','slot7','slot8','slot9','slot10','invprev','invnext')
+    $wheelActions=@('invprev','invnext')
+    foreach($wheelKey in @('MWHEELUP','MWHEELDOWN')){foreach($bindMap in @($effectiveBinds,$baselineBinds)){if($bindMap.ContainsKey($wheelKey)){$wheelAction=[string]$bindMap[$wheelKey];if($wheelAction -and $wheelAction -notin $actionOptions -and $wheelAction -notmatch '[";\r\n]' -and $wheelAction.Length -le 180){$actionOptions+= $wheelAction;$wheelActions+=$wheelAction}}}}
+    foreach($action in $actionOptions){$actionGroup=Get-CafeCS2BindGroup -Key 'KEY' -Command $action;if(-not $actionGroup -and $action -in $wheelActions){$actionGroup='Scroll wheel'};[void]$actionChoice.Items.Add(($actionGroup+' — '+$action))};if($actionChoice.Items.Count){$actionChoice.SelectedIndex=0}
+    $addBind=New-Object System.Windows.Forms.Button;$addBind.Text='Add bind';$addBind.Location=[System.Drawing.Point]::new(520,488);$addBind.Size=[System.Drawing.Size]::new(100,32);$addBind.Anchor='Bottom,Left'
+    $resetBind=New-Object System.Windows.Forms.Button;$resetBind.Text='Reset selected to default';$resetBind.Location=[System.Drawing.Point]::new(630,488);$resetBind.Size=[System.Drawing.Size]::new(170,32);$resetBind.Anchor='Bottom,Left'
+    $resetBindGroup=New-Object System.Windows.Forms.Button;$resetBindGroup.Text='Reset selected group';$resetBindGroup.Location=[System.Drawing.Point]::new(810,488);$resetBindGroup.Size=[System.Drawing.Size]::new(140,32);$resetBindGroup.Anchor='Bottom,Left'
+    $bindHint=New-Object System.Windows.Forms.Label;$bindHint.Text='Reset removes the profile override so the CS2 or launcher default can take effect. For scroll wheel keys, a single supported action may be edited.';$bindHint.Location=[System.Drawing.Point]::new(12,530);$bindHint.Size=[System.Drawing.Size]::new(910,42);$bindHint.Anchor='Bottom,Left,Right';$bindHint.ForeColor=$MUTED
+    $bindPage.Controls.Add($keyInput);$bindPage.Controls.Add($actionChoice);$bindPage.Controls.Add($addBind);$bindPage.Controls.Add($resetBind);$bindPage.Controls.Add($resetBindGroup);$bindPage.Controls.Add($bindHint)
+    $addBind.Add_Click({
+        $key=$keyInput.Text.Trim().ToUpperInvariant();if($key -notmatch '^[A-Z0-9_]{1,24}$'){[void][System.Windows.Forms.MessageBox]::Show('Enter a valid CS2 key name.','Extras bind','OK','Warning');return}
+        if(@($bindGrid.Rows|Where-Object{[string]$_.Cells['Key'].Value -ceq $key}).Count){[void][System.Windows.Forms.MessageBox]::Show('That key is already listed. Edit its row instead.','Extras bind','OK','Warning');return}
+        if($actionChoice.SelectedIndex -lt 0){return};$action=[string]$actionChoice.SelectedItem;$action=$action.Substring($action.LastIndexOf('—')+1).Trim()
+        $group=Get-CafeCS2BindGroup -Key $key -Command $action;if(-not $group -or $key -in @('MWHEELUP','MWHEELDOWN') -and $action -notin $actionOptions){[void][System.Windows.Forms.MessageBox]::Show('That key/action combination is not supported.','Extras bind','OK','Warning');return}
+        $baseAction=if($baseBinds.ContainsKey($key)){[string]$baseBinds[$key]}else{''};$defaultAction=if($baselineBinds.ContainsKey($key)){[string]$baselineBinds[$key]}else{$null};$current=if($baseAction){$baseAction}elseif($null -ne $defaultAction){$defaultAction+' (launcher baseline)'}else{'CS2 default'}
+        $row=$bindGrid.Rows.Add($group,$key,$current,$action);$bindGrid.Rows[$row].Tag=[pscustomobject]@{Key=$key;HasBase=$baseBinds.ContainsKey($key);BaseAction=$baseAction};$keyInput.Clear()
+    }.GetNewClosure())
+    $resetBind.Add_Click({if($bindGrid.SelectedRows.Count){$bindGrid.SelectedRows[0].Cells['Edit action (blank = default)'].Value=''}}.GetNewClosure())
+    $resetBindGroup.Add_Click({if(-not $bindGrid.SelectedRows.Count){return};$group=[string]$bindGrid.SelectedRows[0].Cells['Group'].Value;foreach($row in $bindGrid.Rows){if([string]$row.Cells['Group'].Value -ceq $group){$row.Cells['Edit action (blank = default)'].Value=''}}}.GetNewClosure())
+
+    $hint=New-Object System.Windows.Forms.Label;$hint.Text='Review the values here, then Stage Extras. Nothing is saved, synced, or written to CS2 until you use the profile editor buttons.';$hint.Location=[System.Drawing.Point]::new(12,620);$hint.Size=[System.Drawing.Size]::new(700,24);$hint.Anchor='Bottom,Left';$hint.ForeColor=$MUTED;$form.Controls.Add($hint)
+    $stage=New-Object System.Windows.Forms.Button;$stage.Text='Stage Extras';$stage.Location=[System.Drawing.Point]::new(740,610);$stage.Size=[System.Drawing.Size]::new(105,34);$stage.Anchor='Bottom,Right';$stage.BackColor=$BLUE;$stage.ForeColor=$WHITE
+    $cancel=New-Object System.Windows.Forms.Button;$cancel.Text='Cancel';$cancel.Location=[System.Drawing.Point]::new(855,610);$cancel.Size=[System.Drawing.Size]::new(95,34);$cancel.Anchor='Bottom,Right';$cancel.DialogResult=[System.Windows.Forms.DialogResult]::Cancel
+    $form.Controls.Add($stage);$form.Controls.Add($cancel);$state=[pscustomobject]@{Result=$null}
+    $stage.Add_Click({
+        try{
+            foreach($grid in $grids.Values){$grid.EndEdit()};$bindGrid.EndEdit()
+            $nextConvars=@{};if($PendingConvars){foreach($name in $PendingConvars.Keys){$nextConvars[[string]$name]=[string]$PendingConvars[$name]}}
+            foreach($grid in $grids.Values){foreach($row in $grid.Rows){$name=[string]$row.Tag.Name;$value=([string]$row.Cells['Edit value (blank = default)'].Value).Trim()
+                if(-not $value){if($baseConvars.Contains($name)){$nextConvars[$name]=$resetMarker}else{[void]$nextConvars.Remove($name)};continue}
+                $compareValue=if($baseConvars.Contains($name)){[string]$baseConvars[$name]}elseif($baselineConvars.Contains($name)){[string]$baselineConvars[$name]}else{$null}
+                if($null -ne $compareValue -and $compareValue -ceq $value){[void]$nextConvars.Remove($name)}else{$nextConvars[$name]=$value}
+            }}
+            [void](Set-CafeCapturedConvarsInCfg -Content '' -Values $nextConvars)
+            $nextBinds=[ordered]@{};if($PendingBinds){foreach($key in $PendingBinds.Keys){$nextBinds[[string]$key.ToUpperInvariant()]=[string]$PendingBinds[$key]}}
+            $seen=@{}
+            foreach($row in $bindGrid.Rows){$key=[string]$row.Tag.Key;$action=([string]$row.Cells['Edit action (blank = default)'].Value).Trim();if($seen.ContainsKey($key)){throw ('Duplicate key '+$key+'.')};$seen[$key]=$true
+                if(-not $action){if($baseBinds.ContainsKey($key)){$nextBinds[$key]=$resetMarker}else{[void]$nextBinds.Remove($key)};continue}
+                if(-not (Get-CafeCS2BindGroup -Key $key -Command $action)){throw ('Unsupported CS2 bind action for '+$key+': '+$action)}
+                if($key -in @('MWHEELUP','MWHEELDOWN') -and $action -notin $actionOptions){throw ('Unsupported scroll-wheel action for '+$key+': '+$action)}
+                $compareAction=if($baseBinds.ContainsKey($key)){[string]$baseBinds[$key]}elseif($baselineBinds.ContainsKey($key)){[string]$baselineBinds[$key]}else{$null}
+                if($null -ne $compareAction -and $compareAction -ceq $action){[void]$nextBinds.Remove($key)}else{$nextBinds[$key]=$action}
+            }
+            [void](Set-CafeCapturedBindsInCfg -Content '' -Binds $nextBinds)
+            $stagedVoiceKeys=@($nextBinds.Keys|Where-Object{[string]$nextBinds[$_] -ceq '+voicerecord'}|Sort-Object)
+            if($stagedVoiceKeys.Count -gt 1){throw 'Only one push-to-talk key can be staged for a profile.'}
+            $effectiveVoice=[ordered]@{}
+            if($stagedVoiceKeys.Count -eq 1){
+                $chosenVoice=[string]$stagedVoiceKeys[0]
+                foreach($key in @($baseBinds.Keys)+@($nextBinds.Keys)){
+                    if([string]$key -cne $chosenVoice -and ($baseBinds.ContainsKey($key) -and [string]$baseBinds[$key] -ceq '+voicerecord' -or $nextBinds.ContainsKey($key) -and [string]$nextBinds[$key] -ceq '+voicerecord')){
+                        if($baseBinds.ContainsKey($key)){$nextBinds[[string]$key]=$resetMarker}else{[void]$nextBinds.Remove([string]$key)}
+                    }
+                }
+                $effectiveVoice[$chosenVoice]=$true
+            }else{
+                foreach($key in $baseBinds.Keys){if([string]$baseBinds[$key] -ceq '+voicerecord'){$effectiveVoice[$key]=$true}}
+                foreach($key in $nextBinds.Keys){if([string]$nextBinds[$key] -ceq $resetMarker){[void]$effectiveVoice.Remove([string]$key)}elseif([string]$nextBinds[$key] -ceq '+voicerecord'){$effectiveVoice[[string]$key]=$true}else{[void]$effectiveVoice.Remove([string]$key)}}
+                if($effectiveVoice.Count -gt 1){throw 'Only one push-to-talk key can be active in a profile.'}
+            }
+            $baseVoice=@($baseBinds.Keys|Where-Object{[string]$baseBinds[$_] -ceq '+voicerecord'}|Sort-Object)
+            $newVoice=@($effectiveVoice.Keys|Sort-Object)
+            $allowedVoiceKeys=@('V','MOUSE4','MOUSE5','CAPSLOCK','ALT','K','SPACE','SHIFT','CTRL','TAB','A','B','C','D','E','F','G','H','I','J','L','M','N','O','P','Q','R','S','T','U','W','X','Y','Z','0','1','2','3','4','5','6','7','8','9','F1','F2','F3','F4','F5','F6','F7','F8','F9','F10','F11','F12','MOUSE1','MOUSE2','MOUSE3')
+            if($newVoice.Count -and $newVoice[0] -notin $allowedVoiceKeys){throw ('Push-to-talk key '+$newVoice[0]+' is not supported by the profile editor.')}
+            $voiceChanged=(($baseVoice -join ',') -cne ($newVoice -join ','))
+            $changeNotes=New-Object 'System.Collections.Generic.List[string]'
+            foreach($row in $bindGrid.Rows){$key=[string]$row.Tag.Key;$action=([string]$row.Cells['Edit action (blank = default)'].Value).Trim();$before=if($initialEffectiveBinds.Contains($key)){[string]$initialEffectiveBinds[$key]}elseif($baselineBinds.ContainsKey($key)){[string]$baselineBinds[$key]}else{'CS2 default'}
+                if($action -and $action -cne $before){$changeNotes.Add($key+': '+$before+' → '+$action)}
+            }
+            if($newVoice.Count){$otherVoiceKeys=@($initialEffectiveBinds.Keys|Where-Object{$_ -cne $newVoice[0] -and [string]$initialEffectiveBinds[$_] -ceq '+voicerecord'}|Sort-Object);if($otherVoiceKeys.Count){$changeNotes.Add('Push-to-talk will move to '+$newVoice[0]+'; existing '+($otherVoiceKeys -join ', ')+' binding(s) will be removed.')}}
+            if($changeNotes.Count){$answer=[System.Windows.Forms.MessageBox]::Show(("Review bind changes:`r`n`r`n"+($changeNotes -join "`r`n")+"`r`n`r`nStage these changes for the profile?"),'Review Extras binds','YesNo','Warning');if($answer -ne [System.Windows.Forms.DialogResult]::Yes){return}}
+            $state.Result=[pscustomobject]@{Convars=$nextConvars;Binds=$nextBinds;VoiceKey=$(if($newVoice.Count){[string]$newVoice[0]}else{''});VoiceKeyChanged=$voiceChanged}
+            $form.DialogResult=[System.Windows.Forms.DialogResult]::OK;$form.Close()
+        }catch{[void][System.Windows.Forms.MessageBox]::Show($_.Exception.Message,'Extras validation','OK','Warning')}
+    }.GetNewClosure())
+    $form.AcceptButton=$stage;$form.CancelButton=$cancel
+    try{if($form.ShowDialog($OwnerWindow) -ne [System.Windows.Forms.DialogResult]::OK){return $null};return $state.Result}finally{$form.Dispose()}
+}
+function Get-CafeCS2CaptureReviewRows {
+    param([string[]]$Groups,$GraphicsCapture,$ConvarCapture,$BindCapture,[string]$ProfileCfg,$BasePreset,[string]$BaseCfg='')
+    $rows=New-Object 'System.Collections.Generic.List[object]'
+    if($Groups -contains 'Graphics' -and $GraphicsCapture){
+        foreach($field in @($GraphicsCapture.CapturedFields)){
+            $before=[string]$BasePreset.Settings[$field];$after=[string]$GraphicsCapture.Preset.Settings[$field]
+            $rows.Add([pscustomobject]@{Group='Graphics';Name=(Get-CafeCS2CaptureDisplayName $field);Command=$field;Before=(Format-CafeCS2CaptureValue $field $before);After=(Format-CafeCS2CaptureValue $field $after);Status=$(if($before -ceq $after){'No change'}else{'Change'});Kind='Graphics';Key='';Value=$after;Import=($before -cne $after)})
+        }
+        foreach($field in @($GraphicsCapture.MissingFields)){
+            $rows.Add([pscustomobject]@{Group='Graphics';Name=(Get-CafeCS2CaptureDisplayName $field);Command=$field;Before=(Format-CafeCS2CaptureValue $field ([string]$BasePreset.Settings[$field]));After='Not saved; keep current';Status='Missing';Kind='Missing';Key='';Value='';Import=$false})
+        }
+    }
+    if($ConvarCapture){
+        foreach($name in @($ConvarCapture.Values.Keys|Sort-Object)){
+            $current=Get-CafeCS2CfgConvarValue -Content $ProfileCfg -Name $name
+            $before=if($null -eq $current){'Not set in profile CFG'}else{Format-CafeCS2CaptureValue $name $current}
+            $after=Format-CafeCS2CaptureValue $name ([string]$ConvarCapture.Values[$name])
+            $rows.Add([pscustomobject]@{Group=(Get-CafeCS2ConvarGroup $name);Name=(Get-CafeCS2CaptureDisplayName $name);Command=$name;Before=$before;After=$after;Status=$(if($null -ne $current -and $current -ceq [string]$ConvarCapture.Values[$name]){'No change'}else{'Change'});Kind='Convar';Key='';Value=[string]$ConvarCapture.Values[$name];Import=($null -eq $current -or $current -cne [string]$ConvarCapture.Values[$name])})
+        }
+    }
+    if($BindCapture){
+        $profileBindMap=Get-CafeCS2CfgBindMap -Content $ProfileCfg
+        $baselineBindMap=Get-CafeCS2CfgBindMap -Content $BaseCfg
+        $capturedActionKeys=@{}
+        foreach($key in @($BindCapture.Values.Keys|Sort-Object)){
+            $current=if($profileBindMap.ContainsKey($key)){[string]$profileBindMap[$key]}else{$null}
+            $captured=[string]$BindCapture.Values[$key]
+            $baseline=if($baselineBindMap.ContainsKey($key)){[string]$baselineBindMap[$key]}else{$null}
+            $previous=if($null -ne $current){$current}else{$baseline}
+            $group=if($captured){Get-CafeCS2BindGroup -Key $key -Command $captured}elseif($null -ne $previous){Get-CafeCS2BindGroup -Key $key -Command $previous}else{''}
+            if(-not $group -or $group -notin $Groups){continue}
+            $before=if($null -ne $current -and $current){$current}elseif($null -ne $current){'Unbound'}elseif($null -ne $baseline -and $baseline){$baseline+' (launcher baseline)'}elseif($null -ne $baseline){'Unbound (launcher baseline)'}else{'No profile bind'}
+            $after=if($captured){$captured}else{'Unbound'}
+            $status=if($null -eq $previous){'New key'}elseif($previous -ceq $captured){'No change'}else{'Will replace'}
+            $willRemoveVoiceConflict=$false
+            if($captured -ceq '+voicerecord'){
+                $otherVoiceKeys=@($profileBindMap.Keys|Where-Object{$_ -cne $key -and [string]$profileBindMap[$_] -ceq '+voicerecord'}|Sort-Object)
+                if($otherVoiceKeys.Count){
+                    $before+='; also bound on '+($otherVoiceKeys -join ', ')+' (will be removed)'
+                    $status='Will replace '+($otherVoiceKeys -join ', ')
+                    $willRemoveVoiceConflict=$true
+                }
+            }
+            $rows.Add([pscustomobject]@{Group=$group;Name=$key;Command='bind '+$key;Before=$before;After=$after;Status=$status;Kind='Bind';Key=$key;Value=$captured;Import=($null -eq $previous -or $previous -cne $captured -or $willRemoveVoiceConflict)})
+            if($captured){if(-not $capturedActionKeys.ContainsKey($captured)){$capturedActionKeys[$captured]=[System.Collections.Generic.List[string]]::new()};$capturedActionKeys[$captured].Add([string]$key)}
+        }
+        $candidateKeys=@($baselineBindMap.Keys)+@($profileBindMap.Keys);$candidateKeys=@($candidateKeys|Sort-Object -Unique)
+        foreach($key in $candidateKeys){
+            if($BindCapture.Values.Contains($key)){continue}
+            $action=if($profileBindMap.ContainsKey($key)){[string]$profileBindMap[$key]}elseif($baselineBindMap.ContainsKey($key)){[string]$baselineBindMap[$key]}else{''}
+            if(-not $action -or $action -ceq '+voicerecord' -or -not $capturedActionKeys.ContainsKey($action)){continue}
+            $group=Get-CafeCS2BindGroup -Key $key -Command $action
+            if(-not $group -or $group -notin $Groups){continue}
+            $before=if($profileBindMap.ContainsKey($key)){$action}else{$action+' (launcher baseline)'}
+            $rows.Add([pscustomobject]@{Group=$group;Name=$key;Command='unbind '+$key;Before=$before;After='Unbound if selected (not listed in CS2 file)';Status='Possible leftover';Kind='Bind';Key=$key;Value='';Import=$false})
+        }
+    }
+    return ,$rows.ToArray()
+}
+function Show-CafeCS2CaptureOptionsDialog {
+    param($OwnerWindow)
+    $form=New-Object System.Windows.Forms.Form
+    $form.Text='Choose CS2 settings to capture';$form.ClientSize=New-Object System.Drawing.Size(440,425)
+    $form.StartPosition='CenterParent';$form.FormBorderStyle='FixedDialog';$form.MaximizeBox=$false;$form.MinimizeBox=$false
+    $form.BackColor=$PANEL;$form.ForeColor=$WHITE;$form.Font=New-Object System.Drawing.Font('Segoe UI',10)
+    $label=New-Object System.Windows.Forms.Label;$label.Text='Choose the groups to read from CS2 saved files. You will review each change before it is staged.'
+    $label.Location=New-Object System.Drawing.Point(18,16);$label.Size=New-Object System.Drawing.Size(405,45);$form.Controls.Add($label)
+    $groups=@('Graphics','Sensitivity','Crosshair','Viewmodel','HUD and Radar','Audio','Movement','Jump','Crouch','Walk','Use','Voice','Reload','Inspect','Scoreboard','Attack','Secondary attack','Drop','Weapon slots','Grenade keys','Scroll wheel')
+    $list=New-Object System.Windows.Forms.CheckedListBox;$list.Location=New-Object System.Drawing.Point(20,68);$list.Size=New-Object System.Drawing.Size(395,270)
+    $list.BackColor=$CARD;$list.ForeColor=$WHITE;$list.BorderStyle='FixedSingle';$list.CheckOnClick=$true
+    foreach($group in $groups){[void]$list.Items.Add($group,$true)}
+    $form.Controls.Add($list)
+    $ok=New-Object System.Windows.Forms.Button;$ok.Text='Continue';$ok.Location=New-Object System.Drawing.Point(190,355);$ok.Size=New-Object System.Drawing.Size(105,38);$ok.DialogResult=[System.Windows.Forms.DialogResult]::OK;$form.Controls.Add($ok)
+    $cancel=New-Object System.Windows.Forms.Button;$cancel.Text='Cancel';$cancel.Location=New-Object System.Drawing.Point(305,355);$cancel.Size=New-Object System.Drawing.Size(105,38);$cancel.DialogResult=[System.Windows.Forms.DialogResult]::Cancel;$form.Controls.Add($cancel)
+    $form.AcceptButton=$ok;$form.CancelButton=$cancel
+    try{if($form.ShowDialog($OwnerWindow) -ne [System.Windows.Forms.DialogResult]::OK){return $null};return ,@($list.CheckedItems|ForEach-Object{[string]$_})}finally{$form.Dispose()}
+}
+function Show-CafeCS2CaptureReviewDialog {
+    param([object[]]$Rows,$OwnerWindow)
+    if(-not $Rows.Count){throw 'No supported saved settings were found in the selected groups.'}
+    $form=New-Object System.Windows.Forms.Form
+    $form.Text='Review captured CS2 settings';$form.ClientSize=New-Object System.Drawing.Size(980,560);$form.MinimumSize=New-Object System.Drawing.Size(800,430)
+    $form.StartPosition='CenterParent';$form.BackColor=$PANEL;$form.ForeColor=$WHITE;$form.Font=New-Object System.Drawing.Font('Segoe UI',9)
+    $grid=New-Object System.Windows.Forms.DataGridView;$grid.Location=New-Object System.Drawing.Point(12,12);$grid.Size=New-Object System.Drawing.Size(956,470)
+    $grid.Anchor='Top,Bottom,Left,Right';$grid.AllowUserToAddRows=$false;$grid.AllowUserToDeleteRows=$false;$grid.AllowUserToResizeRows=$false
+    $grid.RowHeadersVisible=$false;$grid.MultiSelect=$false;$grid.SelectionMode='FullRowSelect';$grid.AutoSizeRowsMode='AllCells';$grid.BackgroundColor=$CARD;$grid.ForeColor=$BLACK
+    $grid.Columns.Add((New-Object System.Windows.Forms.DataGridViewCheckBoxColumn -Property @{Name='Import';HeaderText='Import';Width=55}))|Out-Null
+    foreach($spec in @(@('Group',105),@('Setting / key',190),@('Current profile',220),@('Saved in CS2',220),@('Review',115))){$col=New-Object System.Windows.Forms.DataGridViewTextBoxColumn;$col.Name=$spec[0];$col.HeaderText=$spec[0];$col.Width=[int]$spec[1];$col.ReadOnly=$true;[void]$grid.Columns.Add($col)}
+    foreach($item in $Rows){$rowIndex=$grid.Rows.Add([bool]$item.Import,[string]$item.Group,([string]$item.Name+' ('+[string]$item.Command+')'),[string]$item.Before,[string]$item.After,[string]$item.Status);$grid.Rows[$rowIndex].Tag=$item}
+    $form.Controls.Add($grid)
+    $hint=New-Object System.Windows.Forms.Label;$hint.Text='Uncheck changes you do not want. Possible leftover rows are optional old-key cleanup; missing saved binds are never cleared automatically.';$hint.Location=New-Object System.Drawing.Point(16,490);$hint.Size=New-Object System.Drawing.Size(700,24);$hint.Anchor='Bottom,Left';$form.Controls.Add($hint)
+    $import=New-Object System.Windows.Forms.Button;$import.Text='Import selected';$import.Location=New-Object System.Drawing.Point(730,510);$import.Size=New-Object System.Drawing.Size(112,34);$import.Anchor='Bottom,Right';$import.BackColor=$BLUE;$import.ForeColor=$WHITE;$form.Controls.Add($import)
+    $cancel=New-Object System.Windows.Forms.Button;$cancel.Text='Cancel';$cancel.Location=New-Object System.Drawing.Point(852,510);$cancel.Size=New-Object System.Drawing.Size(112,34);$cancel.Anchor='Bottom,Right';$cancel.DialogResult=[System.Windows.Forms.DialogResult]::Cancel;$form.Controls.Add($cancel)
+    $state=[pscustomobject]@{Rows=$null}
+    $import.Add_Click({$grid.EndEdit();$selected=New-Object 'System.Collections.Generic.List[object]';foreach($row in $grid.Rows){if([bool]$row.Cells['Import'].Value){$selected.Add($row.Tag)}};if($selected.Count -eq 0){[void][System.Windows.Forms.MessageBox]::Show('Select at least one change to import.','Capture CS2','OK','Information');return};$state.Rows=$selected.ToArray();$form.DialogResult=[System.Windows.Forms.DialogResult]::OK;$form.Close()}.GetNewClosure())
+    $form.CancelButton=$cancel
+    try{if($form.ShowDialog($OwnerWindow) -ne [System.Windows.Forms.DialogResult]::OK){return $null};return ,$state.Rows}finally{$form.Dispose()}
+}
+function Invoke-CafeCS2CaptureReview {
+    param([string]$ProfileName,$BasePreset,[string[]]$Groups,$OwnerWindow)
+    $videoCapture=$null;$convarCapture=$null;$bindCapture=$null;$profileCfg=''
+    if($Groups -contains 'Graphics'){$videoCapture=Get-CafeCS2GraphicsCapture -ProfileName $ProfileName -BasePreset $BasePreset}
+    else{if(@(Get-Process -Name 'cs2' -ErrorAction SilentlyContinue).Count){throw 'Close CS2 after saving its settings, then capture again.'};$source=Get-CafeActiveSteamVideoFile}
+    if($videoCapture){$source=[pscustomobject]@{Path=$videoCapture.Path;AccountID=$videoCapture.AccountID}}
+    $convarGroups=@($Groups|Where-Object{$_ -in @('Sensitivity','Crosshair','Viewmodel','HUD and Radar','Audio')})
+    if($convarGroups.Count){$convarCapture=Get-CafeCS2UserConvarsCapture -Source $source -Groups $convarGroups}
+    $bindGroups=@($Groups|Where-Object{$_ -in @('Movement','Jump','Crouch','Walk','Use','Voice','Reload','Inspect','Scoreboard','Attack','Secondary attack','Drop','Weapon slots','Grenade keys','Scroll wheel')})
+    if($bindGroups.Count){$bindCapture=Get-CafeCS2UserKeysCapture -Source $source -Groups $bindGroups}
+    $baselineCfg=if($bindCapture){Get-CS2ProfileBaselineCfgText}else{''}
+    $needsCfg=($convarCapture -and $convarCapture.Values.Count) -or ($bindCapture -and $bindCapture.Values.Count)
+    if($needsCfg){
+        $cfgName=[string]$script:GamingProfiles[$ProfileName].ConfigFile
+        $cfg=Get-GitHubCfgFromContentsApi -Repo $script:GithubRepo -Branch $script:GithubBranch -Path $cfgName
+        $profileCfg=[string]$cfg.Content
+    }
+    $rows=Get-CafeCS2CaptureReviewRows -Groups $Groups -GraphicsCapture $videoCapture -ConvarCapture $convarCapture -BindCapture $bindCapture -ProfileCfg $profileCfg -BasePreset $BasePreset -BaseCfg $baselineCfg
+    $selected=Show-CafeCS2CaptureReviewDialog -Rows $rows -OwnerWindow $OwnerWindow
+    if($null -eq $selected){return $null}
+    $graphicsRows=@($selected|Where-Object{$_.Kind -eq 'Graphics'})
+    $convarRows=@($selected|Where-Object{$_.Kind -eq 'Convar'})
+    $bindRows=@($selected|Where-Object{$_.Kind -eq 'Bind'})
+    $preset=$BasePreset
+    if($graphicsRows.Count){
+        $settings=[ordered]@{};foreach($field in $BasePreset.Settings.Keys){$settings[$field]=[int]$BasePreset.Settings[$field]}
+        foreach($row in $graphicsRows){if($row.Command -in $settings.Keys){$settings[[string]$row.Command]=[int]$row.Value}}
+        $refreshPolicy=if($graphicsRows.Command -contains 'RefreshHz'){'Exact'}else{[string]$BasePreset.RefreshPolicy}
+        $preset=ConvertTo-CafeGraphicsPreset -ProfileName $ProfileName -Preset ([pscustomobject]@{SchemaVersion=1;ProfileName=$ProfileName;DisplayPolicy='ApplyPreset';RefreshPolicy=$refreshPolicy;ScalingMode=[int]$BasePreset.ScalingMode;Settings=$settings})
+    }
+    if($convarRows.Count){
+        $staged=@{};if($script:CapturedCS2Convars.ContainsKey($ProfileName)){foreach($key in $script:CapturedCS2Convars[$ProfileName].Keys){$staged[$key]=$script:CapturedCS2Convars[$ProfileName][$key]}}
+        foreach($row in $convarRows){$staged[[string]$row.Command]=[string]$row.Value}
+        $script:CapturedCS2Convars[$ProfileName]=$staged
+        $sensitivity=$staged['sensitivity'];if($sensitivity){$script:PendingCfgSensitivity[$ProfileName]=ConvertTo-CafeCS2Sensitivity -Value ([string]$sensitivity)}
+    }
+    $voiceRow=$bindRows|Where-Object{$_.Value -ceq '+voicerecord'}|Select-Object -First 1
+    $voiceKey=$null;$voiceKeyChanged=$false
+    if($voiceRow){$voiceKey=[string]$voiceRow.Key;$voiceKeyChanged=$true;if($voiceKey -notmatch '^(?:[A-Z]|[0-9]|F(?:[1-9]|1[0-2])|MOUSE[1-5]|CAPSLOCK|ALT|SHIFT|CTRL|SPACE|TAB)$'){$voiceKey=''}}
+    else{
+        $currentVoiceKey=[string]$script:GamingProfiles[$ProfileName].VoicePushToTalkKey
+        if($currentVoiceKey -and @($bindRows|Where-Object{$_.Key -ceq $currentVoiceKey}).Count){$voiceKey='';$voiceKeyChanged=$true}
+    }
+    if($bindRows.Count){
+        $stagedBinds=[ordered]@{};if($script:CapturedCS2Binds.ContainsKey($ProfileName)){foreach($key in $script:CapturedCS2Binds[$ProfileName].Keys){$stagedBinds[$key]=$script:CapturedCS2Binds[$ProfileName][$key]}}
+        if($voiceRow){foreach($key in @($stagedBinds.Keys)){if([string]$key -cne [string]$voiceRow.Key -and [string]$stagedBinds[$key] -ceq '+voicerecord'){[void]$stagedBinds.Remove($key)}}}
+        foreach($row in $bindRows){$stagedBinds[[string]$row.Key]=[string]$row.Value}
+        $script:CapturedCS2Binds[$ProfileName]=$stagedBinds
+    }
+    return [pscustomobject]@{Preset=$preset;Imported=$selected;AccountID=[string]$source.AccountID;Convars=$convarRows.Count;Binds=$bindRows.Count;Graphics=$graphicsRows.Count;VoiceKey=$voiceKey;VoiceKeyChanged=$voiceKeyChanged;Sensitivity=($convarRows|Where-Object{$_.Command -eq 'sensitivity'}|Select-Object -First 1)}
 }
 function Set-CafeCapturedConvarsInCfg {
     param([string]$Content,$Values)
@@ -4365,12 +4862,23 @@ function Set-CafeCapturedConvarsInCfg {
     $modernToLegacy=@{}
     foreach($legacyName in $legacyToModern.Keys){$modernToLegacy[$legacyToModern[$legacyName]]=$legacyName}
     foreach($name in @($Values.Keys|Sort-Object)){
-        if($name -ne 'sensitivity' -and $name -notmatch '^cl_(?:crosshair[a-z0-9_]*|ironsight_(?:dot_scale|usecrosshaircolor))$'){continue}
+        if(-not (Get-CafeCS2ConvarGroup -Name $name)){continue}
+        $value=[string]$Values[$name]
         # If CS2 saved both spellings, prefer its newer spelling and do not
         # reintroduce the legacy command after it has been removed.
-        if($legacyToModern.ContainsKey($name) -and $Values.ContainsKey($legacyToModern[$name])){continue}
-        $value=[string]$Values[$name]
+        if($legacyToModern.ContainsKey($name) -and $Values.ContainsKey($legacyToModern[$name])){
+            $modernValue=[string]$Values[$legacyToModern[$name]]
+            if($modernValue -cne $script:CafeCS2ResetToDefaultMarker -or $value -cne $script:CafeCS2ResetToDefaultMarker){continue}
+        }
+        if($value -ceq $script:CafeCS2ResetToDefaultMarker){
+            $resetRx='(?im)^[ \t]*'+[regex]::Escape($name)+'[ \t]+(?:"[^"\r\n]*"|[^\s\r\n/;]+)[ \t]*(?://[^\r\n]*)?(?:\r\n|\n|$)'
+            $resetMatches=[regex]::Matches($text,$resetRx)
+            if($resetMatches.Count -gt 1){throw ('Duplicate active '+$name+' in destination CFG.')}
+            if($resetMatches.Count -eq 1){$resetMatch=$resetMatches[0];$text=$text.Remove($resetMatch.Index,$resetMatch.Length)}
+            continue
+        }
         if($value -notmatch '^(true|false|-?[0-9]+(\.[0-9]+)?)$'){throw ('Invalid CFG value for '+$name)}
+        if($value -match '^-?[0-9]+(?:\.[0-9]+)?$'){$number=0.0;if(-not [double]::TryParse($value,[Globalization.NumberStyles]::Float,[Globalization.CultureInfo]::InvariantCulture,[ref]$number) -or [double]::IsNaN($number) -or [double]::IsInfinity($number) -or [Math]::Abs($number) -gt 100000){throw ('Out-of-range CFG value for '+$name)}}
         $rx='(?im)^[ \t]*'+[regex]::Escape($name)+'[ \t]+(?:"[^"\r\n]*"|[^\s\r\n/;]+)[ \t]*(?://[^\r\n]*)?[ \t]*(?=\r?$)'
         $matches=[regex]::Matches($text,$rx)
         if($matches.Count -gt 1){throw ('Duplicate active '+$name+' in destination CFG.')}
@@ -4673,6 +5181,18 @@ function Load-ProfileSettings {
                     $script:PendingCfgSensitivity[$name]=$draftNumber.ToString('0.####',[Globalization.CultureInfo]::InvariantCulture)
                 }else{Write-Log "Ignored invalid local $name pending CFG sensitivity." 'WARN'}
             }
+            if($script:PendingSync[$name]){
+                $savedConvars=$savedProfile.Value.PSObject.Properties['PendingCapturedCS2Convars']
+                if($savedConvars -and $savedConvars.Value){
+                    $captured=@{};foreach($property in $savedConvars.Value.PSObject.Properties){$captured[[string]$property.Name]=[string]$property.Value}
+                    try{[void](Set-CafeCapturedConvarsInCfg -Content '' -Values $captured);$script:CapturedCS2Convars[$name]=$captured}catch{Write-Log "Ignored invalid local $name captured convars." 'WARN'}
+                }
+                $savedBinds=$savedProfile.Value.PSObject.Properties['PendingCapturedCS2Binds']
+                if($savedBinds -and $savedBinds.Value){
+                    $capturedBinds=[ordered]@{};foreach($property in $savedBinds.Value.PSObject.Properties){$capturedBinds[[string]$property.Name]=[string]$property.Value}
+                    try{[void](Set-CafeCapturedBindsInCfg -Content '' -Binds $capturedBinds);$script:CapturedCS2Binds[$name]=$capturedBinds}catch{Write-Log "Ignored invalid local $name captured binds." 'WARN'}
+                }
+            }
             $verifiedBlob=$savedProfile.Value.PSObject.Properties['GitHubVerifiedProfileSha']
             $verifiedCommit=$savedProfile.Value.PSObject.Properties['GitHubVerifiedCommitSha']
             if($verifiedBlob -and [string]$verifiedBlob.Value -match '^[a-fA-F0-9]{40}$' -and
@@ -4715,6 +5235,12 @@ function Save-ProfileSettings {
         foreach ($key in @($values.Keys)) { $snapshot[$key] = $values[$key] }
         if($script:PendingSync[$name] -and $script:PendingCfgSensitivity.ContainsKey($name)){
             $snapshot['PendingCfgSensitivity']=[string]$script:PendingCfgSensitivity[$name]
+        }
+        if($script:PendingSync[$name] -and $script:CapturedCS2Convars.ContainsKey($name)){
+            $snapshot['PendingCapturedCS2Convars']=$script:CapturedCS2Convars[$name]
+        }
+        if($script:PendingSync[$name] -and $script:CapturedCS2Binds.ContainsKey($name)){
+            $snapshot['PendingCapturedCS2Binds']=$script:CapturedCS2Binds[$name]
         }
         if($script:GraphicsPresets.Contains($name)){
             $snapshot['GraphicsSettings']=$script:GraphicsPresets[$name]
@@ -5637,6 +6163,8 @@ function Sync-ProfileToGitHub {
     $cfgStatus='validated and left unchanged'
     $capturedConvars=$null
     if($script:CapturedCS2Convars.ContainsKey($ProfileName)){$capturedConvars=$script:CapturedCS2Convars[$ProfileName]}
+    $capturedBinds=$null
+    if($script:CapturedCS2Binds.ContainsKey($ProfileName)){$capturedBinds=$script:CapturedCS2Binds[$ProfileName]}
     [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
     try {
         $current = Invoke-CafeGitHubRestMethod -Uri ($uri + '?ref=' + $script:GithubBranch) -Method Get -Headers $headers -TimeoutSec 20 -MaximumRedirection 0
@@ -5719,13 +6247,14 @@ function Sync-ProfileToGitHub {
     $voiceKey=[string]$values['VoicePushToTalkKey']
     $newCfgText=$cfgText
     if($capturedConvars -and $capturedConvars.Count -gt 0){$newCfgText=Set-CafeCapturedConvarsInCfg -Content $newCfgText -Values $capturedConvars}
+    if($capturedBinds -and $capturedBinds.Count -gt 0){$newCfgText=Set-CafeCapturedBindsInCfg -Content $newCfgText -Binds $capturedBinds}
     if($null -ne $sensValue){$newCfgText=Set-CS2CfgSensitivityText -Content $newCfgText -Sensitivity $sensValue}
     if($voiceKey){$newCfgText=Set-CafeVoiceBindingInCfg -Content $newCfgText -Key $voiceKey}
     $finalSensitivity=Get-CafeCS2CfgSensitivity -Content $newCfgText
     if($newCfgText -cne $cfgText){
         $cfgUri="https://api.github.com/repos/$($script:GithubRepo)/contents/$cfgName"
         $cfgBody=@{
-            message="Sync $cfgName voice, sensitivity and crosshair from CafeLauncher"
+            message="Sync $cfgName captured CS2 settings from CafeLauncher"
             content=[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($newCfgText))
             branch=$script:GithubBranch
             sha=[string]$cfgRemote.BlobSha
@@ -5744,11 +6273,12 @@ function Sync-ProfileToGitHub {
             $cfgResponse=Invoke-CafeGitHubRestMethod -Uri $cfgUri -Method Put -Headers $headers -ContentType 'application/json' -Body ($cfgBody | ConvertTo-Json -Depth 5 -Compress) -TimeoutSec 25 -MaximumRedirection 0
             if(-not $cfgResponse.commit.sha){throw ('CFG write was not confirmed for '+$cfgName)}
             $cfgUploaded=$true
-            $cfgStatus="updated selected CS2 voice/sensitivity/crosshair"
+            $cfgStatus='updated selected CS2 sensitivity, convars, and binds'
             Write-Log ("GitHub CFG settings saved to "+$cfgName+"; commit="+$cfgResponse.commit.sha)
             $cfgReadback=Get-GitHubCfgFromContentsApi -Repo $script:GithubRepo -Branch $script:GithubBranch -Path $cfgName -Headers $headers
             if($cfgReadback.Sensitivity -cne $finalSensitivity){throw 'GitHub did not confirm the requested CS2 sensitivity.'}
             if($voiceKey -and (Get-CafeVoiceBindingFromCfg -Content $cfgReadback.Content) -cne $voiceKey){throw 'GitHub did not confirm the requested push-to-talk binding.'}
+            if($capturedBinds -and $capturedBinds.Count){$readbackBinds=Get-CafeCS2CfgBindMap -Content $cfgReadback.Content -Keys @($capturedBinds.Keys);foreach($key in $capturedBinds.Keys){if(-not $readbackBinds.ContainsKey($key) -or [string]$readbackBinds[$key] -cne [string]$capturedBinds[$key]){throw ('GitHub did not confirm captured bind '+$key+'.')}}}
         }
         $result = Invoke-CafeGitHubRestMethod -Uri $uri -Method Put -Headers $headers -ContentType 'application/json' -Body ($body | ConvertTo-Json -Depth 5 -Compress) -TimeoutSec 25 -MaximumRedirection 0
         if (-not $result.commit.sha) { throw 'GitHub did not return a successful commit.' }
@@ -5814,6 +6344,7 @@ function Sync-ProfileToGitHub {
         $script:GamingProfiles[$ProfileName].ScalingMode=[int]$verifiedGraphics.ScalingMode
         [void]$script:PendingCfgSensitivity.Remove($ProfileName)
         if($script:CapturedCS2Convars.ContainsKey($ProfileName)){[void]$script:CapturedCS2Convars.Remove($ProfileName)}
+        if($script:CapturedCS2Binds.ContainsKey($ProfileName)){[void]$script:CapturedCS2Binds.Remove($ProfileName)}
         $script:VerifiedProfileState[$ProfileName]=@{BlobSha=[string]$remoteProfile.sha;CommitSha=[string]$result.commit.sha}
         $readbackFailed=$false
         if($graphicsChanged){
@@ -6153,9 +6684,11 @@ function Show-ProfileEditor {
     $pendingSyncState = $script:PendingSync
     $graphicsPresetState = $script:GraphicsPresets
     $capturedCS2ConvarsState = $script:CapturedCS2Convars
+    $capturedCS2BindsState=$script:CapturedCS2Binds
     $pendingCfgSensitivityState=$script:PendingCfgSensitivity
     if ($null -eq $pendingSyncState -or $pendingSyncState -isnot [System.Collections.IDictionary] -or
         $null -eq $capturedCS2ConvarsState -or $capturedCS2ConvarsState -isnot [System.Collections.IDictionary] -or
+        $null -eq $capturedCS2BindsState -or $capturedCS2BindsState -isnot [System.Collections.IDictionary] -or
         $null -eq $pendingCfgSensitivityState -or $pendingCfgSensitivityState -isnot [System.Collections.IDictionary]) {
         throw 'Profile editor shared state is missing; cannot safely edit this profile.'
     }
@@ -6283,7 +6816,7 @@ function Show-ProfileEditor {
     $nv.Checked=[bool]$p.ApplyNvidia
     Add-EditorTabWide -Grid $displayGrid -Control $nv -Row 4
 
-    $cs2Grid=New-EditorTabGrid -Page $cs2Page -Rows 28
+    $cs2Grid=New-EditorTabGrid -Page $cs2Page -Rows 29
     $cfgFile=New-Object CafeEditorScrollTextBox
     $cfgFile.Text=[string]$p.ConfigFile
     $cfgFile.ReadOnly=$true
@@ -6426,8 +6959,13 @@ function Show-ProfileEditor {
     $captureGraphics.BackColor=[System.Drawing.Color]::FromArgb(58,67,83)
     $captureGraphics.ForeColor=$WHITE
     $captureGraphics.FlatStyle='Flat'
-    [void](Add-EditorTabField -Grid $cs2Grid -Title 'Game must be closed; review, then Save & Sync' -Control $captureGraphics -Column 0 -Row 27)
-
+    [void](Add-EditorTabField -Grid $cs2Grid -Title 'Choose groups, review changes, then save or sync' -Control $captureGraphics -Column 0 -Row 27)
+    $editExtras=New-Object System.Windows.Forms.Button
+    $editExtras.Text='Edit Extras'
+    $editExtras.BackColor=[System.Drawing.Color]::FromArgb(58,67,83)
+    $editExtras.ForeColor=$WHITE
+    $editExtras.FlatStyle='Flat'
+    [void](Add-EditorTabField -Grid $cs2Grid -Title 'Crosshair, viewmodel, HUD / radar, audio and binds' -Control $editExtras -Column 0 -Row 28)
     $editorFooter=New-Object System.Windows.Forms.TableLayoutPanel
     $editorFooter.Dock='Fill'
     $editorFooter.Padding=New-Object System.Windows.Forms.Padding(20,4,20,10)
@@ -6643,44 +7181,25 @@ function Show-ProfileEditor {
                 'Restore Graphics Version','OK','Warning')
         }finally{$dialog.Cursor=[System.Windows.Forms.Cursors]::Default}
     }.GetNewClosure())
-    # One shared action powers the editor button and the dashboard shortcut.
+    # One shared action powers the editor button and dashboard shortcut.
     $invokeCS2Capture={
         try{
             $captureGraphics.Enabled=$false
+            $groups=Show-CafeCS2CaptureOptionsDialog -OwnerWindow $dialog
+            if($null -eq $groups -or $groups.Count -eq 0){return}
             $dialog.Cursor=[System.Windows.Forms.Cursors]::WaitCursor
-            $capture=Get-CafeCS2GraphicsCapture -ProfileName $ProfileName -BasePreset $graphicsPreset
-            $missing=@($capture.MissingFields)
-            $preview='Read '+$capture.CapturedFields.Count+' CS2 graphics values from account '+$capture.AccountID+".`n"+
-                'Resolution: '+$capture.Preset.Settings.Width+'x'+$capture.Preset.Settings.Height+'; aspect mode: '+$capture.Preset.Settings.AspectRatioMode+'; fullscreen: '+$capture.Preset.Settings.Fullscreen+".`n"
-            if($capture.CapturedFields -contains 'RefreshHz'){
-                $preview+='Refresh: '+$capture.Preset.Settings.RefreshHz+' Hz'+$(if($capture.RefreshWasRounded){' (rounded from the game value)'}else{''})+".`n"
-            }else{$preview+='Refresh value was missing; current profile refresh choice will be kept.'+"`n"}
-            if($missing.Count){$preview+='Missing values will keep this profile current values: '+($missing -join ', ')+".`n"}
-            $preview+='NVIDIA scaling mode is not stored in cs2_video.txt and will stay as configured for this profile.'+"`n`n"+
-                'Load these values into the editor? This does not change CS2 or GitHub. Review them, then click Save & Sync to publish.'
-            $answer=[System.Windows.Forms.MessageBox]::Show($preview,'Capture CS2 Graphics','YesNo','Question')
-            if($answer -ne [System.Windows.Forms.DialogResult]::Yes){return}
-            [void](& $applyGraphicsPresetToEditor $capture.Preset)
-            $convars=$null
-            try{
-                $source=[pscustomobject]@{Path=$capture.Path;AccountID=$capture.AccountID}
-                $convars=Get-CafeCS2UserConvarsCapture -Source $source
-                if($convars.Values.Count -eq 0){throw 'No relevant sensitivity or crosshair keys in saved convars.'}
-                $capturedCS2ConvarsState[$ProfileName]=$convars.Values
-                if($convars.Values.ContainsKey('sensitivity')){$sens.Text=[string]$convars.Values['sensitivity']}
-                $capturedNames=@($convars.Values.Keys|Sort-Object)
-                Write-Log ('Staged '+$convars.Values.Count+' CS2 sensitivity/crosshair values for '+$ProfileName+'; keys='+($capturedNames -join ', '))
-            }catch{
-                [void]$capturedCS2ConvarsState.Remove($ProfileName)
-                Write-Log ('CS2 user convars capture skipped: '+$_.Exception.Message) 'WARN'
-                [void][System.Windows.Forms.MessageBox]::Show(('Graphics captured but crosshair/sensitivity unavailable: '+$_.Exception.Message),'Partial CS2 capture','OK','Warning')
-            }
-            $status.Text='Captured CS2 settings from Steam account '+$capture.AccountID+'. '+$(if($convars -and $convars.Values.ContainsKey('sensitivity')){'Sensitivity '+$sens.Text+' is staged on the Mouse tab. '}else{'Sensitivity was not found; the profile value is kept. '})+'Review the captured values, then Save & Sync to publish; nothing has been saved or applied yet.'
+            $result=Invoke-CafeCS2CaptureReview -ProfileName $ProfileName -BasePreset $graphicsPreset -Groups $groups -OwnerWindow $dialog
+            if($null -eq $result){$status.Text='Capture canceled; staged profile values were left unchanged.';$status.ForeColor=$MUTED;return}
+            if($result.Graphics -gt 0){[void](& $applyGraphicsPresetToEditor $result.Preset)}
+            if($result.Sensitivity){$sens.Text=[string]$result.Sensitivity.Value;$pendingCfgSensitivityState[$ProfileName]=ConvertTo-CafeCS2Sensitivity -Value ([string]$result.Sensitivity.Value)}
+            if($result.VoiceKeyChanged){$p.VoicePushToTalkKey=[string]$result.VoiceKey;$voiceIndex=[Array]::IndexOf([object[]]$voiceBox.Tag,[object]$result.VoiceKey);if($voiceIndex -lt 0){[void]$voiceBox.Items.Add([string]$result.VoiceKey);$voiceBox.Tag=[object[]](@($voiceBox.Tag)+@([string]$result.VoiceKey));$voiceIndex=$voiceBox.Items.Count-1};$voiceBox.SelectedIndex=$voiceIndex}
+            $pendingSyncState[$ProfileName]=$true
+            $status.Text=('Staged reviewed CS2 values for '+$ProfileName+' from Steam account '+$result.AccountID+'. Graphics: '+$result.Graphics+'; console variables: '+$result.Convars+'; binds: '+$result.Binds+'. Choose Save Locally or Save & Sync to keep them.')
             $status.ForeColor=[System.Drawing.Color]::FromArgb(255,190,105)
-            Write-Log ('Captured '+$capture.CapturedFields.Count+' CS2 graphics values from '+$capture.Path+' for '+$ProfileName+'; missing values kept the current preset. No game, local profile, or GitHub data was changed.')
+            Write-Log ('Staged reviewed CS2 values for '+$ProfileName+' from Steam account '+$result.AccountID+'; groups='+($groups -join ', ')+'; graphics='+$result.Graphics+'; convars='+$result.Convars+'; binds='+$result.Binds+'. No game files were changed or synced.')
         }catch{
-            Write-Log ('CS2 graphics capture for '+$ProfileName+' failed: '+$_.Exception.Message) 'WARN'
-            $null=[System.Windows.Forms.MessageBox]::Show(('Could not capture CS2 graphics:`n'+$_.Exception.Message),'Capture CS2 Graphics','OK','Warning')
+            Write-Log ('CS2 capture for '+$ProfileName+' failed: '+$_.Exception.Message) 'WARN'
+            $null=[System.Windows.Forms.MessageBox]::Show(('Could not capture/review CS2 settings:`n'+$_.Exception.Message),'Capture CS2','OK','Warning')
         }finally{
             $captureGraphics.Enabled=$true
             if(-not $dialog.IsDisposed){$dialog.Cursor=[System.Windows.Forms.Cursors]::Default}
@@ -6701,6 +7220,41 @@ function Show-ProfileEditor {
             $null=[System.Windows.Forms.MessageBox]::Show(('Could not import crosshair code:`n'+$_.Exception.Message),'Crosshair Import','OK','Warning')
         }
     }.GetNewClosure())
+    $editExtras.Add_Click({
+        try{
+            $dialog.Cursor=[System.Windows.Forms.Cursors]::WaitCursor
+            $cfgName=[string]$p.ConfigFile
+            try{$profileCfg=(Get-GitHubCfgFromContentsApi -Repo $script:GithubRepo -Branch $script:GithubBranch -Path $cfgName).Content}
+            catch{
+                $cachePath=Join-Path (Join-Path $env:LOCALAPPDATA 'CafeLauncher\cfg-cache') $cfgName
+                if(-not (Test-Path -LiteralPath $cachePath -PathType Leaf)){throw ('Could not load the profile CFG for Extras. '+$_.Exception.Message)}
+                $profileCfg=[IO.File]::ReadAllText($cachePath)
+                Write-Log ('Extras editor using cached '+$cfgName+' after GitHub read failed.') 'WARN'
+            }
+            $pendingConvars=$null;if($capturedCS2ConvarsState.ContainsKey($ProfileName)){$pendingConvars=$capturedCS2ConvarsState[$ProfileName]}
+            $extrasPendingBinds=@{}
+            if($capturedCS2BindsState.ContainsKey($ProfileName)){$extrasPendingBinds[$ProfileName]=$capturedCS2BindsState[$ProfileName]}
+            $selectedVoiceKey=[string]$voiceBox.Tag[$voiceBox.SelectedIndex]
+            [void](Set-CafeCS2PendingVoiceBind -ProfileName $ProfileName -Key $selectedVoiceKey -BindsByProfile $extrasPendingBinds)
+            $pendingBinds=$null;if($extrasPendingBinds.ContainsKey($ProfileName)){$pendingBinds=$extrasPendingBinds[$ProfileName]}
+            $extras=Show-CafeCS2ExtrasDialog -ProfileName $ProfileName -ProfileCfg ([string]$profileCfg) -PendingConvars $pendingConvars -PendingBinds $pendingBinds -OwnerWindow $dialog
+            if($null -eq $extras){return}
+            if($extras.Convars.Count){$capturedCS2ConvarsState[$ProfileName]=$extras.Convars}else{[void]$capturedCS2ConvarsState.Remove($ProfileName)}
+            if($extras.Binds.Count){$capturedCS2BindsState[$ProfileName]=$extras.Binds}else{[void]$capturedCS2BindsState.Remove($ProfileName)}
+            if($extras.VoiceKeyChanged){
+                $p.VoicePushToTalkKey=[string]$extras.VoiceKey
+                $voiceIndex=[Array]::IndexOf([object[]]$voiceBox.Tag,[object][string]$p.VoicePushToTalkKey)
+                if($voiceIndex -lt 0){[void]$voiceBox.Items.Add([string]$p.VoicePushToTalkKey);$voiceBox.Tag=[object[]](@($voiceBox.Tag)+@([string]$p.VoicePushToTalkKey));$voiceIndex=$voiceBox.Items.Count-1}
+                $voiceBox.SelectedIndex=$voiceIndex
+            }
+            $pendingSyncState[$ProfileName]=$true
+            $status.Text='Extras changes staged for this profile. Choose Save Locally or Save & Sync to keep them.';$status.ForeColor=[System.Drawing.Color]::FromArgb(255,190,105)
+            Write-Log ('Staged Extras settings for '+$ProfileName+'; convars='+$extras.Convars.Count+'; binds='+$extras.Binds.Count+'. No game files were changed or synced.')
+        }catch{
+            Write-Log ('Could not edit Extras for '+$ProfileName+': '+$_.Exception.Message) 'WARN'
+            [void][System.Windows.Forms.MessageBox]::Show(('Could not open or stage Extras:`n'+$_.Exception.Message),'CS2 Extras','OK','Warning')
+        }finally{if(-not $dialog.IsDisposed){$dialog.Cursor=[System.Windows.Forms.Cursors]::Default}}
+    }.GetNewClosure())
     if($CaptureOnOpen){
         $editorTabs.SelectedTab=$cs2Page
         $dialog.Add_Shown({ & $invokeCS2Capture }.GetNewClosure())
@@ -6720,7 +7274,7 @@ function Show-ProfileEditor {
     $saveSync.FlatStyle='Flat'
     $saveSync.Dock='Fill'
     $editorFooter.Controls.Add($saveSync,1,2)
-    $saveSync.Tag='Sync profile, graphics, voice push-to-talk, sensitivity and captured crosshair to the matching GitHub CFG.'
+    $saveSync.Tag='Sync profile, graphics, voice push-to-talk, sensitivity and selected CS2 Extras to the matching GitHub CFG.'
 
     $cancel=New-Object System.Windows.Forms.Button
     $cancel.Text='Cancel'
@@ -6782,6 +7336,11 @@ function Show-ProfileEditor {
         $p.LaunchApps=[bool]$apps.Checked
         $pendingCfgSensitivityState[$ProfileName]=$sensValue
         $p.VoicePushToTalkKey=[string]$voiceBox.Tag[$voiceBox.SelectedIndex]
+        $stagedVoiceKeys=@()
+        if($capturedCS2BindsState.ContainsKey($ProfileName)){$stagedVoiceKeys=@($capturedCS2BindsState[$ProfileName].Keys|Where-Object{[string]$capturedCS2BindsState[$ProfileName][$_] -ceq '+voicerecord'}|ForEach-Object{[string]$_})}
+        if($stagedVoiceKeys.Count -and ($stagedVoiceKeys.Count -ne 1 -or $stagedVoiceKeys[0] -cne $p.VoicePushToTalkKey)){
+            [void](Remove-CafeCS2PendingVoiceBindActions -ProfileName $ProfileName -BindsByProfile $capturedCS2BindsState)
+        }
         # Use the captured shared dictionary, not script: scope in this closure.
         $pendingSyncState[$ProfileName] = $true
         Save-ProfileSettings
@@ -6806,15 +7365,15 @@ function Show-ProfileEditor {
             & $saveEditorValues
             $changes=if($p.VoicePushToTalkKey){
                 "profiles/$ProfileName.json, graphics/$ProfileName.json AND $($p.ConfigFile) (profile sensitivity, voice key and selected settings)"
-            }elseif($capturedCS2ConvarsState.ContainsKey($ProfileName)){
-                "profiles/$ProfileName.json, graphics/$ProfileName.json AND $($p.ConfigFile) (profile sensitivity and captured CS2 crosshair settings)"
+            }elseif($capturedCS2ConvarsState.ContainsKey($ProfileName) -or $capturedCS2BindsState.ContainsKey($ProfileName)){
+                "profiles/$ProfileName.json, graphics/$ProfileName.json AND $($p.ConfigFile) (profile sensitivity and captured CS2 settings)"
             }else{
                 "profiles/$ProfileName.json, graphics/$ProfileName.json AND $($p.ConfigFile) (profile sensitivity)"
             }
             $newline=[Environment]::NewLine
             $message="Save these files to GitHub branch $syncTargetBranch?"+$newline+
                 $changes+$newline+$newline+
-                'Only these profile files will be changed; other CFG binds remain untouched.'
+                'Only these profile files will be changed. Binds shown as Will replace will update that key; unrelated CFG binds remain untouched.'
             $confirm=[System.Windows.Forms.MessageBox]::Show(
                 $message,'Confirm GitHub sync','YesNo','Question')
             if($confirm -ne [System.Windows.Forms.DialogResult]::Yes){
@@ -6863,7 +7422,7 @@ function Show-ProfileEditor {
                 }
                 $pendingSyncState[$ProfileName] = $false
                 Save-ProfileSettings
-                [System.Windows.Forms.MessageBox]::Show("$ProfileName settings saved locally and synced to GitHub. The CS2 graphics preset was updated or already matched GitHub.`nOther PCs can now download the settings without signing in.`nSensitivity is stored in the profile CFG; the profile JSON does not control it. Other captured CFG settings are updated when selected, and unrelated binds remain unchanged.", 'GitHub sync complete', 'OK', 'Information') | Out-Null
+                [System.Windows.Forms.MessageBox]::Show("$ProfileName settings saved locally and synced to GitHub. The CS2 graphics preset was updated or already matched GitHub.`nOther PCs can now download the settings without signing in.`nSensitivity is stored in the profile CFG; the profile JSON does not control it. Selected Extras settings are updated when staged, and unrelated binds remain unchanged.", 'GitHub sync complete', 'OK', 'Information') | Out-Null
                 $dialog.DialogResult=[System.Windows.Forms.DialogResult]::OK
                 $dialog.Close()
             } finally {

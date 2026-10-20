@@ -10,7 +10,7 @@ $tokens=$null;$errors=$null
 $ast=[Management.Automation.Language.Parser]::ParseInput($source,[ref]$tokens,[ref]$errors)
 if(@($errors).Count){throw ('Launcher PowerShell syntax failed: '+$errors[0].Message)}
 Add-Type -AssemblyName System.Drawing
-foreach($name in @('ConvertFrom-CafeCS2CrosshairShareCode','Set-CafeCapturedConvarsInCfg','Set-CafeProfileCrosshairImportStage','ConvertTo-CafeCS2CrosshairPreviewModel','New-CafeCS2StaticQuadrantRaster','Draw-CafeCS2CrosshairPreview')){
+foreach($name in @('ConvertFrom-CafeCS2CrosshairShareCode','Get-CafeCS2ConvarGroup','Set-CafeCapturedConvarsInCfg','Set-CafeProfileCrosshairImportStage','ConvertTo-CafeCS2CrosshairPreviewModel','New-CafeCS2StaticQuadrantRaster','Draw-CafeCS2CrosshairPreview')){
     $matches=@($ast.FindAll({param($node)$node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name},$true))
     if($matches.Count -ne 1){throw ('Missing or duplicate function: '+$name)}
     Invoke-Expression $matches[0].Extent.Text
@@ -183,12 +183,13 @@ Assert-True ($cfg.Contains('cl_ironsight_dot_scale "1.25"') -and $cfg.Contains('
 Assert-True (-not $cfg.Contains('cl_grenadecrosshair_smoke')) 'The CFG writer accepted an unrelated grenade crosshair command.'
 Assert-True ($cfg.Contains('bind "r" "+reload"')) 'Import changed an unrelated bind.'
 
-# Staging replaces only crosshair fields for the selected profile and preserves its sensitivity.
+# Share-code import overlays decoded settings while preserving other staged profile settings.
 $script:GamingProfiles=@{FabMode=@{};ArliMode=@{}}
-$stages=@{FabMode=@{sensitivity='1.7';cl_crosshair_gap='77'};ArliMode=@{sensitivity='1.4';cl_crosshair_gap='-2'}}
+$stages=@{FabMode=@{sensitivity='1.7';viewmodel_fov='68';cl_crosshair_gap='77'};ArliMode=@{sensitivity='1.4';cl_crosshair_gap='-2'}}
 $otherProfileBefore=@{};foreach($key in $stages['ArliMode'].Keys){$otherProfileBefore[$key]=$stages['ArliMode'][$key]}
 $staged=Set-CafeProfileCrosshairImportStage -ProfileName FabMode -Values $current.Values -State $stages
 Assert-True ($stages['FabMode']['sensitivity'] -ceq '1.7') 'Crosshair import discarded the selected profile sensitivity.'
+Assert-True ($stages['FabMode']['viewmodel_fov'] -ceq '68') 'Crosshair import discarded a previously staged Extras setting.'
 Assert-True (-not $stages['FabMode'].ContainsKey('cl_crosshair_gap') -or $stages['FabMode']['cl_crosshair_gap'] -cne '77') 'Crosshair import left the selected profile old crosshair value staged.'
 foreach($key in $otherProfileBefore.Keys){Assert-True ($stages['ArliMode'][$key] -ceq $otherProfileBefore[$key]) 'Crosshair import changed another profile.'}
 $failed=$false;try{[void](Set-CafeProfileCrosshairImportStage -ProfileName FabMode -Values @{cl_crosshair_gap='1;quit'} -State $stages)}catch{$failed=$true}

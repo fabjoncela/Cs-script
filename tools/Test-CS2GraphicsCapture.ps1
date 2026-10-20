@@ -11,7 +11,7 @@ $source=$bat.Substring($start)
 $tokens=$null;$errors=$null
 $ast=[Management.Automation.Language.Parser]::ParseInput($source,[ref]$tokens,[ref]$errors)
 if(@($errors).Count){throw ('Launcher PowerShell failed to parse: '+$errors[0].Message)}
-$wanted=@('ConvertTo-CafeGraphicsPreset','Get-CafeActiveSteamVideoFile','ConvertFrom-CafeCS2VideoText','Get-CafeCS2GraphicsCapture')
+$wanted=@('ConvertTo-CafeGraphicsPreset','Get-CafeActiveSteamVideoFile','ConvertFrom-CafeCS2VideoText','Get-CafeCS2GraphicsCapture','Get-CafeCS2ConvarGroup','ConvertFrom-CafeCS2UserConvarsText','Get-CafeCS2UserConvarsCapture','Get-CafeCS2BindGroup','Set-CafeCS2PendingVoiceBind','Remove-CafeCS2PendingVoiceBindActions','ConvertFrom-CafeCS2UserKeysText','Get-CafeCS2UserKeysCapture','Get-CafeCS2CaptureDisplayName','Format-CafeCS2CaptureValue','Get-CafeCS2CfgConvarValue','Get-CafeCS2CfgConvarMap','Get-CafeCS2CfgBindMap','Get-CafeCS2CaptureReviewRows','Show-CafeCS2CaptureOptionsDialog','Show-CafeCS2CaptureReviewDialog','Show-CafeCS2ExtrasDialog','Invoke-CafeCS2CaptureReview')
 $definitions=@{}
 foreach($function in $ast.FindAll({param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst]},$true)){
     if($function.Name -in $wanted){$definitions[$function.Name]=$function.Extent.Text}
@@ -86,9 +86,13 @@ $script:CaptureTestAccountChanges=$false
 $script:CaptureTestGameRunning=$false
 $steamExe=Join-Path $script:CaptureTestSteamRoot 'steam.exe'
 $videoPath=Join-Path $script:CaptureTestSteamRoot 'userdata\12345\730\local\cfg\cs2_video.txt'
+$convarsPath=Join-Path (Split-Path -Parent $videoPath) 'cs2_user_convars_0_slot0.vcfg'
+$keysPath=Join-Path (Split-Path -Parent $videoPath) 'cs2_user_keys_0_slot0.vcfg'
 [void](New-Item -ItemType Directory -Path (Split-Path -Parent $videoPath) -Force)
 [IO.File]::WriteAllText($steamExe,'fixture')
 [IO.File]::WriteAllText($videoPath,$video)
+[IO.File]::WriteAllText($convarsPath,('{'+[Environment]::NewLine+'"sensitivity" "1.8"'+[Environment]::NewLine+'"viewmodel_fov" "68"'+[Environment]::NewLine+'"cl_radar_scale" "0.7"'+[Environment]::NewLine+'}'))
+[IO.File]::WriteAllText($keysPath,('"bindings"'+[Environment]::NewLine+'{'+[Environment]::NewLine+'"SPACE" "+jump"'+[Environment]::NewLine+'"V" "+voicerecord"'+[Environment]::NewLine+'"MWHEELDOWN" ""'+[Environment]::NewLine+'}'))
 function Get-Process {
     [CmdletBinding()]
     param([string]$Name)
@@ -106,34 +110,61 @@ function Get-ItemProperty {
     return [pscustomobject]@{ActiveUser=$id}
 }
 $diskCapture=Get-CafeCS2GraphicsCapture -ProfileName FabMode -BasePreset $base
+$source=[pscustomobject]@{Path=$videoPath;AccountID='12345'}
+$diskConvars=Get-CafeCS2UserConvarsCapture -Source $source -Groups @('Sensitivity','Viewmodel')
+$diskBinds=Get-CafeCS2UserKeysCapture -Source $source -Groups @('Jump','Scroll wheel')
+if($diskConvars.Values['sensitivity'] -cne '1.8' -or -not $diskConvars.Values.ContainsKey('viewmodel_fov')){throw 'Saved convar file was not captured for the active Steam account.'}
+if(-not $diskBinds.Values.ContainsKey('SPACE') -or -not $diskBinds.Values.ContainsKey('MWHEELDOWN')){throw 'Saved key file was not captured for the active Steam account.'}
 if($diskCapture.AccountID -ne '12345' -or $diskCapture.Path -cne $videoPath){throw 'Capture selected the wrong active-account video file.'}
 $script:CaptureTestGameRunning=$true
 $failed=$false
 try{[void](Get-CafeCS2GraphicsCapture -ProfileName FabMode -BasePreset $base)}catch{$failed=$_.Exception.Message -match 'Close CS2'}
 if(-not $failed){throw 'Capture was allowed while CS2 was running.'}
+$failed=$false
+try{[void](Get-CafeCS2UserConvarsCapture -Source $source)}catch{$failed=$_.Exception.Message -match 'Close CS2'}
+if(-not $failed){throw 'Convar capture was allowed while CS2 was running.'}
+$failed=$false
+try{[void](Get-CafeCS2UserKeysCapture -Source $source)}catch{$failed=$_.Exception.Message -match 'Close CS2'}
+if(-not $failed){throw 'Key capture was allowed while CS2 was running.'}
 $script:CaptureTestGameRunning=$false
 $script:CaptureTestRegistryRead=0
 $script:CaptureTestAccountChanges=$true
 $failed=$false
 try{[void](Get-CafeCS2GraphicsCapture -ProfileName FabMode -BasePreset $base)}catch{$failed=$_.Exception.Message -match 'account changed'}
 if(-not $failed){throw 'Capture was allowed to continue after the active Steam account changed.'}
+$script:CaptureTestRegistryRead=0;$script:CaptureTestActiveUser=54321;$failed=$false
+try{[void](Get-CafeCS2UserConvarsCapture -Source $source)}catch{$failed=$_.Exception.Message -match 'account changed'}
+if(-not $failed){throw 'Convar capture was allowed to continue after the active Steam account changed.'}
+$script:CaptureTestRegistryRead=0;$script:CaptureTestActiveUser=12345;$failed=$false
+$script:CaptureTestActiveUser=54321
+try{[void](Get-CafeCS2UserKeysCapture -Source $source)}catch{$failed=$_.Exception.Message -match 'account changed'}
+if(-not $failed){throw 'Key capture was allowed to continue after the active Steam account changed.'}
+$script:CaptureTestActiveUser=12345
 
 $editor=$definitions= $null
 $editorAst=$ast.FindAll({param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Show-ProfileEditor'},$true)|Select-Object -First 1
 $editor=$editorAst.Extent.Text
-foreach($required in @('$cs2Grid=New-EditorTabGrid -Page $cs2Page -Rows 28','$captureGraphics.Text=''Capture from CS2''','Get-CafeCS2GraphicsCapture -ProfileName $ProfileName -BasePreset $graphicsPreset','Save & Sync to publish')){
+foreach($required in @('$cs2Grid=New-EditorTabGrid -Page $cs2Page -Rows 29','$captureGraphics.Text=''Capture from CS2''','$editExtras.Text=''Edit Extras''','$editExtras.Add_Click({','Show-CafeCS2ExtrasDialog -ProfileName $ProfileName','$capturedCS2BindsState[$ProfileName]=$extras.Binds','Set-CafeCS2PendingVoiceBind -ProfileName $ProfileName -Key $selectedVoiceKey -BindsByProfile $extrasPendingBinds','Remove-CafeCS2PendingVoiceBindActions -ProfileName $ProfileName -BindsByProfile $capturedCS2BindsState')){
     if($editor -notmatch [regex]::Escape($required)){throw ('Profile editor capture workflow is missing: '+$required)}
 }
+$extrasDialog=$definitions['Show-CafeCS2ExtrasDialog']
+foreach($required in @('Reset section to defaults','Reset selected to default','Reset selected group','Stage Extras','blank = default','CafeCS2ResetToDefaultMarker','Review bind changes:','Push-to-talk will move to ','binding(s) will be removed.')){if($extrasDialog -notmatch [regex]::Escape($required)){throw ('CS2 Extras editor behavior is missing: '+$required)}}
 $sensitivityField="Add-EditorTabField -Grid `$mouseGrid -Title 'CS2 sensitivity (profile CFG source)' -Control `$sens -Column 0 -Row 1"
-foreach($required in @('$mouseGrid=New-EditorTabGrid -Page $mousePage -Rows 5',$sensitivityField,'Get-ProfileCfgSensitivity -ProfileName $ProfileName','$sens.Text=[string]$cfgSensitivity.Sensitivity','$sens.Text=[string]$convars.Values[''sensitivity'']','$pendingCfgSensitivityState[$ProfileName]=$sensValue','is staged on the Mouse tab.')){
+foreach($required in @('$mouseGrid=New-EditorTabGrid -Page $mousePage -Rows 5',$sensitivityField,'Get-ProfileCfgSensitivity -ProfileName $ProfileName','$sens.Text=[string]$cfgSensitivity.Sensitivity','$pendingCfgSensitivityState[$ProfileName]=$sensValue','ConvertTo-CafeCS2Sensitivity -Value ([string]$result.Sensitivity.Value)')){
     if($editor -notmatch [regex]::Escape($required)){throw ('CS2 sensitivity Mouse tab workflow is missing: '+$required)}
 }
 if($editor -match [regex]::Escape("Add-EditorTabField -Grid `$cs2Grid -Title 'CS2 sensitivity")){
     throw 'CS2 sensitivity input must no longer be on the CS2 / Apps tab.'
 }
-foreach($required in @('$invokeCS2Capture={','$captureGraphics.Add_Click($invokeCS2Capture)','if($CaptureOnOpen)','$dialog.Add_Shown({ & $invokeCS2Capture }','$capturedCS2ConvarsState = $script:CapturedCS2Convars','$capturedCS2ConvarsState[$ProfileName]=$convars.Values','[void]$capturedCS2ConvarsState.Remove($ProfileName)','$capturedCS2ConvarsState.ContainsKey($ProfileName)','-ConfirmCfgChanges $confirmCfgChanges','Review CFG changes','GitHub sync canceled after CFG review')){
-    if($editor -notmatch [regex]::Escape($required)){throw ('Shared CS2 capture action is missing: '+$required)}
+foreach($required in @('$invokeCS2Capture={','$captureGraphics.Add_Click($invokeCS2Capture)','Show-CafeCS2CaptureOptionsDialog','Invoke-CafeCS2CaptureReview','Choose groups, review changes, then save or sync','pendingSyncState[$ProfileName]=$true','No game files were changed or synced.')){
+    if($editor -notmatch [regex]::Escape($required)){throw ('Review capture action is missing: '+$required)}
 }
+$options=$definitions['Show-CafeCS2CaptureOptionsDialog']
+foreach($group in @('Graphics','Sensitivity','Crosshair','Viewmodel','HUD and Radar','Audio','Movement','Jump','Crouch','Walk','Use','Voice','Reload','Inspect','Scoreboard','Attack','Secondary attack','Drop','Weapon slots','Grenade keys','Scroll wheel')){if($options -notmatch [regex]::Escape($group)){throw ('Capture group is missing: '+$group)}}
+$review=$definitions['Show-CafeCS2CaptureReviewDialog']
+foreach($label in @('Import selected','Current profile','Saved in CS2','Will replace')){if($review -notmatch [regex]::Escape($label)){throw ('Capture review UI is missing: '+$label)}}
+$captureReview=$definitions['Invoke-CafeCS2CaptureReview']
+if($captureReview -notmatch [regex]::Escape("if(`$voiceRow){foreach(`$key in @(`$stagedBinds.Keys))")){throw 'A newly captured push-to-talk key must replace any older pending key in the same profile.'}
 
 Remove-Item -LiteralPath $script:CaptureTestSteamRoot -Recurse -Force
 Write-Host 'CS2 graphics capture tests passed.'

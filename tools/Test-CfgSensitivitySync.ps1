@@ -10,13 +10,14 @@ $code=[string]::Join([Environment]::NewLine,[string[]]$lines[($marker+1)..($line
 $tokens=$null;$errors=$null
 $ast=[Management.Automation.Language.Parser]::ParseInput($code,[ref]$tokens,[ref]$errors)
 if(@($errors).Count){throw ('Launcher syntax failed: '+$errors[0].Message)}
-foreach($name in @('Get-CafeVoiceBindingFromCfg','Set-CafeVoiceBindingInCfg','ConvertTo-CafeCS2Sensitivity','Get-CafeCS2CfgSensitivity','Set-CS2CfgSensitivityText','Add-CafeCacheBust','Get-GitHubCfgFromContentsApi','Get-ProfileCfgSensitivity','Get-CafeCS2UserConvarsCapture','Set-CafeCapturedConvarsInCfg','Get-CafeCfgChangePreview','Sync-ProfileToGitHub','Export-ProfileValues','Get-ProfileGraphicsPreset','Get-GitHubJsonFromContentsApi','ConvertTo-CafeGraphicsPreset','Refresh-ProfileFromGitHub','Get-LatestGitHubFileCommit','Compare-GitHubCommitOrder','Import-ProfileValues')){
+foreach($name in @('Get-CafeVoiceBindingFromCfg','Set-CafeVoiceBindingInCfg','ConvertTo-CafeCS2Sensitivity','Get-CafeCS2CfgSensitivity','Set-CS2CfgSensitivityText','Add-CafeCacheBust','Get-GitHubCfgFromContentsApi','Get-ProfileCfgSensitivity','Get-CafeCS2UserConvarsCapture','Get-CafeCS2ConvarGroup','ConvertFrom-CafeCS2UserConvarsText','Get-CafeCS2BindGroup','Set-CafeCS2PendingVoiceBind','Remove-CafeCS2PendingVoiceBindActions','ConvertFrom-CafeCS2UserKeysText','Get-CafeCS2CfgBindMap','Set-CafeCapturedBindsInCfg','Get-CafeCS2CaptureDisplayName','Format-CafeCS2CaptureValue','Get-CafeCS2CaptureReviewRows','Get-CafeCS2CfgConvarMap','Set-CafeCapturedConvarsInCfg','Get-CafeCfgChangePreview','Get-CS2ProfileBaselineCfgText','Sync-ProfileToGitHub','Export-ProfileValues','Get-ProfileGraphicsPreset','Get-GitHubJsonFromContentsApi','ConvertTo-CafeGraphicsPreset','Refresh-ProfileFromGitHub','Get-LatestGitHubFileCommit','Compare-GitHubCommitOrder','Import-ProfileValues')){
     $funcs=@($ast.FindAll({param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst]},$true) |
         Where-Object {$_.Name -eq $name})
     if($funcs.Count -ne 1){throw ('Missing or duplicate sync function: '+$name)}
     Invoke-Expression $funcs[0].Extent.Text
 }
 function Assert-True {param([bool]$Value,[string]$Message);if(-not $Value){throw $Message}}
+$script:CafeCS2ResetToDefaultMarker='__CAFE_RESET_TO_DEFAULT__'
 $lf=[string][char]10
 $crlf=[string][char]13+$lf
 $cfg='// sensitivity "999"'+$crlf+'bind "r" "+reload"'+$crlf+'    sensitivity "1.2" // keep me'+$crlf+'zoom_sensitivity_ratio "1.0"'+$crlf
@@ -29,6 +30,90 @@ Assert-True ($updated -notmatch '(?<!\r)\n') 'CRLF line endings were not preserv
 Assert-True ((Set-CS2CfgSensitivityText -Content $updated -Sensitivity '2.4') -ceq $updated) 'Same sensitivity should not rewrite CFG.'
 $append=Set-CS2CfgSensitivityText -Content ('bind "r" "+reload"'+$lf) -Sensitivity '1.8'
 Assert-True ($append -ceq ('bind "r" "+reload"'+$lf+'sensitivity "1.8"'+$lf)) 'CFG sensitivity append did not work.'
+
+# Capture parser fixtures cover selected groups and safe per-key replacement.
+$convarsText=@'
+{
+    "sensitivity" "1.75"
+    "zoom_sensitivity_ratio" "1.0"
+    "viewmodel_fov" "68"
+    "viewmodel_offset_x" "2.5"
+    "cl_radar_scale" "0.7"
+    "volume" "0.55"
+    "snd_menumusic_volume" "0.04"
+    "cl_grenadecrosshair_smoke" "1"
+    "hud_showtargetid" "true"
+}
+'@
+$allConvars=ConvertFrom-CafeCS2UserConvarsText -Text $convarsText -Groups @('Sensitivity','Crosshair','Viewmodel','HUD and Radar','Audio')
+Assert-True ($allConvars.Count -eq 9 -and $allConvars.ContainsKey('cl_grenadecrosshair_smoke') -and $allConvars.ContainsKey('zoom_sensitivity_ratio') -and $allConvars.ContainsKey('hud_showtargetid') -and $allConvars.ContainsKey('snd_menumusic_volume')) 'Convar parser did not include supported groups or excluded an unknown command.'
+$viewmodelOnly=ConvertFrom-CafeCS2UserConvarsText -Text $convarsText -Groups @('Viewmodel')
+Assert-True ($viewmodelOnly.Count -eq 2 -and $viewmodelOnly.ContainsKey('viewmodel_fov')) 'Group selection did not filter saved convars.'
+$invalidSensitivity=$false
+try{[void](ConvertFrom-CafeCS2UserConvarsText -Text ('{'+$lf+'"sensitivity" "0"'+$lf+'}') -Groups @('Sensitivity'))}catch{$invalidSensitivity=$true}
+Assert-True $invalidSensitivity 'Invalid saved sensitivity was accepted.'
+Assert-True ((Format-CafeCS2CaptureValue -Name 'FSRDetail' -Value '2') -ceq 'Balanced') 'Readable graphics value mapping changed.'
+Assert-True ((Get-CafeCS2CaptureDisplayName -Name 'viewmodel_fov') -ceq 'Viewmodel FOV') 'CS2 viewmodel label was not exposed.'
+
+$keysText=@'
+"bindings"
+{
+    "SPACE" "+jump"
+    "V" "+voicerecord"
+    "R" "+reload"
+    "X" "slot6"
+    "MWHEELUP" "+jump"
+    "MWHEELDOWN" ""
+    "ALT" "+lookatweapon"
+    "Q" ""
+}
+'@
+$capturedBinds=ConvertFrom-CafeCS2UserKeysText -Text $keysText
+Assert-True ($capturedBinds.Count -eq 7 -and $capturedBinds['SPACE'] -ceq '+jump' -and $capturedBinds['ALT'] -ceq '+lookatweapon') 'Saved key bindings were not filtered to supported actions.'
+Assert-True ($capturedBinds.Contains('MWHEELDOWN') -and $capturedBinds['MWHEELDOWN'] -ceq '') 'Explicit saved scroll-wheel unbind was not represented.'
+$capturedWithUnbinds=ConvertFrom-CafeCS2UserKeysText -Text $keysText -IncludeUnbound
+Assert-True ($capturedWithUnbinds.Contains('Q') -and $capturedWithUnbinds['Q'] -ceq '') 'Explicit saved non-wheel unbind was not retained for review.'
+$jumpOnly=ConvertFrom-CafeCS2UserKeysText -Text $keysText -Groups @('Jump')
+Assert-True ($jumpOnly.Count -eq 1 -and $jumpOnly.Contains('SPACE') -and -not $jumpOnly.Contains('R')) 'Bind group selection did not filter saved keys.'
+$inspectOnly=ConvertFrom-CafeCS2UserKeysText -Text $keysText -Groups @('Inspect')
+Assert-True ($inspectOnly.Count -eq 1 -and $inspectOnly.Contains('ALT')) 'Additional Inspect bind group was not captured.'
+$duplicateKeys=$false
+try{[void](ConvertFrom-CafeCS2UserKeysText -Text ('"bindings"{'+$lf+'"SPACE" "+jump"'+$lf+'"SPACE" "+jump"'+$lf+'}'))}catch{$duplicateKeys=$true}
+Assert-True $duplicateKeys 'Duplicate saved bind keys were accepted.'
+$bindProfile='bind "SPACE" "+duck"'+$crlf+'bind "R" "+reload"'+$crlf+'bind "F" "+use"'+$crlf
+$bindRows=Get-CafeCS2CaptureReviewRows -Groups @('Jump','Reload','Scroll wheel') -BindCapture ([pscustomobject]@{Values=$capturedBinds}) -ProfileCfg $bindProfile -BasePreset $null
+$spaceRow=$bindRows|Where-Object{$_.Key -eq 'SPACE'}|Select-Object -First 1
+Assert-True ($spaceRow.Status -ceq 'Will replace' -and $spaceRow.Before -ceq '+duck' -and $spaceRow.After -ceq '+jump') 'Same-key bind replacement was not previewed with both actions.'
+$voiceReview=Get-CafeCS2CaptureReviewRows -Groups @('Voice') -BindCapture ([pscustomobject]@{Values=[ordered]@{MOUSE4='+voicerecord'}}) -ProfileCfg ('bind "V" "+voicerecord"'+$crlf+'bind "R" "+reload"'+$crlf) -BasePreset $null
+$voiceReviewRow=$voiceReview|Where-Object{$_.Key -eq 'MOUSE4'}|Select-Object -First 1
+Assert-True ($voiceReviewRow.Import -and $voiceReviewRow.Status -ceq 'Will replace V' -and $voiceReviewRow.Before.Contains('V (will be removed)')) 'Voice review did not show the different existing profile key that will be replaced.'
+$movedJumpReview=Get-CafeCS2CaptureReviewRows -Groups @('Jump') -BindCapture ([pscustomobject]@{Values=[ordered]@{K='+jump'}}) -ProfileCfg ('bind "SPACE" "+jump"'+$crlf) -BasePreset $null -BaseCfg ''
+$leftoverJump=$movedJumpReview|Where-Object{$_.Key -eq 'SPACE'}|Select-Object -First 1
+Assert-True ($leftoverJump -and -not $leftoverJump.Import -and $leftoverJump.Status -ceq 'Possible leftover' -and $leftoverJump.After.Contains('if selected') -and $leftoverJump.Value -ceq '') 'Capture did not offer optional cleanup for an old same-action key omitted from CS2 saved binds.'
+$baselineJumpReview=Get-CafeCS2CaptureReviewRows -Groups @('Jump') -BindCapture ([pscustomobject]@{Values=[ordered]@{K='+jump'}}) -ProfileCfg '' -BasePreset $null -BaseCfg ('bind "SPACE" "+jump"'+$crlf)
+$leftoverBaselineJump=$baselineJumpReview|Where-Object{$_.Key -eq 'SPACE'}|Select-Object -First 1
+Assert-True ($leftoverBaselineJump -and $leftoverBaselineJump.Before.Contains('launcher baseline')) 'Capture did not include launcher-baseline binds in old-key cleanup review.'
+$cleanedOldJump=Set-CafeCapturedBindsInCfg -Content '' -Binds ([ordered]@{SPACE='';K='+jump'})
+Assert-True ($cleanedOldJump.Contains('unbind "SPACE"') -and $cleanedOldJump.Contains('bind "K" "+jump"')) 'Selected old-key cleanup did not override the launcher baseline bind.'
+$explicitUnboundReload=Get-CafeCS2CaptureReviewRows -Groups @('Reload') -BindCapture ([pscustomobject]@{Values=[ordered]@{Q=''}}) -ProfileCfg ('bind "Q" "+reload"'+$crlf) -BasePreset $null
+$unboundReloadRow=$explicitUnboundReload|Where-Object{$_.Key -eq 'Q'}|Select-Object -First 1
+Assert-True ($unboundReloadRow -and $unboundReloadRow.Import -and $unboundReloadRow.After -ceq 'Unbound') 'Explicit saved unbind did not appear as a reviewable change.'
+$writtenBinds=Set-CafeCapturedBindsInCfg -Content $bindProfile -Binds ([ordered]@{SPACE='+jump';MWHEELDOWN='';R='+reload'})
+Assert-True ($writtenBinds.Contains('bind "SPACE" "+jump"') -and $writtenBinds.Contains('unbind "MWHEELDOWN"')) 'Captured binds or explicit unbind were not written to the selected keys.'
+Assert-True ($writtenBinds.Contains('bind "F" "+use"') -and $writtenBinds.Contains('bind "R" "+reload"')) 'Bind writer changed an unrelated key or rewrote an identical bind.'
+$resetBinds=Set-CafeCapturedBindsInCfg -Content $bindProfile -Binds ([ordered]@{SPACE=$script:CafeCS2ResetToDefaultMarker})
+Assert-True (-not $resetBinds.Contains('bind "SPACE"') -and -not $resetBinds.Contains('unbind "SPACE"') -and $resetBinds.Contains('bind "R" "+reload"')) 'Reset bind did not remove only the profile override.'
+$resetConvars=Set-CafeCapturedConvarsInCfg -Content ('cl_radar_scale "0.8"'+$crlf+'volume "0"'+$crlf) -Values ([ordered]@{cl_radar_scale=$script:CafeCS2ResetToDefaultMarker;volume='0'})
+Assert-True (-not $resetConvars.Contains('cl_radar_scale') -and $resetConvars.Contains('volume "0"')) 'Convar reset was confused with a numeric zero or changed another setting.'
+$resetCrosshairAliases=Set-CafeCapturedConvarsInCfg -Content ('cl_crosshairgap "2"'+$crlf+'cl_crosshair_gap "3"'+$crlf) -Values ([ordered]@{cl_crosshairgap=$script:CafeCS2ResetToDefaultMarker;cl_crosshair_gap=$script:CafeCS2ResetToDefaultMarker})
+Assert-True (-not $resetCrosshairAliases.Contains('cl_crosshairgap') -and -not $resetCrosshairAliases.Contains('cl_crosshair_gap')) 'Reset did not remove both selected legacy and modern crosshair overrides.'
+$mappedConvars=Get-CafeCS2CfgConvarMap -Content ('viewmodel_fov 68'+$crlf+'volume "0"'+$crlf+'bind "SPACE" "+jump"'+$crlf)
+Assert-True ($mappedConvars['viewmodel_fov'] -ceq '68' -and $mappedConvars['volume'] -ceq '0' -and -not $mappedConvars.Contains('sensitivity')) 'Extras CFG reader did not map supported quoted and bare settings.'
+$voiceBindCapture=Set-CafeCapturedBindsInCfg -Content ('bind "V" "+voicerecord"'+$crlf+'bind "R" "+reload"'+$crlf) -Binds ([ordered]@{MWHEELUP='+voicerecord'})
+Assert-True ($voiceBindCapture.Contains('bind "MWHEELUP" "+voicerecord"') -and $voiceBindCapture -notmatch '(?m)^bind "V" "\+voicerecord"' -and $voiceBindCapture.Contains('bind "R" "+reload"')) 'Captured voice bind did not replace the old voice key while preserving unrelated binds.'
+$duplicateProfileBinds=$false
+try{[void](Get-CafeCS2CfgBindMap -Content ('bind "SPACE" "+duck"'+$lf+'bind "SPACE" "+jump"'+$lf) -Keys @('SPACE'))}catch{$duplicateProfileBinds=$true}
+Assert-True $duplicateProfileBinds 'Ambiguous duplicate profile binds were guessed.'
 foreach($badCfg in @(
     ('sensitivity "1.2"'+$lf+'sensitivity "2.1"'+$lf)
 )){
@@ -46,6 +131,17 @@ foreach($bad in @('0','20.1','-1','a','2; quit','1e3')){
 # Voice PTT: only replace the selected voice command, retain other binds, and reject collisions.
 $voiceCfg='bind "V" "+voicerecord"'+$crlf+'bind "r" "+reload"'+$crlf+'// bind "MOUSE4" "+voicerecord"'+$crlf
 Assert-True ((Get-CafeVoiceBindingFromCfg -Content $voiceCfg) -ceq 'V') 'Existing CFG voice bind not detected.'
+$pendingVoiceBinds=@{ArliMode=[ordered]@{V='+voicerecord';R='+reload'}}
+[void](Set-CafeCS2PendingVoiceBind -ProfileName 'ArliMode' -Key 'MOUSE4' -BindsByProfile $pendingVoiceBinds)
+Assert-True ($pendingVoiceBinds['ArliMode'].Contains('MOUSE4') -and $pendingVoiceBinds['ArliMode']['MOUSE4'] -ceq '+voicerecord' -and -not $pendingVoiceBinds['ArliMode'].Contains('V') -and $pendingVoiceBinds['ArliMode']['R'] -ceq '+reload') 'Preparing the Extras bind review did not overlay the old PTT selector while preserving unrelated staged binds.'
+[void](Set-CafeCS2PendingVoiceBind -ProfileName 'ArliMode' -Key '' -BindsByProfile $pendingVoiceBinds)
+Assert-True (-not $pendingVoiceBinds['ArliMode'].Contains('MOUSE4') -and $pendingVoiceBinds['ArliMode']['R'] -ceq '+reload') 'Selecting Keep existing left a stale staged PTT bind behind.'
+$pendingVoiceBinds['ArliMode']=[ordered]@{V=$script:CafeCS2ResetToDefaultMarker;R='+reload'}
+[void](Set-CafeCS2PendingVoiceBind -ProfileName 'ArliMode' -Key '' -BindsByProfile $pendingVoiceBinds)
+Assert-True ($pendingVoiceBinds['ArliMode']['V'] -ceq $script:CafeCS2ResetToDefaultMarker) 'Changing the PTT selector discarded a deliberate reset-to-default marker.'
+$pendingVoiceBinds['ArliMode']=[ordered]@{MOUSE4='+voicerecord';V=$script:CafeCS2ResetToDefaultMarker;R='+reload'}
+$cleanVoiceBinds=Remove-CafeCS2PendingVoiceBindActions -ProfileName 'ArliMode' -BindsByProfile $pendingVoiceBinds
+Assert-True (-not $cleanVoiceBinds.Contains('MOUSE4') -and $cleanVoiceBinds['V'] -ceq $script:CafeCS2ResetToDefaultMarker -and $cleanVoiceBinds['R'] -ceq '+reload') 'Saving the profile did not leave PTT to the single voice-key field while preserving other staged binds and resets.'
 $newVoice=Set-CafeVoiceBindingInCfg -Content $voiceCfg -Key 'MOUSE4'
 Assert-True ($newVoice.Contains('bind "MOUSE4" "+voicerecord"')) 'New voice key missing.'
 Assert-True ($newVoice -notmatch '(?m)^bind "V" "\+voicerecord"') 'Old voice binding was not removed.'
@@ -76,6 +172,7 @@ $script:GithubRepo='fabjoncela/Cs-script'
 $script:GithubBranch='main'
 # The launcher initializes this during startup; function-only CI tests must mirror it.
 $script:CapturedCS2Convars=@{}
+$script:CapturedCS2Binds=@{}
 $script:PendingCfgSensitivity=@{}
 $script:GamingProfiles=[ordered]@{}
 $script:PendingSync=@{}
@@ -324,6 +421,9 @@ Remove-Item -LiteralPath (Split-Path -Parent $script:FakeConvarsPath) -Recurse -
 
 # Ensure per-profile voice binding reaches only the requested CFG and survives JSON sync.
 $script:FakeFiles['arli.cfg']='sensitivity "1.0"'+$lf+'bind "V" "+voicerecord"'+$lf+'bind "r" "+reload"'+$lf
+$sharedVoiceBinds=@{ArliMode=[ordered]@{V='+voicerecord';R='+reload'}}
+[void](Set-CafeCS2PendingVoiceBind -ProfileName 'ArliMode' -Key 'MOUSE4' -BindsByProfile $sharedVoiceBinds)
+$script:CapturedCS2Binds['ArliMode']=$sharedVoiceBinds['ArliMode']
 $script:GamingProfiles['ArliMode'].VoicePushToTalkKey='MOUSE4'
 $script:FakeWrites.Clear()
 Sync-ProfileToGitHub -ProfileName 'ArliMode' -Token ('testtoken-'+'x'*22)
