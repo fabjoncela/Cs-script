@@ -210,6 +210,13 @@ Dashboard **Apply Graphics** is a separate action from the normal profile Apply 
   - Marshal UI updates to the UI thread. Safely ignore or cancel completion if the launcher closes, and report scan progress or failure clearly.
   - Discover Steam library roots once per scan and reuse them for Steam/CS2 lookup. Rediscover them on later scans so moved or newly added libraries are found.
   - Cover slow scans, failures, repeated clicks, and profile actions attempted during a scan; verify Windows UI behavior with a live smoke test.
+- **Deferred TODO — startup/API timing trace (not implemented):**
+  - Start a per-launch, in-memory trace early enough to record startup operations and network/API requests. Also record later user-triggered calls, clearly separated from startup. Instrument existing request paths; the trace must not make extra requests.
+  - Add a dashboard button (working name **Startup & API Timings**) that shows time to dashboard readiness, total startup time, and a timeline/list of each operation's type, name, host/path, start offset, elapsed time, and outcome/status. Include local startup stages (such as PC inventory) as well as HTTP/API requests; show only calls that actually occur.
+  - Show individual end-to-end elapsed times and overlap between concurrent requests. Do not add overlapping durations as if they were sequential. Label timings as app-observed wait time, not server processing time alone.
+  - Keep trace data in memory for the current run only. Record timing/status metadata, never authorization tokens, device codes, query secrets, request/response bodies, profile contents, or full account identifiers. Do not persist or upload the trace.
+  - Verify with mocked delayed, failed, and parallel requests; cover startup-versus-later grouping, total startup timing, and confirm instrumentation adds no network requests.
+  - Do not implement until explicitly requested.
 - Never store GitHub tokens in files, logs, or profile JSON. Do not enter a token on a shared café PC.
 
 ## CS2 Workshop Cleanup
