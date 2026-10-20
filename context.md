@@ -106,6 +106,23 @@ The **CS2 / Apps** editor can load the three previous versions of `graphics/<Pro
 - Restore fetches and validates the chosen version, then fills the editor without saving or applying it. Saving or syncing remains a separate user action.
 - History works offline only when the version is already listed in the fresh cache. Fetching an older preset requires internet.
 
+### Planned: Profile graphics, settings, and crosshair history (not implemented)
+
+Preliminary review of the current `main` source found that **Load history** covers only `graphics/<ProfileName>.json`. It does not provide history for `profiles/<ProfileName>.json` or the profile CFG that stores CS2 sensitivity and crosshair convars. GitHub currently returns commit history for all three file types. The existing graphics history tests mock GitHub and check the background HTTP worker separately; they do not exercise the full Windows UI flow. Reproduce the reported failure before concluding that the graphics history request itself is broken.
+
+Plan:
+
+1. Reproduce the problem on the intended branch/build. Test loading, refreshing, selecting, and restoring history; record the visible message and relevant LIVE LOGS entry. Check whether the running build matches the current source.
+2. Trace the graphics history button from its click through the background request, cache, version selection, historical file fetch, validation, and editor staging. Make failures clear for empty history, offline/network errors, GitHub limits, and deleted commits.
+3. Add history sources for each profile:
+   - **Graphics:** `graphics/<ProfileName>.json`.
+   - **Profile settings:** `profiles/<ProfileName>.json`.
+   - **Sensitivity and crosshair:** the profile CFG (for example, `fab.cfg`), using only supported sensitivity and crosshair values.
+4. Use GitHub file commit history for the selected source. Keep histories separate by profile and file, show the commit date/message and short commit ID, skip the current version, and provide an explicit refresh. Scope cache entries and invalidation to the selected profile and file.
+5. Validate a selected historical file with the existing schema/CFG validators, then stage only that category in the editor. Restoring must not directly edit CS2 files, save locally, or sync to GitHub. CFG history must preserve unrelated current CFG commands and use the existing diff confirmation when the user later saves or syncs.
+6. Add focused mocked tests for each source, history ordering, cache refresh/invalidation, invalid or mismatched files, deleted versions, and empty/offline responses. Verify cancel leaves drafts unchanged and restore stages values only. Add a Windows UI smoke test for the complete load-select-restore flow.
+
+
 Dashboard **Apply Graphics** is a separate action from the normal profile Apply and **Play + Exec** buttons. Saving in the editor does not apply the settings immediately.
 - The dashboard refreshes its initially selected `FabMode` settings from GitHub before showing them. Edit, Apply, and Play + Exec refresh the profile they act on; the Graphics action also refreshes that profile before running. The selected-profile card marks GitHub-verified values, local pending values, and local fallback values when GitHub cannot be reached. Other profiles are not fetched at startup.
 - Before normal Apply begins mouse, NVIDIA, CFG, or app actions, it fetches and validates the selected profile's latest `graphics/<ProfileName>.json` through the GitHub Contents API. That file's `ScalingMode` is authoritative and overrides the duplicate compatibility field in `profiles/<ProfileName>.json`.
