@@ -71,11 +71,10 @@ if($startupStart -lt 0 -or $startupEnd -le $startupStart -or
    $code.Substring($startupStart,$startupEnd-$startupStart) -match 'Set-StartupHighestRefreshRate|TrySetDisplayMode'){
     throw 'Opening the launcher must not change display refresh before a profile is applied.'
 }
-if($code -notmatch '\$script:StartupStatusTimer\.Interval=33' -or
-   $code -notmatch '\$script:StartupStatusTimer\.Add_Tick\(\{' -or
-   $code -notmatch '\$script:StartupSpinnerAngle=\(\$script:StartupSpinnerAngle\+18\)%360' -or
-   $code -notmatch '\$script:StartupStatusTimer\.Start\(\)'){
-    throw 'The startup spinner must animate on its timer while inventory runs.'
+if($code -match '\$script:StartupStatusTimer\s*=|\$script:StartupSpinnerAngle\s*=|\$script:StartupOverlay\s*=\s*New-Object' -or
+   $code.Substring($startupStart,$startupEnd-$startupStart) -match 'Get-PCDiagnostics' -or
+   $functions['Show-PCDiagnostics'] -notmatch 'Get-PCDiagnostics'){
+    throw 'PC inventory must run through Detect PC on demand, without a startup overlay or scan.'
 }
 if($scanCode -match 'Start-Process|Invoke-WebRequest|Stop-Process|Install-|Update-Driver'){throw 'Compatibility preflight must be read-only.'}
 $script:StartupOverlayLabel=$null
