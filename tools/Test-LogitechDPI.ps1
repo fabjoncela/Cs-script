@@ -138,7 +138,7 @@ if($source -notmatch 'c54d'){
     throw 'C54D helper integration is missing.'
 }
 Invoke-Expression $functions['Assert-LogitechDPI']
-foreach($name in @('FabMode','ArliMode','BrileMode','ArmlMode','OliMode')){
+foreach($name in @('FabMode','ArliMode','BrileMode','ArmlMode','OliMode','Provmode')){
     $profile=Get-Content -LiteralPath (Join-Path $root ('profiles\'+$name+'.json')) -Raw | ConvertFrom-Json
     $dpi=0
     if(-not $profile.PSObject.Properties['LogitechDPI'] -or

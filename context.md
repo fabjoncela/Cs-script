@@ -3,7 +3,7 @@
 This file gives Codex and maintainers the operational context needed to work safely in this repository. **Always follow the checked-out source tree.** The generated state block below reports the launcher release marker, not whether that code has shipped to `main`.
 
 <!-- BEGIN GENERATED LAUNCHER STATE -->
-- Launcher release: `2026.10.19.2`
+- Launcher release: `2026.10.20.1`
 - Generated from the unique `# CAFE_RELEASE` marker in `cafe.bat` by `tools/Update-Context.ps1`.
 <!-- END GENERATED LAUNCHER STATE -->
 
@@ -65,9 +65,9 @@ Typing a value or using **Capture CS2** stages a local pending CFG sensitivity. 
 - For other suspect settings, confirm behavior against a config captured before and after changing each setting in CS2. If a selector alone does not apply the choice, map the profile choice to every required video-config field and make Capture read back those values. Keep profile JSON field names and established meanings stable.
 - References: [CS2 Options Menu config guide](https://steamcommunity.com/sharedfiles/filedetails/?id=3046217806) (community guide; documents menu choices and associated config values); [ValveSoftware CS2 issue #4155](https://github.com/ValveSoftware/csgo-osx-linux/issues/4155) (issue report includes a `cs2_video.txt` sample); [sample `cs2_video.txt` on GitHub](https://github.com/gucu112/cs2-config/blob/master/cs2_video.txt). These are useful investigation references, not an official Valve specification of the setting callbacks.
 
-Each profile's canonical preset is stored independently in `graphics/<ProfileName>.json`: `FabMode`, `ArliMode`, `ArmlMode`, `OliMode`, and `BrileMode`. The editor validates and displays the selected profile's file; Apply Graphics validates that same profile name before using its settings.
+Each profile's canonical preset is stored independently in `graphics/<ProfileName>.json`: `FabMode`, `ArliMode`, `ArmlMode`, `OliMode`, `BrileMode`, and `Provmode`. The editor validates and displays the selected profile's file; Apply Graphics validates that same profile name before using its settings.
 
-- FabMode, ArliMode, ArmlMode, and OliMode default to 1280×960 4:3 fullscreen.
+- FabMode, ArliMode, ArmlMode, OliMode, and Provmode default to 1280×960 4:3 fullscreen. Provmode currently copies OliMode's profile and graphics values.
 - BrileMode defaults to 1920×1080 16:9 fullscreen.
 - Presets request the highest advertised refresh for the selected CS2 resolution. A saved 360 Hz value does not prove the monitor supports 360 Hz.
 
