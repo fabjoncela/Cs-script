@@ -124,6 +124,7 @@ Plan:
 
 
 Dashboard **Apply Graphics** is a separate action from the normal profile Apply and **Play + Exec** buttons. Saving in the editor does not apply the settings immediately.
+- The dashboard builds profile cards in the ordered `GamingProfiles` registry and displays five per page. Previous/Next changes only which cards are attached to the dashboard; it does not refresh profiles or make GitHub requests. The sixth registered profile begins page 2. The current registry contains six profiles, so `Provmode` appears on page 2.
 - The dashboard refreshes its initially selected `FabMode` settings from GitHub before showing them. Edit, Apply, and Play + Exec refresh the profile they act on; the Graphics action also refreshes that profile before running. The selected-profile card marks GitHub-verified values, local pending values, and local fallback values when GitHub cannot be reached. Other profiles are not fetched at startup.
 - Before normal Apply begins mouse, NVIDIA, CFG, or app actions, it fetches and validates the selected profile's latest `graphics/<ProfileName>.json` through the GitHub Contents API. That file's `ScalingMode` is authoritative and overrides the duplicate compatibility field in `profiles/<ProfileName>.json`.
 - If this refresh fails, normal Apply is canceled before any profile actions begin. It costs one additional GitHub API request when NVIDIA settings are enabled.
