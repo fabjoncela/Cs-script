@@ -119,7 +119,7 @@ foreach($launch in $script:Launched){
         throw 'Incorrect Steam app launch sequence; baseline must execute before the profile CFG.'
     }
 }
-for($i=0;$i -lt 5;$i++){
+for($i=0;$i -lt 6;$i++){
     if($script:Launched[$i].Arguments[5] -ne $script:Installed[$i]){
         throw 'Wrong CFG sent to Steam for selected profile.'
     }
