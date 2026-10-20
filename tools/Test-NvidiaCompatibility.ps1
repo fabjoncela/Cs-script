@@ -66,7 +66,7 @@ if($profileApply -notmatch 'Apply-NvidiaGamingSettings -Width' -or
     throw 'Every enabled profile apply must select the maximum refresh at its configured resolution.'
 }
 $startupStart=$code.IndexOf('$startupTimer.Add_Tick({',[StringComparison]::Ordinal)
-$startupEnd=$code.IndexOf('$form.Add_Shown({ $startupTimer.Start() })',[StringComparison]::Ordinal)
+$startupEnd=$code.IndexOf('$form.Add_Shown({',[StringComparison]::Ordinal)
 if($startupStart -lt 0 -or $startupEnd -le $startupStart -or
    $code.Substring($startupStart,$startupEnd-$startupStart) -match 'Set-StartupHighestRefreshRate|TrySetDisplayMode'){
     throw 'Opening the launcher must not change display refresh before a profile is applied.'
