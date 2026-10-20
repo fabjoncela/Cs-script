@@ -116,6 +116,24 @@ if($source -notmatch 'New-Tile "Startup & API Timings" 19 \{ Show-CafeStartupApi
    $source -notmatch "Name 'Initial selected profile refresh' -Group Startup"){
     throw 'The timing button or required startup/API instrumentation is missing.'
 }
+$dashboardTimingNames=@(
+    'Dashboard layout','Dashboard helper setup','Dashboard action tiles','Profile card creation',
+    'Tools & Apps tiles','Manual DPI controls','LIVE LOGS controls','Dashboard finalization'
+)
+foreach($timingName in $dashboardTimingNames){
+    if($source -notmatch [regex]::Escape("-Name '$timingName' -Group Startup")){
+        throw ('Dashboard construction is missing a startup timing phase: '+$timingName)
+    }
+}
+if($source -notmatch "Name 'Retained log load' -Group Later" -or
+   $source -notmatch '\$logToggle\.Add_Click\(\{(?s:.*?)Initialize-LiveLogHistory'){
+    throw 'Retained log hydration must run only on demand after the dashboard starts.'
+}
+if($source -notmatch 'Profile commit ''\+\$profileName' -or
+   $source -notmatch 'Profile content ''\+\$profileName' -or
+   $source -notmatch "Refresh-SelectedProfileCard -Name 'FabMode' -TimingGroup Startup"){
+    throw 'Initial profile refresh requests must be named and grouped as startup work.'
+}
 $updateWorkerMatch=[regex]::Match($source,"(?s)public sealed class CafeLauncherUpdateBackgroundWorker : BackgroundWorker \{(.*?)\n\}")
 if(-not $updateWorkerMatch.Success -or
    $updateWorkerMatch.Groups[1].Value -notmatch 'timingStart\("HTTP", "GitHub Get".*"Startup"\)' -or

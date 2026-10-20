@@ -4,7 +4,7 @@ start "" powershell.exe -NoProfile -ExecutionPolicy Bypass -STA -WindowStyle Hid
 exit /b
 
 # POWERSHELL_GUI
-# CAFE_RELEASE=2026.10.20.3
+# CAFE_RELEASE=2026.10.20.4
 
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
@@ -247,6 +247,10 @@ $MUTED = [System.Drawing.Color]::FromArgb(160,170,185)
 
 $script:LogPath = Join-Path $env:TEMP "CafeLauncher.log"
 $script:LogBox = $null
+$script:LiveLogHydrated = $false
+$script:LiveLogSequence = 0
+$script:LiveLogHydrationCutoff = 0
+$script:LogFileSyncRoot = New-Object object
 # Sentry project DSN is a public, send-only identifier; no user login is needed.
 $script:SentryDsn = 'https://0d97a16d9ecacc4ebced5dddd7b4aff1@o4512273562402816.ingest.de.sentry.io/4512273566007376'
 $script:SentryLogWorker = $null
@@ -324,6 +328,34 @@ function Add-LiveLogLine {
     $script:LogBox.ScrollToCaret()
 }
 
+function Initialize-LiveLogHistory {
+    if($script:LiveLogHydrated -or -not $script:LogBox -or $script:LogBox.IsDisposed){return}
+    $timingId=Start-CafeTimingOperation -Type 'Local' -Name 'Retained log load' -Group Later
+    try {
+        [System.Threading.Monitor]::Enter($script:LogFileSyncRoot)
+        try {
+            $script:LiveLogHydrationCutoff=$script:LiveLogSequence
+            $savedLines=@(Get-Content -LiteralPath $script:LogPath -Tail 2000 -ErrorAction Stop)
+        }finally{[System.Threading.Monitor]::Exit($script:LogFileSyncRoot)}
+        $recentEntries=New-Object 'System.Collections.Generic.List[string]'
+        $currentEntry=''
+        foreach($savedLine in $savedLines){
+            if([string]$savedLine -match '^\d{2}:\d{2}:\d{2} \[[A-Z]+\] '){
+                if($currentEntry){$recentEntries.Add([regex]::Replace($currentEntry,'\s+',' ').Trim())}
+                $currentEntry=[string]$savedLine
+            }elseif($currentEntry){$currentEntry+=' '+[string]$savedLine}
+            elseif(-not [string]::IsNullOrWhiteSpace([string]$savedLine)){$currentEntry=[string]$savedLine}
+        }
+        if($currentEntry){$recentEntries.Add([regex]::Replace($currentEntry,'\s+',' ').Trim())}
+        foreach($entry in $recentEntries){Add-LiveLogLine -Line $entry}
+        $script:LiveLogHydrated=$true
+        Complete-CafeTimingOperation -Id $timingId -Outcome 'Success'
+    }catch{
+        $script:LogBox.Clear()
+        Complete-CafeTimingOperation -Id $timingId -Outcome 'Failed'
+    }
+}
+
 function Write-Log {
     param([string]$Message, [string]$Level = "INFO", [string]$LiveMessage=$null, [string]$FileDetail=$null)
     $line = "{0} [{1}] {2}" -f (Get-Date -Format "HH:mm:ss"), $Level, $Message
@@ -334,7 +366,12 @@ function Write-Log {
         if($Level -eq "ERROR"){$script:StepScopeError=$true}
         elseif($Level -eq "WARN"){$script:StepScopeWarning=$true}
     }
-    try { Add-Content -LiteralPath $script:LogPath -Value $line -Encoding UTF8 } catch {}
+    [System.Threading.Monitor]::Enter($script:LogFileSyncRoot)
+    try {
+        try { Add-Content -LiteralPath $script:LogPath -Value $line -Encoding UTF8 } catch {}
+        $script:LiveLogSequence++
+        $liveSequence=$script:LiveLogSequence
+    }finally{[System.Threading.Monitor]::Exit($script:LogFileSyncRoot)}
     if($script:StatusLine -and -not $script:StatusLine.IsDisposed -and
         $Level -in @('ERROR','WARN','RESULT','SUMMARY')){
         try {
@@ -353,13 +390,15 @@ function Write-Log {
             }
         }catch{}
     }
-    if ($script:LogBox -and -not $script:LogBox.IsDisposed) {
+    if ($script:LiveLogHydrated -and $script:LogBox -and -not $script:LogBox.IsDisposed) {
         try {
             if ($script:LogBox.InvokeRequired) {
                 $null = $script:LogBox.BeginInvoke([Action]{
-                    Add-LiveLogLine -Line $liveLine
+                    if($script:LiveLogHydrated -and $liveSequence -gt $script:LiveLogHydrationCutoff){
+                        Add-LiveLogLine -Line $liveLine
+                    }
                 })
-            } else {
+            } elseif($liveSequence -gt $script:LiveLogHydrationCutoff) {
                 Add-LiveLogLine -Line $liveLine
             }
         } catch {}
@@ -520,14 +559,16 @@ function Update-CafeGitHubRateLimitFromHeaders {
 function Invoke-CafeGitHubRestMethod {
     param([Parameter(Mandatory=$true)][string]$Uri,[string]$Method='Get',
           [hashtable]$Headers=@{},[int]$TimeoutSec=30,[int]$MaximumRedirection=5,
-          [string]$ContentType,[object]$Body,[ValidateSet('Startup','Later')][string]$TimingGroup='Later')
+          [string]$ContentType,[object]$Body,[string]$TimingName,
+          [ValidateSet('Startup','Later')][string]$TimingGroup='Later')
     $request=@{
         Uri=$Uri;Method=$Method;Headers=$Headers;TimeoutSec=$TimeoutSec
         MaximumRedirection=$MaximumRedirection;UseBasicParsing=$true;ErrorAction='Stop'
     }
     if($ContentType){$request.ContentType=$ContentType}
     if($PSBoundParameters.ContainsKey('Body')){$request.Body=$Body}
-    $timingId=Start-CafeTimingOperation -Type 'HTTP' -Name ('GitHub '+$Method) -Uri $Uri -Group $TimingGroup
+    $operationName=if([string]::IsNullOrWhiteSpace($TimingName)){'GitHub '+$Method}else{$TimingName}
+    $timingId=Start-CafeTimingOperation -Type 'HTTP' -Name $operationName -Uri $Uri -Group $TimingGroup
     $httpStatus=0
     try{$response=Invoke-WebRequest @request;$httpStatus=[int]$response.StatusCode}
     catch{
@@ -5088,6 +5129,7 @@ function Get-GitHubJsonFromContentsApi {
         [Parameter(Mandatory=$true)][string]$Branch,
         [Parameter(Mandatory=$true)][string]$Path,
         [int64]$MaxBytes=65536,
+        [ValidateSet('Startup','Later')][string]$TimingGroup='Later',
         [switch]$IncludeMetadata
     )
     if($Path -notmatch '^(profiles|graphics)/[A-Za-z0-9_-]+\.json$' -or $MaxBytes -lt 1 -or $MaxBytes -gt 1048576){
@@ -5107,7 +5149,9 @@ function Get-GitHubJsonFromContentsApi {
     # The raw-content CDN served old profile data even with a unique query.
     # Read mutable profile/graphics JSON through the API; callers keep their
     # local copy if this request fails rather than falling back to raw CDN.
-    $file = Invoke-CafeGitHubRestMethod -Uri (Add-CafeCacheBust -Uri $url) -Method Get -Headers $headers -TimeoutSec 12 -MaximumRedirection 0
+    $profileName=[IO.Path]::GetFileNameWithoutExtension($Path)
+    $file = Invoke-CafeGitHubRestMethod -Uri (Add-CafeCacheBust -Uri $url) -Method Get -Headers $headers -TimeoutSec 12 -MaximumRedirection 0 `
+        -TimingName ('Profile content '+$profileName) -TimingGroup $TimingGroup
     if($file.type -ne 'file' -or $file.path -cne $Path -or
        $file.encoding -ne 'base64' -or [string]$file.sha -notmatch '^[a-fA-F0-9]{40}$' -or
        [string]::IsNullOrWhiteSpace([string]$file.content) -or [int64]$file.size -gt $MaxBytes){
@@ -5197,13 +5241,15 @@ function Get-ProfileCfgSensitivity {
 
 function Get-LatestGitHubFileCommit {
     param([Parameter(Mandatory=$true)][string]$Repo,[Parameter(Mandatory=$true)][string]$Branch,
-        [Parameter(Mandatory=$true)][string]$Path)
+        [Parameter(Mandatory=$true)][string]$Path,[ValidateSet('Startup','Later')][string]$TimingGroup='Later')
     if($Path -notmatch '^(profiles|graphics)/[A-Za-z0-9_-]+\.json$'){throw 'GitHub commit path is invalid.'}
     $encodedBranch=[Uri]::EscapeDataString($Branch)
     $encodedPath=[Uri]::EscapeDataString($Path)
     $uri="https://api.github.com/repos/$Repo/commits?path=$encodedPath&per_page=1&sha=$encodedBranch"
     $headers=@{Accept='application/vnd.github+json';'User-Agent'='CafeLauncher-ProfileRefresh';'X-GitHub-Api-Version'='2022-11-28';'Cache-Control'='no-cache';Pragma='no-cache'}
-    $commits=@(Invoke-CafeGitHubRestMethod -Uri $uri -Method Get -Headers $headers -TimeoutSec 12 -MaximumRedirection 0)
+    $profileName=[IO.Path]::GetFileNameWithoutExtension($Path)
+    $commits=@(Invoke-CafeGitHubRestMethod -Uri $uri -Method Get -Headers $headers -TimeoutSec 12 -MaximumRedirection 0 `
+        -TimingName ('Profile commit '+$profileName) -TimingGroup $TimingGroup)
     if($commits.Count -lt 1 -or [string]$commits[0].sha -notmatch '^[a-fA-F0-9]{40}$'){
         throw "GitHub did not return a valid latest commit for $Path."
     }
@@ -5225,7 +5271,8 @@ function Compare-GitHubCommitOrder {
 }
 
 function Refresh-ProfileFromGitHub {
-    param([Parameter(Mandatory=$true)][string]$ProfileName,[switch]$NoSave,[switch]$ForceLoad)
+    param([Parameter(Mandatory=$true)][string]$ProfileName,[switch]$NoSave,[switch]$ForceLoad,
+        [ValidateSet('Startup','Later')][string]$TimingGroup='Later')
     if (-not $script:GamingProfiles.Contains($ProfileName)) { throw "Unknown profile: $ProfileName" }
     if ($script:PendingSync[$ProfileName]) {
         Write-Log "$ProfileName profile refresh: decision=local-pending; remote was not checked; keeping localPointer=$($script:GamingProfiles[$ProfileName].PointerSpeed)." 'INFO'
@@ -5240,7 +5287,7 @@ function Refresh-ProfileFromGitHub {
         # Every refresh checks the latest commit touching the profile, even on
         # a fresh install with no local verification metadata. Load by immutable
         # commit SHA so a stale mutable branch response cannot win over GitHub.
-        $latestCommit=Get-LatestGitHubFileCommit -Repo $script:GithubRepo -Branch $script:GithubBranch -Path $path
+        $latestCommit=Get-LatestGitHubFileCommit -Repo $script:GithubRepo -Branch $script:GithubBranch -Path $path -TimingGroup $TimingGroup
         if($verifiedState -and $latestCommit -ceq $verifiedState.CommitSha -and -not $ForceLoad){
             Write-Log "$ProfileName profile refresh: decision=verified-cache; repo=$script:GithubRepo; branch=$script:GithubBranch; path=$path; latestCommit=$latestCommit; verifiedCommit=$($verifiedState.CommitSha); pointer=$priorPointer. Using values verified from this commit."
             $script:ProfileRefreshStatus[$ProfileName]='VerifiedGitHub'
@@ -5260,7 +5307,7 @@ function Refresh-ProfileFromGitHub {
             }
             if($commitOrder -ne 'ahead'){throw 'GitHub commit order could not be verified.'}
         }
-        $remoteRead=Get-GitHubJsonFromContentsApi -Repo $script:GithubRepo -Branch $latestCommit -Path $path -IncludeMetadata
+        $remoteRead=Get-GitHubJsonFromContentsApi -Repo $script:GithubRepo -Branch $latestCommit -Path $path -IncludeMetadata -TimingGroup $TimingGroup
         $remote=$remoteRead.Profile
         $script:VerifiedProfileState[$ProfileName]=@{BlobSha=[string]$remoteRead.BlobSha;CommitSha=$latestCommit}
         $remotePointer=[string]$remote.PointerSpeed
@@ -7894,6 +7941,7 @@ $script:ProfileAccentColors=@{
 }
 # Modern CafeLauncher dashboard. Profile actions remain separate and independently callable.
 $script:DashboardConstructionTimingId=Start-CafeTimingOperation -Type 'Local' -Name 'Dashboard construction' -Group Startup
+$script:DashboardLayoutTimingId=Start-CafeTimingOperation -Type 'Local' -Name 'Dashboard layout' -Group Startup
 $form=New-Object System.Windows.Forms.Form
 $form.Text='CafeLauncher | CS2 Setup Center'
 $form.ClientSize=New-Object System.Drawing.Size(1080,825)
@@ -7955,8 +8003,8 @@ function Update-SelectedProfileCard {
     }
 }
 function Refresh-SelectedProfileCard {
-    param([Parameter(Mandatory=$true)][string]$Name)
-    $source=Refresh-ProfileFromGitHub -ProfileName $Name
+    param([Parameter(Mandatory=$true)][string]$Name,[ValidateSet('Startup','Later')][string]$TimingGroup='Later')
+    $source=Refresh-ProfileFromGitHub -ProfileName $Name -TimingGroup $TimingGroup
     Update-SelectedProfileCard -Name $Name
     return $source
 }
@@ -8101,7 +8149,9 @@ $toolsFlow.Dock='Fill'
 $toolsFlow.AutoScroll=$true
 $toolsFlow.WrapContents=$true
 $toolsGrid.Controls.Add($toolsFlow,0,1)
+Complete-CafeTimingOperation -Id $script:DashboardLayoutTimingId -Outcome 'Success'
 
+$script:DashboardHelpersTimingId=Start-CafeTimingOperation -Type 'Local' -Name 'Dashboard helper setup' -Group Startup
 function New-Tile {
     param([string]$Text,[int]$Index,[scriptblock]$Action,[switch]$Primary,[string]$EditProfile='')
     $button=New-Object System.Windows.Forms.Button
@@ -8304,7 +8354,9 @@ function Show-CafeStartupApiTimings {
     [void]$dialog.ShowDialog($form)
     $dialog.Dispose()
 }
+Complete-CafeTimingOperation -Id $script:DashboardHelpersTimingId -Outcome 'Success'
 
+$script:DashboardActionTilesTimingId=Start-CafeTimingOperation -Type 'Local' -Name 'Dashboard action tiles' -Group Startup
 New-Tile "LAUNCH ALL" 0 { Launch-All } -Primary
 New-Tile "Steam" 1 { Start-DetectedSteam }
 New-Tile "Workshop Cleanup" 18 { Show-CafeWorkshopCleanupDialog }
@@ -8317,8 +8369,10 @@ New-Tile "FACEIT Anti-Cheat" 2 {
 New-Tile "FACEIT Matchmaking" 3 { Open-FaceitMatchmaking }
 New-Tile "Spotify" 4 { Open-Spotify }
 New-Tile "Logitech G HUB" 5 { Open-GHub }
+Complete-CafeTimingOperation -Id $script:DashboardActionTilesTimingId -Outcome 'Success'
 
 # Profile cards are built once from the ordered profile registry, then only five are attached to the dashboard at a time.
+$script:DashboardProfileCardsTimingId=Start-CafeTimingOperation -Type 'Local' -Name 'Profile card creation' -Group Startup
 $profileTileIndex=6
 foreach($profileName in @($script:GamingProfiles.Keys)){
     $profileForAction=[string]$profileName
@@ -8327,7 +8381,9 @@ foreach($profileName in @($script:GamingProfiles.Keys)){
     $profileTileIndex++
 }
 Set-ProfileDashboardPage -PageIndex $script:ProfileDashboardPage
+Complete-CafeTimingOperation -Id $script:DashboardProfileCardsTimingId -Outcome 'Success'
 
+$script:DashboardToolsTilesTimingId=Start-CafeTimingOperation -Type 'Local' -Name 'Tools & Apps tiles' -Group Startup
 New-Tile "Mouse Pointer Options" 11 { Open-MousePointerOptions }
 New-Tile "NVIDIA Control Panel" 12 { Open-NvidiaControlPanel }
 # Legacy standalone shortcuts are disabled; profile actions handle NVIDIA and CFG setup.
@@ -8335,7 +8391,9 @@ New-Tile "Detect PC" 15 { Show-PCDiagnostics }
 New-Tile "Check for Updates" 16 { Check-CafeLauncherUpdates -Manual }
 New-Tile "Exit" 17 { $form.Close() }
 New-Tile "Startup & API Timings" 19 { Show-CafeStartupApiTimings }
+Complete-CafeTimingOperation -Id $script:DashboardToolsTilesTimingId -Outcome 'Success'
 # Editable DPI input replaces the fixed-800 live button in tile 18.
+$script:DashboardDpiControlsTimingId=Start-CafeTimingOperation -Type 'Local' -Name 'Manual DPI controls' -Group Startup
 $manualDpiPanel=New-Object System.Windows.Forms.Panel
 $manualDpiPanel.Dock='Fill'
 $manualDpiPanel.Margin=New-Object System.Windows.Forms.Padding(5,8,5,8)
@@ -8390,9 +8448,11 @@ $script:ManualDpiInput.Add_KeyDown({
         $script:ManualDpiChangeButton.PerformClick()
     }
 })
+Complete-CafeTimingOperation -Id $script:DashboardDpiControlsTimingId -Outcome 'Success'
 # New-Tile "Set DPI 800 (Onboard)" 19 { Invoke-LogitechDpiButton -Onboard } # disabled until hardware tested
 
 
+$script:DashboardLogControlsTimingId=Start-CafeTimingOperation -Type 'Local' -Name 'LIVE LOGS controls' -Group Startup
 $logPane=New-Object System.Windows.Forms.TableLayoutPanel
 $logPane.Dock='Fill'
 $logPane.ColumnCount=4
@@ -8458,10 +8518,13 @@ $logToggle.Add_Click({
     $root.RowStyles[2].Height=if($script:LogsExpanded){185}else{44}
     $script:LogBox.Visible=$script:LogsExpanded
     $logToggle.Text=if($script:LogsExpanded){'Hide Logs'}else{'Show Logs'}
+    if($script:LogsExpanded){Initialize-LiveLogHistory}
 })
 $clearLogs.Add_Click({
     if($script:LogBox){$script:LogBox.Clear()}
-    try{Set-Content -LiteralPath $script:LogPath -Value '' -Encoding UTF8}catch{}
+    [System.Threading.Monitor]::Enter($script:LogFileSyncRoot)
+    try{try{Set-Content -LiteralPath $script:LogPath -Value '' -Encoding UTF8}catch{}}
+    finally{[System.Threading.Monitor]::Exit($script:LogFileSyncRoot)}
     Write-Log 'Logs cleared.'
 })
 $sendLogs.Add_Click({
@@ -8499,28 +8562,17 @@ $sendLogs.Add_Click({
         $null=[System.Windows.Forms.MessageBox]::Show($_.Exception.Message,'Send Logs Failed','OK','Error')
     }
 })
-try {
-    $recentEntries=New-Object 'System.Collections.Generic.List[string]'
-    $currentEntry=''
-    foreach($savedLine in @(Get-Content -LiteralPath $script:LogPath -Tail 2000 -ErrorAction Stop)){
-        if([string]$savedLine -match '^\d{2}:\d{2}:\d{2} \[[A-Z]+\] '){
-            if($currentEntry){$recentEntries.Add([regex]::Replace($currentEntry,'\s+',' ').Trim())}
-            $currentEntry=[string]$savedLine
-        }elseif($currentEntry){$currentEntry+=' '+[string]$savedLine}
-        elseif(-not [string]::IsNullOrWhiteSpace([string]$savedLine)){$currentEntry=[string]$savedLine}
-    }
-    if($currentEntry){$recentEntries.Add([regex]::Replace($currentEntry,'\s+',' ').Trim())}
-    foreach($entry in $recentEntries){Add-LiveLogLine -Line $entry}
-}catch{}
+Complete-CafeTimingOperation -Id $script:DashboardLogControlsTimingId -Outcome 'Success'
 Write-Log ('CafeLauncher dashboard ready. Log file: '+$script:LogPath)
 $script:InitialProfileRefreshTimingId=Start-CafeTimingOperation -Type 'Local' -Name 'Initial selected profile refresh' -Group Startup
 try {
-    [void](Refresh-SelectedProfileCard -Name 'FabMode')
+    [void](Refresh-SelectedProfileCard -Name 'FabMode' -TimingGroup Startup)
     Complete-CafeTimingOperation -Id $script:InitialProfileRefreshTimingId -Outcome 'Success'
 } catch {
     Complete-CafeTimingOperation -Id $script:InitialProfileRefreshTimingId -Outcome 'Failed'
     throw
 }
+$script:DashboardFinalizationTimingId=Start-CafeTimingOperation -Type 'Local' -Name 'Dashboard finalization' -Group Startup
 $footer=New-CafeLabel -Text '  CAFE LAUNCHER | production dashboard | %TEMP%\CafeLauncher.log' -FontSize 9
 $root.Controls.Add($footer,0,3)
 
@@ -8553,4 +8605,5 @@ $form.Add_Shown({
     Complete-CafeTimingOperation -Id $script:DashboardConstructionTimingId -Outcome 'Success'
     $startupTimer.Start()
 })
+Complete-CafeTimingOperation -Id $script:DashboardFinalizationTimingId -Outcome 'Success'
 [void]$form.ShowDialog()

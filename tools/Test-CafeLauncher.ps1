@@ -296,7 +296,8 @@ $script:ProfileApiFixture=$null
 $script:ProfileApiRequest=$null
 function Invoke-CafeGitHubRestMethod {
     [CmdletBinding()]
-    param([string]$Uri,[string]$Method,$Headers,[int]$TimeoutSec,[int]$MaximumRedirection)
+    param([string]$Uri,[string]$Method,$Headers,[int]$TimeoutSec,[int]$MaximumRedirection,
+        [string]$TimingName,[string]$TimingGroup)
     $script:ProfileApiRequest=[pscustomobject]@{Uri=$Uri;Headers=$Headers;Method=$Method}
     return $script:ProfileApiFixture
 }
@@ -464,6 +465,18 @@ if($dashboardSource -notmatch 'New-Object System.Windows.Forms.TabControl' -or
    $dashboardSource -notmatch 'Show Logs' -or
    $dashboardSource -notmatch 'Tools & Apps'){
     throw 'Main dashboard, selected-profile GitHub refresh, profile summary, tools, or collapsible logs are missing, or dashboard still refreshes every profile.'
+}
+$liveLogHistory=@($psAst.FindAll({param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Initialize-LiveLogHistory'},$true))
+if($liveLogHistory.Count -ne 1 -or
+   $liveLogHistory[0].Extent.Text -notmatch "Name 'Retained log load' -Group Later" -or
+   $liveLogHistory[0].Extent.Text -notmatch '-Tail 2000' -or
+   $liveLogHistory[0].Extent.Text -notmatch '\$script:LiveLogHydrated' -or
+   $dashboardSource -notmatch '\$logToggle\.Add_Click\(\{(?s:.*?)Initialize-LiveLogHistory' -or
+   $psSource -notmatch '\$liveSequence -gt \$script:LiveLogHydrationCutoff'){
+    throw 'Retained LIVE LOGS history must load on demand, retry after failure, and suppress queued duplicates.'
+}
+if(([regex]::Matches($psSource,'Initialize-LiveLogHistory')).Count -ne 2){
+    throw 'Retained LIVE LOGS history must only be initialized by its helper and the Show Logs action.'
 }
 if($editorSource -notmatch 'Refresh-ProfileFromGitHub -ProfileName \$ProfileName' -or
    $editorSource -notmatch 'Get-ProfileGraphicsPreset -ProfileName \$ProfileName -RequireGitHub' -or

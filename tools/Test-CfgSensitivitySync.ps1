@@ -119,7 +119,7 @@ foreach($name in @('FabMode','ArliMode','BrileMode','ArmlMode','OliMode','Provmo
 function Invoke-CafeGitHubRestMethod {
     [CmdletBinding()]
     param([string]$Uri,[string]$Method,[hashtable]$Headers,[int]$TimeoutSec,
-        [int]$MaximumRedirection,[string]$ContentType,[string]$Body)
+        [int]$MaximumRedirection,[string]$ContentType,[string]$Body,[string]$TimingName,[string]$TimingGroup)
     if($Uri -match '/commits\?path='){
         $commitPath=[regex]::Match($Uri,'path=(?<path>[^&]+)').Groups['path'].Value
         [void]$script:FakeCalls.Add(('CommitGet:'+ $commitPath))
