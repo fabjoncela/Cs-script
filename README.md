@@ -5,7 +5,7 @@ CafeLauncher is a portable Windows setup launcher for CS2 internet cafés. It ru
 [Technical architecture and maintenance notes](./context.md)
 
 <!-- BEGIN GENERATED LAUNCHER RELEASE -->
-> Launcher release: **2026.10.20.1**. Features depend on the PC's hardware, installed programs and user permissions.
+> Launcher release: **2026.10.20.2**. Features depend on the PC's hardware, installed programs and user permissions.
 <!-- END GENERATED LAUNCHER RELEASE -->
 
 ## Download and start
@@ -73,7 +73,7 @@ The **Tools & Apps** tab contains less-used shortcuts, and the dashboard can lau
 
 - **Workshop Cleanup** previews installed CS2 Workshop items against the signed-in Steam account's subscriptions. It protects subscribed items, removes only selected safe local folders, and clears matching stale Steam manifest entries after confirmation. Manifest edits get a timestamped backup; subscriptions are unchanged. Steam must be running and signed in, CS2 must be closed, and Steam's manifest/download state must be readable and stable.
 
-The dashboard reports profile-step outcomes and includes an API allowance indicator based on responses it already receives; the indicator does not make a separate polling request. LIVE LOGS keeps all entries from the current session and shows available retained history when it opens; use its horizontal scrollbar to read long messages. Statuses and key values are color-coded. `%TEMP%\CafeLauncher.log` retains the last 2,000 lines across launches, including detailed errors and stack traces. Startup errors are also written to `%TEMP%\CafeLauncher-startup-error.log`.
+The **Startup & API Timings** tool reports app-observed dashboard readiness, total startup time, local startup stages, and each observed HTTP/API request. It keeps the latest 500 timing entries in memory for the current run; query strings and credentials are excluded, and refreshing the view makes no request. The dashboard also reports profile-step outcomes and an API allowance indicator based on responses it already receives; the indicator does not make a separate polling request. LIVE LOGS keeps all entries from the current session and shows available retained history when it opens; use its horizontal scrollbar to read long messages. Statuses and key values are color-coded. `%TEMP%\CafeLauncher.log` retains the last 2,000 lines across launches, including detailed errors and stack traces. Startup errors are also written to `%TEMP%\CafeLauncher-startup-error.log`.
 
 **Send Logs** uploads the current `CafeLauncher.log` to the configured Sentry project only when pressed. It needs no player login and shows a report ID when Sentry accepts the upload. The log remains on the PC. During testing, the launcher sends the raw file without filtering local paths or usernames or applying its own size limit; Sentry may still reject an oversized report. Sentry email alerts link to the report and its log attachment.
 

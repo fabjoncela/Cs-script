@@ -69,6 +69,15 @@ public sealed class TestCafeRateLimitHttpServer : IDisposable {
 Add-Type -TypeDefinition $serverSource -Language CSharp
 $script:GitHubRateLimitSnapshot=$null
 $script:GitHubRateLimitLabel=$null
+$script:TimingSequence=0L
+function Start-CafeTimingOperation {
+    param([string]$Type,[string]$Name,[string]$Uri,[string]$Group='Later')
+    $script:TimingSequence++
+    return $script:TimingSequence
+}
+function Complete-CafeTimingOperation {
+    param([long]$Id,[string]$Outcome='Success',[int]$HttpStatus=0)
+}
 $server=New-Object TestCafeRateLimitHttpServer
 try{
     $result=Invoke-CafeGitHubRestMethod -Uri $server.Url -Headers @{'Accept'='application/json';'User-Agent'='CafeLauncher-Test'} -TimeoutSec 5

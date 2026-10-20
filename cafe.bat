@@ -4,11 +4,160 @@ start "" powershell.exe -NoProfile -ExecutionPolicy Bypass -STA -WindowStyle Hid
 exit /b
 
 # POWERSHELL_GUI
-# CAFE_RELEASE=2026.10.20.1
+# CAFE_RELEASE=2026.10.20.2
 
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
+Add-Type -Language CSharp -TypeDefinition @'
+using System;
+using System.Collections.Concurrent;
+using System.Collections.Generic;
+using System.Diagnostics;
+using System.Globalization;
+using System.Text.RegularExpressions;
+using System.Threading;
+
+public sealed class CafeTimingEntry {
+    public long Id { get; set; }
+    public string Group { get; set; }
+    public string Type { get; set; }
+    public string Name { get; set; }
+    public string HostPath { get; set; }
+    public double StartOffsetMs { get; set; }
+    public double ElapsedMs { get; set; }
+    public string Outcome { get; set; }
+    public int? HttpStatus { get; set; }
+    public bool IsComplete { get; set; }
+}
+
+public static class CafeTimingTrace {
+    private static readonly Stopwatch Clock = Stopwatch.StartNew();
+    private static readonly ConcurrentDictionary<long, CafeTimingEntry> Entries = new ConcurrentDictionary<long, CafeTimingEntry>();
+    private static readonly ConcurrentQueue<long> EntryOrder = new ConcurrentQueue<long>();
+    private const int MaxEntries = 500;
+    private static long nextId;
+    private static long dashboardReadyTicks = -1;
+    private static long startupCompleteTicks = -1;
+
+    public static long Start(string type, string name, string uri) {
+        return Start(type, name, uri, "Later");
+    }
+
+    public static long StartLater(string type, string name, string uri) {
+        return Start(type, name, uri, "Later");
+    }
+
+    public static long Start(string type, string name, string uri, string group) {
+        var parsed = ParseUri(uri);
+        long id = Interlocked.Increment(ref nextId);
+        var entry = new CafeTimingEntry {
+            Id = id,
+            Group = String.Equals(group, "Startup", StringComparison.Ordinal) ? "Startup" : "Later",
+            Type = SafeLabel(type, "Operation"),
+            Name = SafeLabel(name, "Unnamed operation"),
+            HostPath = parsed,
+            StartOffsetMs = Clock.Elapsed.TotalMilliseconds,
+            ElapsedMs = 0,
+            Outcome = "Running",
+            IsComplete = false
+        };
+        Entries[id] = entry;
+        EntryOrder.Enqueue(id);
+        while (Entries.Count > MaxEntries) {
+            long oldest;
+            if (!EntryOrder.TryDequeue(out oldest)) break;
+            CafeTimingEntry removed;
+            Entries.TryRemove(oldest, out removed);
+        }
+        return id;
+    }
+
+    public static void Complete(long id, string outcome, int httpStatus) {
+        CafeTimingEntry entry;
+        if (!Entries.TryGetValue(id, out entry)) return;
+        entry.ElapsedMs = Math.Max(0, Clock.Elapsed.TotalMilliseconds - entry.StartOffsetMs);
+        entry.Outcome = SafeLabel(outcome, "Completed");
+        entry.HttpStatus = httpStatus >= 100 && httpStatus <= 599 ? (int?)httpStatus : null;
+        entry.IsComplete = true;
+    }
+
+    public static void MarkDashboardReady() {
+        Interlocked.CompareExchange(ref dashboardReadyTicks, Clock.ElapsedTicks, -1);
+    }
+
+    public static void MarkStartupComplete() {
+        Interlocked.CompareExchange(ref startupCompleteTicks, Clock.ElapsedTicks, -1);
+    }
+
+    public static double? DashboardReadyMs {
+        get { long ticks = Interlocked.Read(ref dashboardReadyTicks); return ticks < 0 ? (double?)null : ticks * 1000.0 / Stopwatch.Frequency; }
+    }
+
+    public static double? StartupElapsedMs {
+        get { long ticks = Interlocked.Read(ref startupCompleteTicks); return (ticks < 0 ? Clock.ElapsedTicks : ticks) * 1000.0 / Stopwatch.Frequency; }
+    }
+
+    public static bool StartupIsComplete { get { return Interlocked.Read(ref startupCompleteTicks) >= 0; } }
+
+    public static CafeTimingEntry[] Snapshot() {
+        var copy = new List<CafeTimingEntry>(Entries.Values);
+        copy.Sort(delegate(CafeTimingEntry a, CafeTimingEntry b) { return a.StartOffsetMs.CompareTo(b.StartOffsetMs); });
+        return copy.ToArray();
+    }
+
+    private static string SafeLabel(string value, string fallback) {
+        if (String.IsNullOrWhiteSpace(value)) return fallback;
+        string safe = Regex.Replace(value.Trim(), "[\\r\\n\\t]+", " ");
+        return safe.Length > 100 ? safe.Substring(0, 100) : safe;
+    }
+
+    private static string ParseUri(string value) {
+        Uri uri;
+        if (!Uri.TryCreate(value, UriKind.Absolute, out uri)) return "";
+        string path = Regex.Replace(uri.AbsolutePath, @"(?i)/[0-9]{6,}(?=/|$)", "/[id]");
+        path = Regex.Replace(path, @"(?i)/[0-9a-f]{32,}(?=/|$)", "/[id]");
+        return uri.Host + path;
+    }
+}
+'@
 [System.Windows.Forms.Application]::EnableVisualStyles()
+
+function Start-CafeTimingOperation {
+    param([string]$Type,[string]$Name,[string]$Uri='',[ValidateSet('Startup','Later')][string]$Group='Later')
+    return [CafeTimingTrace]::Start($Type,$Name,$Uri,$Group)
+}
+
+function Complete-CafeTimingOperation {
+    param([long]$Id,[string]$Outcome='Success',[int]$HttpStatus=0)
+    [CafeTimingTrace]::Complete($Id,$Outcome,$HttpStatus)
+}
+
+function Get-CafeTimingDelegates {
+    $startMethod=[CafeTimingTrace].GetMethod('StartLater',[type[]]@([string],[string],[string]))
+    $completeMethod=[CafeTimingTrace].GetMethod('Complete',[type[]]@([long],[string],[int]))
+    return [pscustomobject]@{
+        Start=[Delegate]::CreateDelegate([Func[string,string,string,long]],$startMethod)
+        Complete=[Delegate]::CreateDelegate([Action[long,string,int]],$completeMethod)
+    }
+}
+
+function Invoke-CafeTimedRequest {
+    param([string]$Name,[string]$Uri,[scriptblock]$Request,[ValidateSet('Startup','Later')][string]$Group='Later')
+    $timingId=Start-CafeTimingOperation -Type 'HTTP' -Name $Name -Uri $Uri -Group $Group
+    $httpStatus=0
+    try{
+        $result=& $Request
+        try{if($null -ne $result.StatusCode){$httpStatus=[int]$result.StatusCode}}catch{}
+        Complete-CafeTimingOperation -Id $timingId -Outcome 'Success' -HttpStatus $httpStatus
+        return $result
+    }catch{
+        try{if($_.Exception.Response.StatusCode){$httpStatus=[int]$_.Exception.Response.StatusCode}}catch{}
+        Complete-CafeTimingOperation -Id $timingId -Outcome 'Failed' -HttpStatus $httpStatus
+        throw
+    }
+}
+
+$script:CafeLauncherInitializationTimingId=Start-CafeTimingOperation -Type 'Local' -Name 'Launcher initialization' -Group Startup
 
 # Capture the version represented by this process at startup. The BAT on disk
 # can be replaced while its already-open PowerShell UI is still running.
@@ -164,13 +313,17 @@ public sealed class CafeSentryLogWorker : BackgroundWorker {
     private readonly string dsn;
     private readonly string logPath;
     private readonly string release;
+    private readonly Func<string, string, string, long> timingStart;
+    private readonly Action<long, string, int> timingComplete;
     public string ReportId { get; private set; }
     public string ErrorText { get; private set; }
 
-    public CafeSentryLogWorker(string dsn, string logPath, string release) {
+    public CafeSentryLogWorker(string dsn, string logPath, string release, Func<string, string, string, long> timingStart, Action<long, string, int> timingComplete) {
         this.dsn = dsn;
         this.logPath = logPath;
         this.release = release;
+        this.timingStart = timingStart;
+        this.timingComplete = timingComplete;
         DoWork += delegate(object sender, DoWorkEventArgs e) {
             try { Send(); }
             catch (WebException error) {
@@ -222,6 +375,9 @@ public sealed class CafeSentryLogWorker : BackgroundWorker {
             ",\"filename\":\"CafeLauncher.log\",\"content_type\":\"text/plain\"}\n");
         byte[] newline = new byte[] { 10 };
 
+        long timingId = timingStart("HTTP", "Sentry log submission", endpoint.Uri.ToString());
+        int httpStatus = 0;
+        try {
         var request = (HttpWebRequest)WebRequest.Create(endpoint.Uri);
         request.Method = "POST";
         request.ContentType = "application/x-sentry-envelope";
@@ -242,15 +398,27 @@ public sealed class CafeSentryLogWorker : BackgroundWorker {
             stream.Write(newline, 0, newline.Length);
         }
         using (var response = (HttpWebResponse)request.GetResponse()) {
+            httpStatus = (int)response.StatusCode;
             if ((int)response.StatusCode < 200 || (int)response.StatusCode >= 300)
                 throw new InvalidOperationException("Sentry returned HTTP " + (int)response.StatusCode + ".");
         }
+        timingComplete(timingId, "Success", httpStatus);
         ReportId = id;
+        } catch (WebException error) {
+            var response = error.Response as HttpWebResponse;
+            if (response != null) httpStatus = (int)response.StatusCode;
+            timingComplete(timingId, "Failed", httpStatus);
+            throw;
+        } catch (Exception) {
+            timingComplete(timingId, "Failed", httpStatus);
+            throw;
+        }
     }
 }
 '@
     }
-    return (New-Object CafeSentryLogWorker($script:SentryDsn,$script:LogPath,$script:LauncherRunningRelease))
+    $timing=Get-CafeTimingDelegates
+    return (New-Object CafeSentryLogWorker($script:SentryDsn,$script:LogPath,$script:LauncherRunningRelease,$timing.Start,$timing.Complete))
 }
 
 # Track the primary REST quota from responses the launcher already receives.
@@ -283,18 +451,23 @@ function Update-CafeGitHubRateLimitFromHeaders {
 function Invoke-CafeGitHubRestMethod {
     param([Parameter(Mandatory=$true)][string]$Uri,[string]$Method='Get',
           [hashtable]$Headers=@{},[int]$TimeoutSec=30,[int]$MaximumRedirection=5,
-          [string]$ContentType,[object]$Body)
+          [string]$ContentType,[object]$Body,[ValidateSet('Startup','Later')][string]$TimingGroup='Later')
     $request=@{
         Uri=$Uri;Method=$Method;Headers=$Headers;TimeoutSec=$TimeoutSec
         MaximumRedirection=$MaximumRedirection;UseBasicParsing=$true;ErrorAction='Stop'
     }
     if($ContentType){$request.ContentType=$ContentType}
     if($PSBoundParameters.ContainsKey('Body')){$request.Body=$Body}
-    try{$response=Invoke-WebRequest @request}
+    $timingId=Start-CafeTimingOperation -Type 'HTTP' -Name ('GitHub '+$Method) -Uri $Uri -Group $TimingGroup
+    $httpStatus=0
+    try{$response=Invoke-WebRequest @request;$httpStatus=[int]$response.StatusCode}
     catch{
         if($_.Exception.Response){Update-CafeGitHubRateLimitFromHeaders -Headers $_.Exception.Response.Headers}
+        try{if($_.Exception.Response.StatusCode){$httpStatus=[int]$_.Exception.Response.StatusCode}}catch{}
+        Complete-CafeTimingOperation -Id $timingId -Outcome 'Failed' -HttpStatus $httpStatus
         throw
     }
+    Complete-CafeTimingOperation -Id $timingId -Outcome 'Success' -HttpStatus $httpStatus
     Update-CafeGitHubRateLimitFromHeaders -Headers $response.Headers
     if([string]::IsNullOrWhiteSpace([string]$response.Content)){return $null}
     try{return ($response.Content | ConvertFrom-Json -ErrorAction Stop)}catch{return [string]$response.Content}
@@ -2520,7 +2693,9 @@ function Install-ProfileCfg {
             [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
             try {
                 $downloadUri=Add-CafeCacheBust -Uri $source.Value
-                Invoke-WebRequest -Uri $downloadUri -OutFile $downloaded -Headers @{'Cache-Control'='no-cache'} -UseBasicParsing -TimeoutSec 15 -MaximumRedirection 5 -ErrorAction Stop
+                Invoke-CafeTimedRequest -Name 'Profile CFG download' -Uri $downloadUri -Request {
+                    Invoke-WebRequest -Uri $downloadUri -OutFile $downloaded -Headers @{'Cache-Control'='no-cache'} -UseBasicParsing -TimeoutSec 15 -MaximumRedirection 5 -ErrorAction Stop
+                } | Out-Null
                 $sourcePath = $downloaded
                 $cloudDownloaded = [bool]$CloudPreferred
             } catch {
@@ -2845,7 +3020,8 @@ function Check-CafeLauncherUpdates {
     try {
         [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
         $uri="https://api.github.com/repos/fabjoncela/Cs-script/contents/cafe.bat?ref=main"
-        $remote=Invoke-CafeGitHubRestMethod -Uri $uri -Headers @{'User-Agent'='CafeLauncher-Updater'; 'Accept'='application/vnd.github+json'} -TimeoutSec 8
+        $timingGroup=if($Manual){'Later'}else{'Startup'}
+        $remote=Invoke-CafeGitHubRestMethod -Uri $uri -Headers @{'User-Agent'='CafeLauncher-Updater'; 'Accept'='application/vnd.github+json'} -TimeoutSec 8 -TimingGroup $timingGroup
         if ($remote.path -ne 'cafe.bat' -or $remote.sha -notmatch '^[a-fA-F0-9]{40}$' -or
             [int64]$remote.size -lt 10000 -or [int64]$remote.size -gt 1000000) { throw 'Unexpected update metadata from GitHub.' }
         # Ignore older/unversioned GitHub builds; the SHA handles same-version changes.
@@ -2903,7 +3079,9 @@ function Check-CafeLauncherUpdates {
         $temp=Join-Path $env:TEMP ("CafeLauncher-update-{0}.bat" -f [Guid]::NewGuid().ToString('N'))
         try {
             $updateUri=Add-CafeCacheBust -Uri 'https://raw.githubusercontent.com/fabjoncela/Cs-script/main/cafe.bat'
-            Invoke-WebRequest -Uri $updateUri -OutFile $temp -Headers @{'Cache-Control'='no-cache'} -UseBasicParsing -TimeoutSec 20 -ErrorAction Stop | Out-Null
+            Invoke-CafeTimedRequest -Name 'Launcher update download' -Uri $updateUri -Group $timingGroup -Request {
+                Invoke-WebRequest -Uri $updateUri -OutFile $temp -Headers @{'Cache-Control'='no-cache'} -UseBasicParsing -TimeoutSec 20 -ErrorAction Stop
+            } | Out-Null
             $bytes=[IO.File]::ReadAllBytes($temp)
             if ($bytes.Length -ne [int64]$remote.size -or
                 (Get-GitBlobSha -Bytes $bytes) -ne $remote.sha) { throw 'Downloaded BAT failed GitHub blob hash and size verification.' }
@@ -3514,7 +3692,10 @@ function Get-CafeWorkshopPublishedDetails {
         $pairs.Add('itemcount='+[uri]::EscapeDataString([string]$batch.Count))
         for($i=0;$i -lt $batch.Count;$i++){$pairs.Add('publishedfileids['+$i+']='+[uri]::EscapeDataString([string]$batch[$i]))}
         try{
-            $response=Invoke-RestMethod -Uri 'https://api.steampowered.com/ISteamRemoteStorage/GetPublishedFileDetails/v1/' -Method Post -ContentType 'application/x-www-form-urlencoded' -Body ($pairs -join '&') -TimeoutSec 8 -ErrorAction Stop
+            $workshopUri='https://api.steampowered.com/ISteamRemoteStorage/GetPublishedFileDetails/v1/'
+            $response=Invoke-CafeTimedRequest -Name 'Steam Workshop metadata' -Uri $workshopUri -Request {
+                Invoke-RestMethod -Uri $workshopUri -Method Post -ContentType 'application/x-www-form-urlencoded' -Body ($pairs -join '&') -TimeoutSec 8 -ErrorAction Stop
+            }
             $batchDetails=ConvertFrom-CafeWorkshopPublishedDetails -Response $response -WorkshopIDs $batch
             foreach($id in $batchDetails.Keys){$allDetails[$id]=$batchDetails[$id]}
         }catch{
@@ -4546,13 +4727,19 @@ public sealed class CafeGraphicsHistoryBackgroundWorker : BackgroundWorker {
     public string RateLimitRemaining { get; private set; }
     public string RateLimitLimit { get; private set; }
     public int WorkerThreadId { get; private set; }
+    private readonly Func<string, string, string, long> timingStart;
+    private readonly Action<long, string, int> timingComplete;
     private void CaptureRateLimit(HttpWebResponse response) {
         RateLimitRemaining = response.Headers["X-RateLimit-Remaining"];
         RateLimitLimit = response.Headers["X-RateLimit-Limit"];
     }
-    public CafeGraphicsHistoryBackgroundWorker() {
+    public CafeGraphicsHistoryBackgroundWorker(Func<string, string, string, long> timingStart, Action<long, string, int> timingComplete) {
+        this.timingStart = timingStart;
+        this.timingComplete = timingComplete;
         DoWork += delegate(object sender, DoWorkEventArgs e) {
             WorkerThreadId = System.Threading.Thread.CurrentThread.ManagedThreadId;
+            long timingId = timingStart("HTTP", "GitHub graphics history", (string)e.Argument);
+            int httpStatus = 0;
             try {
                 var request = (HttpWebRequest)WebRequest.Create((string)e.Argument);
                 request.Method = "GET";
@@ -4563,15 +4750,18 @@ public sealed class CafeGraphicsHistoryBackgroundWorker : BackgroundWorker {
                 request.Headers[HttpRequestHeader.CacheControl] = "no-cache";
                 using (var response = (HttpWebResponse)request.GetResponse())
                 using (var reader = new StreamReader(response.GetResponseStream(), Encoding.UTF8)) {
+                    httpStatus = (int)response.StatusCode;
                     CaptureRateLimit(response);
                     ResultText = reader.ReadToEnd();
                 }
+                timingComplete(timingId, "Success", httpStatus);
             } catch (Exception error) {
                 var webError = error as WebException;
                 var response = webError == null ? null : webError.Response as HttpWebResponse;
                 if (response != null) {
-                    using (response) { CaptureRateLimit(response); }
+                    using (response) { httpStatus = (int)response.StatusCode; CaptureRateLimit(response); }
                 }
+                timingComplete(timingId, "Failed", httpStatus);
                 ErrorText = error.Message;
             }
         };
@@ -4579,7 +4769,8 @@ public sealed class CafeGraphicsHistoryBackgroundWorker : BackgroundWorker {
 }
 '@
     }
-    return (New-Object CafeGraphicsHistoryBackgroundWorker)
+    $timing=Get-CafeTimingDelegates
+    return (New-Object CafeGraphicsHistoryBackgroundWorker($timing.Start,$timing.Complete))
 }
 function Get-ProfileGraphicsVersion {
     param([Parameter(Mandatory=$true)][string]$ProfileName,[Parameter(Mandatory=$true)]$Version)
@@ -5212,6 +5403,8 @@ public sealed class CafeGitHubResponse {
 public sealed class CafeGitHubDeviceFlowWorker : BackgroundWorker {
     private readonly string clientId;
     private readonly string repository;
+    private readonly Func<string, string, string, long> timingStart;
+    private readonly Action<long, string, int> timingComplete;
     public string UserCode { get; private set; }
     public string VerificationUri { get; private set; }
     public string AuthenticatedLogin { get; private set; }
@@ -5220,9 +5413,11 @@ public sealed class CafeGitHubDeviceFlowWorker : BackgroundWorker {
     public string RateLimitRemaining { get; private set; }
     public string RateLimitLimit { get; private set; }
 
-    public CafeGitHubDeviceFlowWorker(string clientId, string repository) {
+    public CafeGitHubDeviceFlowWorker(string clientId, string repository, Func<string, string, string, long> timingStart, Action<long, string, int> timingComplete) {
         this.clientId = clientId;
         this.repository = repository;
+        this.timingStart = timingStart;
+        this.timingComplete = timingComplete;
         WorkerReportsProgress = true;
         WorkerSupportsCancellation = true;
         DoWork += RunDeviceFlow;
@@ -5247,6 +5442,9 @@ public sealed class CafeGitHubDeviceFlowWorker : BackgroundWorker {
     }
 
     private static CafeGitHubResponse Request(string url, string method, string[,] form, string token, CafeGitHubDeviceFlowWorker owner) {
+        long timingId = owner.timingStart("HTTP", "GitHub device sign-in request", url);
+        int httpStatus = 0;
+        try {
         var request = (HttpWebRequest)WebRequest.Create(url);
         request.Method = method;
         request.UserAgent = "CafeLauncher-GitHub-Device-Login";
@@ -5267,14 +5465,23 @@ public sealed class CafeGitHubDeviceFlowWorker : BackgroundWorker {
         }
         try {
             using (var response = (HttpWebResponse)request.GetResponse()) {
+                httpStatus = (int)response.StatusCode;
                 if (isApi && owner != null) owner.CaptureRateLimit(response);
-                return ReadJson(response);
+                var result = ReadJson(response);
+                owner.timingComplete(timingId, "Success", httpStatus);
+                return result;
             }
         } catch (WebException error) {
             var response = error.Response as HttpWebResponse;
             if (isApi && owner != null && response != null) {
-                using (response) { owner.CaptureRateLimit(response); }
+                using (response) { httpStatus = (int)response.StatusCode; owner.CaptureRateLimit(response); }
+            } else if (response != null) {
+                using (response) { httpStatus = (int)response.StatusCode; }
             }
+            throw;
+        }
+        } catch (Exception) {
+            owner.timingComplete(timingId, "Failed", httpStatus);
             throw;
         }
     }
@@ -5338,7 +5545,8 @@ public sealed class CafeGitHubDeviceFlowWorker : BackgroundWorker {
 }
 '@ -ReferencedAssemblies @('System.dll','System.Runtime.Serialization.dll','System.Xml.dll'))
     }
-    return [CafeGitHubDeviceFlowWorker]::new($ClientId,$Repository)
+    $timing=Get-CafeTimingDelegates
+    return [CafeGitHubDeviceFlowWorker]::new($ClientId,$Repository,$timing.Start,$timing.Complete)
 }
 
 function Get-GitHubDeviceAuthorization {
@@ -6910,6 +7118,7 @@ function Assert-LogitechDPI {
 # One asynchronous download at a time. WinForms timer handles completion on UI thread.
 $script:LogihubDownloadProcess=$null
 $script:LogihubDownloadTimer=$null
+$script:LogihubTimingId=0L
 $script:LogihubRequestedDPI=$null
 $script:LogihubDownloadStatus=$null
 $script:LogihubRequestGeneration=0
@@ -6961,7 +7170,9 @@ try {
         '$Status='+("'"+$status.Replace("'","''")+"'")+'; '+
         '$Expected='+("'"+$expected+"'")))
     $encoded=[Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($worker))
-    $script:LogihubDownloadProcess=Start-Process -FilePath 'powershell.exe' -ArgumentList ('-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -EncodedCommand '+$encoded) -WindowStyle Hidden -PassThru -ErrorAction Stop
+    $script:LogihubTimingId=Start-CafeTimingOperation -Type 'External process' -Name 'Logitech helper download (app-observed)' -Uri 'https://github.com/fabjoncela/better-logihub/releases/download/v0.1.0-c54d.1/logihub.exe'
+    try{$script:LogihubDownloadProcess=Start-Process -FilePath 'powershell.exe' -ArgumentList ('-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -EncodedCommand '+$encoded) -WindowStyle Hidden -PassThru -ErrorAction Stop}
+    catch{Complete-CafeTimingOperation -Id $script:LogihubTimingId -Outcome 'Failed';$script:LogihubTimingId=0L;throw}
     Write-Log 'Logitech helper download started in background (pinned C54D release). Other profile actions continue.'
     if(-not $script:LogihubDownloadTimer){
         $script:LogihubDownloadTimer=New-Object System.Windows.Forms.Timer
@@ -6972,10 +7183,12 @@ try {
             $script:LogihubDownloadTimer.Stop()
             $statusPath=$script:LogihubDownloadStatus
             $statusText=''
+            $downloadOutcome='Failed'
             try {
                 if(Test-Path -LiteralPath $statusPath -PathType Leaf){$statusText=[IO.File]::ReadAllText($statusPath)}
                 if($statusText -ne 'OK'){throw ('Logitech download failed: '+$(if($statusText){$statusText}else{'worker exited without completion status'}))}
                 [void](Get-LogihubExecutable)
+                $downloadOutcome='Success'
                 Write-Log 'Verified Logitech helper downloaded successfully.'
                 if($null -ne $script:LogihubRequestedDPI){
                     $dpi=[int]$script:LogihubRequestedDPI
@@ -6997,6 +7210,7 @@ try {
                 }
                 $script:LogihubRequestedDPI=$null
             } finally {
+                if($script:LogihubTimingId -gt 0){Complete-CafeTimingOperation -Id $script:LogihubTimingId -Outcome $downloadOutcome;$script:LogihubTimingId=0L}
                 Remove-Item -LiteralPath $statusPath -Force -ErrorAction SilentlyContinue
                 $script:LogihubDownloadProcess.Dispose()
                 $script:LogihubDownloadProcess=$null
@@ -7500,7 +7714,9 @@ function Invoke-GraphicsOnly {
         }
         if(-not $loadedLocal){
             [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
-            Invoke-WebRequest -Uri $source -OutFile $temp -UseBasicParsing -TimeoutSec 12 -ErrorAction Stop
+            Invoke-CafeTimedRequest -Name 'Graphics module download' -Uri $source -Request {
+                Invoke-WebRequest -Uri $source -OutFile $temp -UseBasicParsing -TimeoutSec 12 -ErrorAction Stop
+            } | Out-Null
             $bytes=[IO.File]::ReadAllBytes($temp)
             if((Get-GitBlobSha -Bytes $bytes) -ne $expected){throw 'Cloud graphics module SHA does not match the reviewed launcher version.'}
             $tokens=$null;$errors=$null
@@ -7876,6 +8092,78 @@ function Set-ProfileDashboardPage {
     }finally{$profilesGrid.ResumeLayout($true)}
 }
 
+function Show-CafeStartupApiTimings {
+    $dialog=New-Object System.Windows.Forms.Form
+    $dialog.Text='Startup & API Timings'
+    $dialog.StartPosition='CenterParent'
+    $dialog.Size=New-Object System.Drawing.Size(1040,590)
+    $dialog.MinimumSize=New-Object System.Drawing.Size(860,420)
+    $dialog.BackColor=$BG
+    $dialog.ForeColor=$WHITE
+    $layout=New-Object System.Windows.Forms.TableLayoutPanel
+    $layout.Dock='Fill'
+    $layout.ColumnCount=1
+    $layout.RowCount=3
+    $layout.Padding=New-Object System.Windows.Forms.Padding(14)
+    [void]$layout.RowStyles.Add((New-Object System.Windows.Forms.RowStyle('Absolute',64)))
+    [void]$layout.RowStyles.Add((New-Object System.Windows.Forms.RowStyle('Absolute',42)))
+    [void]$layout.RowStyles.Add((New-Object System.Windows.Forms.RowStyle('Percent',100)))
+    $dialog.Controls.Add($layout)
+    $header=New-Object System.Windows.Forms.Label
+    $header.Dock='Fill'
+    $header.ForeColor=$MUTED
+    $header.Font=New-Object System.Drawing.Font('Segoe UI',9)
+    $header.TextAlign='MiddleLeft'
+    $layout.Controls.Add($header,0,0)
+    $refresh=New-Object System.Windows.Forms.Button
+    $refresh.Text='Refresh timings'
+    Style-CafeButton -Button $refresh
+    $refresh.Dock='Right'
+    $refresh.Width=150
+    $layout.Controls.Add($refresh,0,1)
+    $list=New-Object System.Windows.Forms.ListView
+    $list.Dock='Fill'
+    $list.View='Details'
+    $list.FullRowSelect=$true
+    $list.GridLines=$true
+    $list.HideSelection=$false
+    $list.BackColor=[System.Drawing.Color]::FromArgb(12,15,20)
+    $list.ForeColor=$WHITE
+    $list.Font=New-Object System.Drawing.Font('Segoe UI',9)
+    foreach($column in @(@('Group',72),@('Type',76),@('Operation',210),@('Host / path',260),@('Start (ms)',90),@('Elapsed (ms)',100),@('Outcome / HTTP',130))){
+        [void]$list.Columns.Add([string]$column[0],[int]$column[1])
+    }
+    $layout.Controls.Add($list,0,2)
+    $loadRows={
+        $list.BeginUpdate()
+        try{
+            $list.Items.Clear()
+            foreach($entry in [CafeTimingTrace]::Snapshot()){
+                $httpText=if($entry.HttpStatus){'HTTP '+$entry.HttpStatus}else{''}
+                $outcomeText=[string]$entry.Outcome
+                if($httpText){$outcomeText+=' / '+$httpText}
+                $item=New-Object System.Windows.Forms.ListViewItem([string]$entry.Group)
+                [void]$item.SubItems.Add([string]$entry.Type)
+                [void]$item.SubItems.Add([string]$entry.Name)
+                [void]$item.SubItems.Add([string]$entry.HostPath)
+                [void]$item.SubItems.Add($entry.StartOffsetMs.ToString('N1'))
+                [void]$item.SubItems.Add($entry.ElapsedMs.ToString('N1'))
+                [void]$item.SubItems.Add($outcomeText)
+                [void]$list.Items.Add($item)
+            }
+            $ready=[CafeTimingTrace]::DashboardReadyMs
+            $total=[CafeTimingTrace]::StartupElapsedMs
+            $readyText=if($null -eq $ready){'pending'}else{([double]$ready).ToString('N1')+' ms'}
+            $state=if([CafeTimingTrace]::StartupIsComplete){'complete'}else{'in progress'}
+            $header.Text=('Dashboard ready: '+$readyText+'    |    Total startup: '+([double]$total).ToString('N1')+' ms ('+$state+')    |    App-observed wait time; overlapping requests are shown individually. Latest 500 operations.')
+        }finally{$list.EndUpdate()}
+    }.GetNewClosure()
+    $refresh.Add_Click($loadRows)
+    & $loadRows
+    [void]$dialog.ShowDialog($form)
+    $dialog.Dispose()
+}
+
 New-Tile "LAUNCH ALL" 0 { Launch-All } -Primary
 New-Tile "Steam" 1 { Start-DetectedSteam }
 New-Tile "Workshop Cleanup" 18 { Show-CafeWorkshopCleanupDialog }
@@ -7905,6 +8193,7 @@ New-Tile "NVIDIA Control Panel" 12 { Open-NvidiaControlPanel }
 New-Tile "Detect PC" 15 { Show-PCDiagnostics }
 New-Tile "Check for Updates" 16 { Check-CafeLauncherUpdates -Manual }
 New-Tile "Exit" 17 { $form.Close() }
+New-Tile "Startup & API Timings" 19 { Show-CafeStartupApiTimings }
 # Editable DPI input replaces the fixed-800 live button in tile 18.
 $manualDpiPanel=New-Object System.Windows.Forms.Panel
 $manualDpiPanel.Dock='Fill'
@@ -8165,18 +8454,34 @@ $startupTimer.Add_Tick({
     [System.Windows.Forms.Application]::DoEvents()
     # Profile and graphics settings refresh only when their profile is opened
     # or applied, instead of spending requests on every profile at startup.
+    $inventoryTiming=Start-CafeTimingOperation -Type 'Local' -Name 'PC inventory' -Group Startup
     try {
         Write-Log 'Automatic startup inventory:'
         $summary = Get-PCDiagnostics
         foreach ($line in ($summary -split '\r?\n')) { if ($line) { Write-Log ('PC: ' + $line) } }
-    } catch { Write-Log "Startup inventory failed: $($_.Exception.Message)" 'WARN' }
+        Complete-CafeTimingOperation -Id $inventoryTiming -Outcome 'Success'
+    } catch {
+        Complete-CafeTimingOperation -Id $inventoryTiming -Outcome 'Failed'
+        Write-Log "Startup inventory failed: $($_.Exception.Message)" 'WARN'
+    }
     finally {
         $script:StartupInventoryRunning=$false
         if($script:StartupStatusTimer){$script:StartupStatusTimer.Stop();$script:StartupStatusTimer.Dispose();$script:StartupStatusTimer=$null}
         if($script:StartupOverlay -and -not $script:StartupOverlay.IsDisposed){$script:StartupOverlay.Hide()}
     }
     # Check GitHub main after the local inventory and dashboard startup are complete.
-    Check-CafeLauncherUpdates
+    $updateTiming=Start-CafeTimingOperation -Type 'Local' -Name 'Automatic launcher update check' -Group Startup
+    try{
+        Check-CafeLauncherUpdates
+        Complete-CafeTimingOperation -Id $updateTiming -Outcome 'Success'
+    }catch{
+        Complete-CafeTimingOperation -Id $updateTiming -Outcome 'Failed'
+        Write-Log ('Automatic launcher update check failed: '+$_.Exception.Message) 'WARN'
+    }finally{[CafeTimingTrace]::MarkStartupComplete()}
 })
-$form.Add_Shown({ $startupTimer.Start() })
+$form.Add_Shown({
+    Complete-CafeTimingOperation -Id $script:CafeLauncherInitializationTimingId -Outcome 'Success'
+    [CafeTimingTrace]::MarkDashboardReady()
+    $startupTimer.Start()
+})
 [void]$form.ShowDialog()

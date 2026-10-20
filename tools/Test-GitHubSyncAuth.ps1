@@ -12,6 +12,12 @@ $psSource=[string]::Join([Environment]::NewLine,[string[]]$lines[($marker+1)..($
 $tokens=$null;$errors=$null
 $ast=[Management.Automation.Language.Parser]::ParseInput($psSource,[ref]$tokens,[ref]$errors)
 if(@($errors).Count){throw ('Launcher parse failed: '+$errors[0].Message)}
+$traceMatch=[regex]::Match($psSource,"(?s)Add-Type -Language CSharp -TypeDefinition @'\r?\n(.*?)\r?\n'@")
+if(-not $traceMatch.Success){throw 'Timing trace C# definition was not found.'}
+Add-Type -Language CSharp -TypeDefinition $traceMatch.Groups[1].Value
+$timingHelper=$ast.Find({param($node)$node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Get-CafeTimingDelegates'},$true)
+if(-not $timingHelper){throw 'Timing delegate factory was not found.'}
+. ([scriptblock]::Create($timingHelper.Extent.Text))
 
 foreach($required in @(
     'function Get-GitHubSyncPersonalToken',
