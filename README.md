@@ -5,7 +5,7 @@ CafeLauncher is a portable Windows setup launcher for CS2 internet cafés. It ru
 [Technical architecture and maintenance notes](./context.md)
 
 <!-- BEGIN GENERATED LAUNCHER RELEASE -->
-> Launcher release: **2026.10.19.2**. Features depend on the PC's hardware, installed programs and user permissions.
+> Launcher release: **2026.10.20.1**. Features depend on the PC's hardware, installed programs and user permissions.
 <!-- END GENERATED LAUNCHER RELEASE -->
 
 ## Download and start
@@ -19,7 +19,7 @@ The launcher does not require installation or administrator rights to open. Wind
 
 ## Player profiles
 
-The dashboard keeps separate settings for five profiles:
+The dashboard keeps separate settings for six profiles:
 
 | Profile | Cloud settings | CS2 config |
 | --- | --- | --- |
@@ -28,6 +28,7 @@ The dashboard keeps separate settings for five profiles:
 | BrileMode | [profiles/BrileMode.json](./profiles/BrileMode.json) | [brile.cfg](./brile.cfg) |
 | ArmlMode | [profiles/ArmlMode.json](./profiles/ArmlMode.json) | [arml.cfg](./arml.cfg) |
 | OliMode | [profiles/OliMode.json](./profiles/OliMode.json) | [oli.cfg](./oli.cfg) |
+| Provmode | [profiles/Provmode.json](./profiles/Provmode.json) | [prov.cfg](./prov.cfg) |
 
 ### Apply and launch
 
@@ -48,7 +49,7 @@ Before editing or applying a profile with pending local changes, the launcher of
 
 Each profile has its own canonical preset under [`graphics/`](./graphics/). In the **CS2 / Apps** editor, you can set resolution, aspect ratio, fullscreen mode, refresh rate, NVIDIA scaling mode, and supported CS2 video options such as MSAA, shadows, textures, HDR, Reflex, FSR, VSync, and CMAA.
 
-FabMode, ArliMode, ArmlMode, and OliMode currently use 1280×960 4:3 fullscreen defaults. BrileMode uses 1920×1080 16:9. Presets request the highest refresh rate advertised for the selected game resolution, or can use an exact rate when it is available.
+FabMode, ArliMode, ArmlMode, OliMode, and Provmode currently use 1280×960 4:3 fullscreen defaults. Provmode currently copies OliMode's profile and graphics values. BrileMode uses 1920×1080 16:9. Presets request the highest refresh rate advertised for the selected game resolution, or can use an exact rate when it is available.
 
 - **Capture CS2** lets you choose graphics, sensitivity, crosshair, viewmodel, HUD/radar, audio, and bind groups (jump, voice, reload, grenade keys, and scroll wheel). After CS2 is closed, it reads the active Steam account's saved files and shows a before/after review with CS2 names and bind replacement warnings. Import only the rows you select; Capture does not edit game files or save/sync automatically. Save Locally or Save & Sync keeps the staged changes for the selected profile.
 - **Preview & Import** in **Edit → Mouse** decodes a pasted CS2 crosshair share code and opens a local visual preview with stone, dark, light, and foliage-like backgrounds. Static Quadrant is drawn as four short arcs around a square center dot, following current CS2 geometry. A local per-pixel raster applies smooth edge coverage and color blending at game-pixel size before nearest-neighbor enlargement. Dragging the crosshair only checks visibility. **Import** stages the values for the selected profile; canceling does not change staged settings. Dynamic styles are shown at rest. The reference rendering model is publicly reconstructed, so an exact in-game pixel match has not been confirmed.

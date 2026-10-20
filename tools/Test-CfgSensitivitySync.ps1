@@ -195,7 +195,7 @@ function Get-FakeBlobSha {param([string]$Text);$hash=[Security.Cryptography.SHA1
 # Sync invalidates history after a successful write. Keep this test isolated
 # from the user's real per-profile history cache.
 function Clear-ProfileGraphicsHistoryCache {param([string]$ProfileName)}
-foreach($name in @('FabMode','ArliMode','BrileMode','ArmlMode','OliMode')){
+foreach($name in @('FabMode','ArliMode','BrileMode','ArmlMode','OliMode','Provmode')){
     $cfgName=($name -replace 'Mode$','').ToLowerInvariant()+'.cfg'
     $script:GamingProfiles[$name]=@{
         ConfigFile=$cfgName;VoicePushToTalkKey='';PointerSpeed=10;LogitechDPI=800
@@ -208,7 +208,7 @@ foreach($name in @('FabMode','ArliMode','BrileMode','ArmlMode','OliMode')){
         SchemaVersion=1;ProfileName=$name;DisplayPolicy='ApplyPreset';RefreshPolicy='Highest';ScalingMode=2
         Settings=[ordered]@{Width=1280;Height=960;AspectRatioMode=0;Fullscreen=1;MSAASamples=8;ShadowQuality=0;DynamicShadows=1;TextureDetail=1;ShaderQuality=0;ParticleDetail=0;AmbientOcclusion=0;HDRDetail=3;NvidiaReflex=2;TextureFiltering=0;FSRDetail=0;VSync=0;CMAA=0}
     }
-    $profileSensitivity=@{FabMode='1.1';ArliMode='1.0';ArmlMode='1.0';BrileMode='1.2';OliMode='1.2'}[$name]
+    $profileSensitivity=@{FabMode='1.1';ArliMode='1.0';ArmlMode='1.0';BrileMode='1.2';OliMode='1.2';Provmode='1.2'}[$name]
     $script:FakeFiles[$cfgName]='sensitivity "'+$profileSensitivity+'"'+$crlf+'bind "r" "+reload"'+$crlf
     $script:FakeFiles[('profiles/'+$name+'.json')]='{}'
     $script:FakeFiles[('graphics/'+$name+'.json')]='{}'
@@ -265,7 +265,7 @@ function Invoke-CafeGitHubRestMethod {
     return [pscustomobject]@{commit=[pscustomobject]@{sha=$script:FakeCommitSha}}
 }
 # Opening Edit reads each selected profile's CFG value through the Contents API.
-$expectedProfileSens=@{FabMode='1.1';ArliMode='1';ArmlMode='1';BrileMode='1.2';OliMode='1.2'}
+$expectedProfileSens=@{FabMode='1.1';ArliMode='1';ArmlMode='1';BrileMode='1.2';OliMode='1.2';Provmode='1.2'}
 $oldLocalAppData=$env:LOCALAPPDATA
 $testLocalAppData=Join-Path $env:TEMP ('Cafe-Cfg-Sensitivity-Test-'+[guid]::NewGuid().ToString('N'))
 [void](New-Item -ItemType Directory -Path $testLocalAppData -Force)
@@ -288,7 +288,7 @@ try{
     Remove-Item -LiteralPath $testLocalAppData -Recurse -Force -ErrorAction SilentlyContinue
 }
 # Test each profile uses its own matching cfg and JSON, never another player's.
-foreach($name in @('FabMode','ArliMode','BrileMode','ArmlMode','OliMode')){
+foreach($name in @('FabMode','ArliMode','BrileMode','ArmlMode','OliMode','Provmode')){
     $script:FakeWrites.Clear()
     $script:FakeCalls.Clear()
     Sync-ProfileToGitHub -ProfileName $name -Token ('testtoken-'+'x'*22)
@@ -519,4 +519,4 @@ try{Sync-ProfileToGitHub -ProfileName 'OliMode' -Token ('testtoken-'+'x'*22)}
 catch{$failureMessage=$_.Exception.Message}
 Assert-True ($failureMessage.Contains('unexpected CFG')) 'Cross-profile CFG path must be blocked.'
 Assert-True ($script:FakeWrites.Count -eq 0) 'Unsafe CFG path must not write anything.'
-Write-Host 'PASS: dynamic CS2 crosshair capture and CFG sync; 5 profile/graphics syncs; authenticated read-back; commit-anchored profile refresh; stale profile/graphics rejection; sensitivity and voice handling; retry; partial failure; path validation.'
+Write-Host 'PASS: dynamic CS2 crosshair capture and CFG sync; 6 profile/graphics syncs; authenticated read-back; commit-anchored profile refresh; stale profile/graphics rejection; sensitivity and voice handling; retry; partial failure; path validation.'

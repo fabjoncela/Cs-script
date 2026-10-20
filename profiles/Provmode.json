@@ -1,0 +1,16 @@
+{
+    "SchemaVersion":  1,
+    "ProfileName":  "Provmode",
+    "PointerSpeed":  8,
+    "LogitechDPI":  350,
+    "DisableAcceleration":  true,
+    "ApplyNvidia":  true,
+    "Width":  1920,
+    "Height":  1080,
+    "RefreshHz":  300,
+    "Vibrance":  75,
+    "Hue":  -1,
+    "ScalingMode":  2,
+    "CfgDownloadUrl":  "https://raw.githubusercontent.com/fabjoncela/Cs-script/main/prov.cfg",
+    "LaunchApps":  true
+}

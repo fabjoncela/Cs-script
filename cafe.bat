@@ -4,7 +4,7 @@ start "" powershell.exe -NoProfile -ExecutionPolicy Bypass -STA -WindowStyle Hid
 exit /b
 
 # POWERSHELL_GUI
-# CAFE_RELEASE=2026.10.19.2
+# CAFE_RELEASE=2026.10.20.1
 
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
@@ -94,7 +94,7 @@ function Add-LiveLogLine {
             $script:LogBox.SelectionColor=$statusColors[$status]
         }
     }
-    foreach($match in [regex]::Matches($Line,'\b(FabMode|ArliMode|ArmlMode|OliMode|BrileMode|Apply Graphics|Play \+ Exec|Save Locally|Save & Sync)\b')){
+    foreach($match in [regex]::Matches($Line,'\b(FabMode|ArliMode|ArmlMode|OliMode|BrileMode|Provmode|Apply Graphics|Play \+ Exec|Save Locally|Save & Sync)\b')){
         $script:LogBox.Select($start+$match.Index,$match.Length)
         $script:LogBox.SelectionFont=$script:LogBoldFont
     }
@@ -3038,6 +3038,11 @@ $script:GamingProfiles = [ordered]@{
         PointerSpeed=10; LogitechDPI=800; DisableAcceleration=$true; ApplyNvidia=$true; ScalingMode=2
         Width=1920; Height=1080; RefreshHz=360; Vibrance=75; Hue=-1
         VoicePushToTalkKey=''; ConfigFile='oli.cfg'; CfgDownloadUrl='https://raw.githubusercontent.com/fabjoncela/Cs-script/main/oli.cfg'; LaunchApps=$true
+    }
+    Provmode = @{
+        PointerSpeed=8; LogitechDPI=350; DisableAcceleration=$true; ApplyNvidia=$true; ScalingMode=2
+        Width=1920; Height=1080; RefreshHz=300; Vibrance=75; Hue=-1
+        VoicePushToTalkKey=''; ConfigFile='prov.cfg'; CfgDownloadUrl='https://raw.githubusercontent.com/fabjoncela/Cs-script/main/prov.cfg'; LaunchApps=$true
     }
 }
 $script:ProfileSettingsPath = Join-Path $env:LOCALAPPDATA 'CafeLauncher\profiles.json'
@@ -8032,7 +8037,7 @@ function Invoke-GraphicsOnly {
     Start-StepScope -Run $graphicsRun -Step 'Apply Graphics'
     try {
     if(-not (Resolve-PendingProfileChanges -ProfileName $ModeName)){return}
-    $expected='21327a7e4819c60b89236639b173ad03d2a8eac6'
+    $expected='aa0be83b36410198bcf1dc39d9fe6bea9bc8189d'
     $source=Add-CafeCacheBust -Uri 'https://raw.githubusercontent.com/fabjoncela/Cs-script/main/graphics/ApplyGraphics.ps1'
     $cache=Join-Path $env:LOCALAPPDATA 'CafeLauncher\graphics-module.ps1'
     $parent=Split-Path -Parent $cache
@@ -8088,6 +8093,7 @@ $script:ProfileAccentColors=@{
     BrileMode=[System.Drawing.Color]::FromArgb(167,111,226)
     ArmlMode=[System.Drawing.Color]::FromArgb(232,151,65)
     OliMode=[System.Drawing.Color]::FromArgb(71,193,207)
+    Provmode=[System.Drawing.Color]::FromArgb(210,105,145)
 }
 # Modern CafeLauncher dashboard. Profile actions remain separate and independently callable.
 $form=New-Object System.Windows.Forms.Form
@@ -8225,10 +8231,10 @@ $dashGrid.Padding=New-Object System.Windows.Forms.Padding(8)
 $dashboard.Controls.Add($dashGrid)
 $profilesGrid=New-Object System.Windows.Forms.TableLayoutPanel
 $profilesGrid.Dock='Fill'
-$profilesGrid.RowCount=6
+$profilesGrid.RowCount=7
 $profilesGrid.ColumnCount=1
 [void]$profilesGrid.RowStyles.Add((New-Object System.Windows.Forms.RowStyle('Absolute',45)))
-for($i=1;$i -le 5;$i++){[void]$profilesGrid.RowStyles.Add((New-Object System.Windows.Forms.RowStyle('Percent',20)))}
+for($i=1;$i -le 6;$i++){[void]$profilesGrid.RowStyles.Add((New-Object System.Windows.Forms.RowStyle('Percent',16.667)))}
 $profilesGrid.Controls.Add((New-CafeLabel -Text 'NEW? Capture CS2 settings into a profile  |  Apply, Play, Graphics, Edit' -Strong),0,0)
 $dashGrid.Controls.Add($profilesGrid,0,0)
 
@@ -8387,12 +8393,13 @@ New-Tile "FACEIT Matchmaking" 3 { Open-FaceitMatchmaking }
 New-Tile "Spotify" 4 { Open-Spotify }
 New-Tile "Logitech G HUB" 5 { Open-GHub }
 
-# Five editable gaming profiles, all using the same shared routine.
+# Six editable gaming profiles, all using the same shared routine.
 New-Tile "FabMode" 6 { Invoke-GamingProfile -ProfileName 'FabMode' } -Primary -EditProfile 'FabMode'
 New-Tile "ArliMode" 7 { Invoke-GamingProfile -ProfileName 'ArliMode' } -Primary -EditProfile 'ArliMode'
 New-Tile "BrileMode" 8 { Invoke-GamingProfile -ProfileName 'BrileMode' } -Primary -EditProfile 'BrileMode'
 New-Tile "ArmlMode" 9 { Invoke-GamingProfile -ProfileName 'ArmlMode' } -Primary -EditProfile 'ArmlMode'
 New-Tile "OliMode" 10 { Invoke-GamingProfile -ProfileName 'OliMode' } -Primary -EditProfile 'OliMode'
+New-Tile "Provmode" 11 { Invoke-GamingProfile -ProfileName 'Provmode' } -Primary -EditProfile 'Provmode'
 
 New-Tile "Mouse Pointer Options" 11 { Open-MousePointerOptions }
 New-Tile "NVIDIA Control Panel" 12 { Open-NvidiaControlPanel }

@@ -3,7 +3,7 @@
 This file gives Codex and maintainers the operational context needed to work safely in this repository. **Always follow the checked-out source tree.** The generated state block below reports the launcher release marker, not whether that code has shipped to `main`.
 
 <!-- BEGIN GENERATED LAUNCHER STATE -->
-- Launcher release: `2026.10.19.2`
+- Launcher release: `2026.10.20.1`
 - Generated from the unique `# CAFE_RELEASE` marker in `cafe.bat` by `tools/Update-Context.ps1`.
 <!-- END GENERATED LAUNCHER STATE -->
 
@@ -65,9 +65,9 @@ Typing a value or using **Capture CS2** stages a local pending CFG sensitivity. 
 - For other suspect settings, confirm behavior against a config captured before and after changing each setting in CS2. If a selector alone does not apply the choice, map the profile choice to every required video-config field and make Capture read back those values. Keep profile JSON field names and established meanings stable.
 - References: [CS2 Options Menu config guide](https://steamcommunity.com/sharedfiles/filedetails/?id=3046217806) (community guide; documents menu choices and associated config values); [ValveSoftware CS2 issue #4155](https://github.com/ValveSoftware/csgo-osx-linux/issues/4155) (issue report includes a `cs2_video.txt` sample); [sample `cs2_video.txt` on GitHub](https://github.com/gucu112/cs2-config/blob/master/cs2_video.txt). These are useful investigation references, not an official Valve specification of the setting callbacks.
 
-Each profile's canonical preset is stored independently in `graphics/<ProfileName>.json`: `FabMode`, `ArliMode`, `ArmlMode`, `OliMode`, and `BrileMode`. The editor validates and displays the selected profile's file; Apply Graphics validates that same profile name before using its settings.
+Each profile's canonical preset is stored independently in `graphics/<ProfileName>.json`: `FabMode`, `ArliMode`, `ArmlMode`, `OliMode`, `BrileMode`, and `Provmode`. The editor validates and displays the selected profile's file; Apply Graphics validates that same profile name before using its settings.
 
-- FabMode, ArliMode, ArmlMode, and OliMode default to 1280×960 4:3 fullscreen.
+- FabMode, ArliMode, ArmlMode, OliMode, and Provmode default to 1280×960 4:3 fullscreen. Provmode currently copies OliMode's profile and graphics values.
 - BrileMode defaults to 1920×1080 16:9 fullscreen.
 - Presets request the highest advertised refresh for the selected CS2 resolution. A saved 360 Hz value does not prove the monitor supports 360 Hz.
 
@@ -106,6 +106,23 @@ The **CS2 / Apps** editor can load the three previous versions of `graphics/<Pro
 - The commit list is cached per profile for 24 hours; manual refresh bypasses the cache.
 - Restore fetches and validates the chosen version, then fills the editor without saving or applying it. Saving or syncing remains a separate user action.
 - History works offline only when the version is already listed in the fresh cache. Fetching an older preset requires internet.
+
+### Planned: Profile graphics, settings, and crosshair history (not implemented)
+
+Preliminary review of the current `main` source found that **Load history** covers only `graphics/<ProfileName>.json`. It does not provide history for `profiles/<ProfileName>.json` or the profile CFG that stores CS2 sensitivity and crosshair convars. GitHub currently returns commit history for all three file types. The existing graphics history tests mock GitHub and check the background HTTP worker separately; they do not exercise the full Windows UI flow. Reproduce the reported failure before concluding that the graphics history request itself is broken.
+
+Plan:
+
+1. Reproduce the problem on the intended branch/build. Test loading, refreshing, selecting, and restoring history; record the visible message and relevant LIVE LOGS entry. Check whether the running build matches the current source.
+2. Trace the graphics history button from its click through the background request, cache, version selection, historical file fetch, validation, and editor staging. Make failures clear for empty history, offline/network errors, GitHub limits, and deleted commits.
+3. Add history sources for each profile:
+   - **Graphics:** `graphics/<ProfileName>.json`.
+   - **Profile settings:** `profiles/<ProfileName>.json`.
+   - **Sensitivity and crosshair:** the profile CFG (for example, `fab.cfg`), using only supported sensitivity and crosshair values.
+4. Use GitHub file commit history for the selected source. Keep histories separate by profile and file, show the commit date/message and short commit ID, skip the current version, and provide an explicit refresh. Scope cache entries and invalidation to the selected profile and file.
+5. Validate a selected historical file with the existing schema/CFG validators, then stage only that category in the editor. Restoring must not directly edit CS2 files, save locally, or sync to GitHub. CFG history must preserve unrelated current CFG commands and use the existing diff confirmation when the user later saves or syncs.
+6. Add focused mocked tests for each source, history ordering, cache refresh/invalidation, invalid or mismatched files, deleted versions, and empty/offline responses. Verify cancel leaves drafts unchanged and restore stages values only. Add a Windows UI smoke test for the complete load-select-restore flow.
+
 
 Dashboard **Apply Graphics** is a separate action from the normal profile Apply and **Play + Exec** buttons. Saving in the editor does not apply the settings immediately.
 - The dashboard refreshes its initially selected `FabMode` settings from GitHub before showing them. Edit, Apply, and Play + Exec refresh the profile they act on; the Graphics action also refreshes that profile before running. The selected-profile card marks GitHub-verified values, local pending values, and local fallback values when GitHub cannot be reached. Other profiles are not fetched at startup.
@@ -211,6 +228,13 @@ Dashboard **Apply Graphics** is a separate action from the normal profile Apply 
   - Marshal UI updates to the UI thread. Safely ignore or cancel completion if the launcher closes, and report scan progress or failure clearly.
   - Discover Steam library roots once per scan and reuse them for Steam/CS2 lookup. Rediscover them on later scans so moved or newly added libraries are found.
   - Cover slow scans, failures, repeated clicks, and profile actions attempted during a scan; verify Windows UI behavior with a live smoke test.
+- **Deferred TODO — startup/API timing trace (not implemented):**
+  - Start a per-launch, in-memory trace early enough to record startup operations and network/API requests. Also record later user-triggered calls, clearly separated from startup. Instrument existing request paths; the trace must not make extra requests.
+  - Add a dashboard button (working name **Startup & API Timings**) that shows time to dashboard readiness, total startup time, and a timeline/list of each operation's type, name, host/path, start offset, elapsed time, and outcome/status. Include local startup stages (such as PC inventory) as well as HTTP/API requests; show only calls that actually occur.
+  - Show individual end-to-end elapsed times and overlap between concurrent requests. Do not add overlapping durations as if they were sequential. Label timings as app-observed wait time, not server processing time alone.
+  - Keep trace data in memory for the current run only. Record timing/status metadata, never authorization tokens, device codes, query secrets, request/response bodies, profile contents, or full account identifiers. Do not persist or upload the trace.
+  - Verify with mocked delayed, failed, and parallel requests; cover startup-versus-later grouping, total startup timing, and confirm instrumentation adds no network requests.
+  - Do not implement until explicitly requested.
 - Never store GitHub tokens in files, logs, or profile JSON. Do not enter a token on a shared café PC.
 
 ## CS2 Workshop Cleanup
