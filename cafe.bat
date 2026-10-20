@@ -7675,8 +7675,37 @@ $profilesGrid.Dock='Fill'
 $profilesGrid.RowCount=7
 $profilesGrid.ColumnCount=1
 [void]$profilesGrid.RowStyles.Add((New-Object System.Windows.Forms.RowStyle('Absolute',45)))
-for($i=1;$i -le 6;$i++){[void]$profilesGrid.RowStyles.Add((New-Object System.Windows.Forms.RowStyle('Percent',16.667)))}
-$profilesGrid.Controls.Add((New-CafeLabel -Text 'NEW? Capture CS2 settings into a profile  |  Apply, Play, Graphics, Edit' -Strong),0,0)
+for($i=1;$i -le 5;$i++){[void]$profilesGrid.RowStyles.Add((New-Object System.Windows.Forms.RowStyle('Percent',20)))}
+[void]$profilesGrid.RowStyles.Add((New-Object System.Windows.Forms.RowStyle('Absolute',42)))
+$script:ProfileDashboardPageSize=5
+$script:ProfileDashboardPage=0
+$script:ProfileDashboardCards=[ordered]@{}
+$script:ProfileDashboardTimers=@{}
+$script:ProfileDashboardHeading=New-CafeLabel -Text 'NEW? Capture CS2 settings into a profile  |  Apply, Play, Graphics, Edit' -Strong
+$profilesGrid.Controls.Add($script:ProfileDashboardHeading,0,0)
+$script:ProfileDashboardPager=New-Object System.Windows.Forms.TableLayoutPanel
+$script:ProfileDashboardPager.Dock='Fill'
+$script:ProfileDashboardPager.ColumnCount=3
+$script:ProfileDashboardPager.RowCount=1
+[void]$script:ProfileDashboardPager.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle('Absolute',92)))
+[void]$script:ProfileDashboardPager.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle('Percent',100)))
+[void]$script:ProfileDashboardPager.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle('Absolute',92)))
+$script:ProfileDashboardPrevious=New-Object System.Windows.Forms.Button
+$script:ProfileDashboardPrevious.Text='Previous'
+Style-CafeButton -Button $script:ProfileDashboardPrevious
+$script:ProfileDashboardPrevious.Dock='Fill'
+$script:ProfileDashboardPrevious.Add_Click({Set-ProfileDashboardPage -PageIndex ($script:ProfileDashboardPage-1)})
+$script:ProfileDashboardPageLabel=New-CafeLabel -Text 'Page 1 of 1' -FontSize 9
+$script:ProfileDashboardPageLabel.TextAlign='MiddleCenter'
+$script:ProfileDashboardNext=New-Object System.Windows.Forms.Button
+$script:ProfileDashboardNext.Text='Next'
+Style-CafeButton -Button $script:ProfileDashboardNext
+$script:ProfileDashboardNext.Dock='Fill'
+$script:ProfileDashboardNext.Add_Click({Set-ProfileDashboardPage -PageIndex ($script:ProfileDashboardPage+1)})
+$script:ProfileDashboardPager.Controls.Add($script:ProfileDashboardPrevious,0,0)
+$script:ProfileDashboardPager.Controls.Add($script:ProfileDashboardPageLabel,1,0)
+$script:ProfileDashboardPager.Controls.Add($script:ProfileDashboardNext,2,0)
+$profilesGrid.Controls.Add($script:ProfileDashboardPager,0,6)
 $dashGrid.Controls.Add($profilesGrid,0,0)
 
 $rightGrid=New-Object System.Windows.Forms.TableLayoutPanel
@@ -7728,7 +7757,7 @@ function New-Tile {
         $card.Dock='Fill'
         $card.ColumnCount=5
         $card.RowCount=1
-        $profileColor=$script:ProfileAccentColors[$selectedProfile]
+        $profileColor=if($script:ProfileAccentColors.Contains($selectedProfile)){$script:ProfileAccentColors[$selectedProfile]}else{[System.Drawing.Color]::FromArgb(56,137,240)}
         $card.BackColor=$profileColor
         $card.Padding=New-Object System.Windows.Forms.Padding(2)
         $card.Tag=$selectedProfile
@@ -7800,8 +7829,8 @@ function New-Tile {
             $desired=if($inside){[System.Drawing.Color]::FromArgb(238,238,245)}else{$profileColor}
             if($card.BackColor.ToArgb() -ne $desired.ToArgb()){$card.BackColor=$desired}
         }.GetNewClosure())
-        $rowHover.Start()
-        $profilesGrid.Controls.Add($card,0,($Index-5))
+        $script:ProfileDashboardTimers[$selectedProfile]=$rowHover
+        $script:ProfileDashboardCards[$selectedProfile]=$card
     }else{
         $button.Add_Click({
             Write-Log ('Clicked: '+$this.Text)
@@ -7821,6 +7850,32 @@ function New-Tile {
     }
 }
 
+function Set-ProfileDashboardPage {
+    param([int]$PageIndex)
+    $profileNames=@($script:ProfileDashboardCards.Keys)
+    $pageCount=[math]::Max(1,[int][math]::Ceiling($profileNames.Count/[double]$script:ProfileDashboardPageSize))
+    $lastPage=$pageCount-1
+    $PageIndex=[math]::Max(0,[math]::Min($PageIndex,$lastPage))
+    $script:ProfileDashboardPage=$PageIndex
+    $firstIndex=$PageIndex*$script:ProfileDashboardPageSize
+    $profilesGrid.SuspendLayout()
+    try{
+        foreach($timer in $script:ProfileDashboardTimers.Values){$timer.Stop()}
+        $profilesGrid.Controls.Clear()
+        $profilesGrid.Controls.Add($script:ProfileDashboardHeading,0,0)
+        $profilesGrid.Controls.Add($script:ProfileDashboardPager,0,6)
+        $visibleCount=[math]::Min($script:ProfileDashboardPageSize,[math]::Max(0,$profileNames.Count-$firstIndex))
+        for($offset=0;$offset -lt $visibleCount;$offset++){
+            $name=[string]$profileNames[$firstIndex+$offset]
+            $profilesGrid.Controls.Add($script:ProfileDashboardCards[$name],0,($offset+1))
+            if($script:ProfileDashboardTimers.ContainsKey($name)){$script:ProfileDashboardTimers[$name].Start()}
+        }
+        $script:ProfileDashboardPageLabel.Text=('Page '+($PageIndex+1)+' of '+$pageCount)
+        $script:ProfileDashboardPrevious.Enabled=($PageIndex -gt 0)
+        $script:ProfileDashboardNext.Enabled=($PageIndex -lt $lastPage)
+    }finally{$profilesGrid.ResumeLayout($true)}
+}
+
 New-Tile "LAUNCH ALL" 0 { Launch-All } -Primary
 New-Tile "Steam" 1 { Start-DetectedSteam }
 New-Tile "Workshop Cleanup" 18 { Show-CafeWorkshopCleanupDialog }
@@ -7834,13 +7889,15 @@ New-Tile "FACEIT Matchmaking" 3 { Open-FaceitMatchmaking }
 New-Tile "Spotify" 4 { Open-Spotify }
 New-Tile "Logitech G HUB" 5 { Open-GHub }
 
-# Six editable gaming profiles, all using the same shared routine.
-New-Tile "FabMode" 6 { Invoke-GamingProfile -ProfileName 'FabMode' } -Primary -EditProfile 'FabMode'
-New-Tile "ArliMode" 7 { Invoke-GamingProfile -ProfileName 'ArliMode' } -Primary -EditProfile 'ArliMode'
-New-Tile "BrileMode" 8 { Invoke-GamingProfile -ProfileName 'BrileMode' } -Primary -EditProfile 'BrileMode'
-New-Tile "ArmlMode" 9 { Invoke-GamingProfile -ProfileName 'ArmlMode' } -Primary -EditProfile 'ArmlMode'
-New-Tile "OliMode" 10 { Invoke-GamingProfile -ProfileName 'OliMode' } -Primary -EditProfile 'OliMode'
-New-Tile "Provmode" 11 { Invoke-GamingProfile -ProfileName 'Provmode' } -Primary -EditProfile 'Provmode'
+# Profile cards are built once from the ordered profile registry, then only five are attached to the dashboard at a time.
+$profileTileIndex=6
+foreach($profileName in @($script:GamingProfiles.Keys)){
+    $profileForAction=[string]$profileName
+    $profileAction={Invoke-GamingProfile -ProfileName $profileForAction}.GetNewClosure()
+    New-Tile $profileForAction $profileTileIndex $profileAction -Primary -EditProfile $profileForAction
+    $profileTileIndex++
+}
+Set-ProfileDashboardPage -PageIndex $script:ProfileDashboardPage
 
 New-Tile "Mouse Pointer Options" 11 { Open-MousePointerOptions }
 New-Tile "NVIDIA Control Panel" 12 { Open-NvidiaControlPanel }

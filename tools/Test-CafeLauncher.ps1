@@ -590,6 +590,31 @@ try {
     if($tabs.TabPages.Count -ne 2 -or $profilesGrid.Controls.Count -ne 7){
         throw 'Dashboard must construct two tabs and exactly six profile cards.'
     }
+    $pageOneProfiles=@(for($row=1;$row -le 5;$row++){
+        $card=$profilesGrid.GetControlFromPosition(0,$row)
+        if($card -and $card.Tag){[string]$card.Tag}
+    })
+    if($script:ProfileDashboardPageLabel.Text -ne 'Page 1 of 2' -or
+       -not $script:ProfileDashboardNext.Enabled -or
+       $script:ProfileDashboardPrevious.Enabled -or
+       $pageOneProfiles.Count -ne 5 -or
+       $pageOneProfiles -contains 'Provmode'){
+        throw 'Dashboard page 1 must show five profiles and leave Provmode for page 2.'
+    }
+    Set-ProfileDashboardPage -PageIndex 1
+    $pageTwoProfiles=@(for($row=1;$row -le 5;$row++){
+        $card=$profilesGrid.GetControlFromPosition(0,$row)
+        if($card -and $card.Tag){[string]$card.Tag}
+    })
+    if($script:ProfileDashboardPageLabel.Text -ne 'Page 2 of 2' -or
+       $script:ProfileDashboardNext.Enabled -or
+       -not $script:ProfileDashboardPrevious.Enabled -or
+       $pageTwoProfiles.Count -ne 1 -or
+       $pageTwoProfiles[0] -cne 'Provmode' -or
+       $script:ProfileRefreshCalls.Count -ne 1){
+        throw 'Dashboard page 2 must show only Provmode without refreshing profile data.'
+    }
+    Set-ProfileDashboardPage -PageIndex 0
     if($script:SelectedProfileTitle.Text -ne 'FabMode' -or
        $script:ManualDpiInput.Text -ne '' -or
        $toolsFlow.Controls.Count -lt 9){
