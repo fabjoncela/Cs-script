@@ -3,7 +3,7 @@
 This file gives Codex and maintainers the operational context needed to work safely in this repository. **Always follow the checked-out source tree.** The generated state block below reports the launcher release marker, not whether that code has shipped to `main`.
 
 <!-- BEGIN GENERATED LAUNCHER STATE -->
-- Launcher release: `2026.10.20.2`
+- Launcher release: `2026.10.20.3`
 - Generated from the unique `# CAFE_RELEASE` marker in `cafe.bat` by `tools/Update-Context.ps1`.
 <!-- END GENERATED LAUNCHER STATE -->
 
@@ -173,8 +173,8 @@ Dashboard **Apply Graphics** is a separate action from the normal profile Apply 
 - GitHub profile reads and the sync target are configured in `cafe.bat` (`$script:GithubBranch`). Check this before any claim about which remote branch receives profile data.
 - The launcher captures its running `CAFE_RELEASE` at startup. **Check for Updates** compares that version with GitHub `main`, even if a newer BAT has replaced the file on disk while the current PowerShell UI is running.
 - If the newer BAT is already installed, the updater says to close and reopen it; otherwise it offers the verified download.
-- After the dashboard first renders and the local PC inventory completes, startup checks GitHub `main` for launcher updates. A different verified BAT prompts before download; the updater checks GitHub blob SHA, size, and PowerShell syntax before installing it. Manual **Check for Updates** also reports current or failed checks; failures are written to LIVE LOGS.
-- After the dashboard first renders, its read-only PC inventory runs locally. A small centered overlay card shows a rotating GDI+ arc and the current scan phase; the UI processes timer updates between scan steps. This inventory does not refresh GitHub profiles. The automatic launcher update check runs after the inventory completes.
+- After the dashboard appears, startup checks GitHub `main` for launcher updates in a background worker. The check is silent when current; a different verified BAT prompts before download. The updater checks GitHub blob SHA, size, and PowerShell syntax before installing it. Manual **Check for Updates** keeps its up-to-date and failure dialogs; failures are written to LIVE LOGS.
+- Read-only PC inventory runs only when **Detect PC** is pressed. It does not refresh GitHub profiles or gate dashboard actions. Startup timings include the update-check dispatch and its separately tracked HTTP span.
 - The updater classifies HTTP 403/429 as quota exhaustion only when the response body identifies rate limiting or `X-RateLimit-Remaining` is zero. Confirmed quota exhaustion tells the user to wait and retry; other 403 errors remain generic access failures.
 - Quota status affects presentation/logging only. It never bypasses the updater's GitHub SHA, size, and syntax verification.
 - The dashboard's top-right GitHub API allowance indicator reads the remaining/limit headers from requests the launcher already makes; it must not make a separate polling request. It shows the count and when that response was received. This is a display only and does not affect profile selection or settings.
@@ -223,12 +223,8 @@ Dashboard **Apply Graphics** is a separate action from the normal profile Apply 
   - Investigate an explicit action for DyAc/DyAc 2 Premium on supported BenQ ZOWIE monitors. Verify the exact monitor model and whether the official XL Setting to Share `.mccs` profile pathway supports the setting.
   - Prefer supported profile/software mechanisms over undocumented DDC/CI writes. Keep startup detection informational; report when a model or setting cannot be verified.
   - Do not change monitor OSD settings automatically during detection or normal Apply.
-- **Deferred TODO — responsive PC inventory and Steam discovery (not implemented):**
-  - Run the existing read-only startup scan on a background worker so the WinForms window stays responsive. Disable **Detect PC**, profile **Apply**, **Play + Exec**, and **Apply Graphics** while it runs; re-enable them on success or failure.
-  - Marshal UI updates to the UI thread. Safely ignore or cancel completion if the launcher closes, and report scan progress or failure clearly.
-  - Discover Steam library roots once per scan and reuse them for Steam/CS2 lookup. Rediscover them on later scans so moved or newly added libraries are found.
-  - Cover slow scans, failures, repeated clicks, and profile actions attempted during a scan; verify Windows UI behavior with a live smoke test.
-- **Startup & API Timings** is a dashboard tool backed by a per-launch in-memory trace. It reports the app-observed time to dashboard readiness and total startup time, plus launcher initialization, local PC inventory, automatic update checking, and HTTP/API request spans. Startup and later user-triggered work are grouped separately. Each request shows its host/path without query strings, individual elapsed wait, outcome, and HTTP status where available; overlapping operations remain individual spans and are not summed as sequential work.
+- **Deferred TODO — PC diagnostics Steam discovery optimization (not implemented):** Discover Steam library roots once per on-demand PC scan and reuse them for Steam/CS2 lookup. Rediscover them on later scans so moved or newly added libraries are found.
+- **Startup & API Timings** is a dashboard tool backed by a per-launch in-memory trace. It reports the app-observed time to dashboard readiness and startup-path completion, plus launcher initialization sub-stages, on-demand PC diagnostics, automatic update-check dispatch, and HTTP/API request spans. Startup and later user-triggered or diagnostic work are grouped separately. Each request shows its host/path without query strings, individual elapsed wait, outcome, and HTTP status where available; overlapping operations remain individual spans and are not summed as sequential work.
 - The trace starts before dashboard initialization, retains at most the latest 500 operations, and stores no request/response bodies, credentials, device codes, query data, profile contents, or full account identifiers. It is neither persisted nor uploaded. Opening or refreshing the timing dialog reads the in-memory snapshot and makes no network requests. Requests performed in the separate Logitech helper process are shown as app-observed external-process wait time, including helper verification overhead.
 - `tools/Test-StartupApiTimings.ps1` checks delayed and failed mocked operations, parallel overlap, startup/later grouping, startup totals, query-secret removal, and that the dialog adds no requests. It does not launch the app or contact a network service.
 - Never store GitHub tokens in files, logs, or profile JSON. Do not enter a token on a shared café PC.

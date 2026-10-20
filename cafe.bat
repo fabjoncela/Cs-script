@@ -4,7 +4,7 @@ start "" powershell.exe -NoProfile -ExecutionPolicy Bypass -STA -WindowStyle Hid
 exit /b
 
 # POWERSHELL_GUI
-# CAFE_RELEASE=2026.10.20.2
+# CAFE_RELEASE=2026.10.20.3
 
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
@@ -12,10 +12,71 @@ Add-Type -Language CSharp -TypeDefinition @'
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.ComponentModel;
 using System.Diagnostics;
 using System.Globalization;
+using System.IO;
+using System.Net;
 using System.Text.RegularExpressions;
+using System.Text;
 using System.Threading;
+
+public sealed class CafeLauncherUpdateBackgroundWorker : BackgroundWorker {
+    private readonly string uri;
+    private readonly Func<string, string, string, string, long> timingStart;
+    private readonly Action<long, string, int> timingComplete;
+    public string ResultText { get; private set; }
+    public string ErrorText { get; private set; }
+    public string ErrorBody { get; private set; }
+    public string RateLimitRemaining { get; private set; }
+    public string RateLimitLimit { get; private set; }
+    public int HttpStatus { get; private set; }
+    public int WorkerThreadId { get; private set; }
+
+    public CafeLauncherUpdateBackgroundWorker(string uri, Func<string, string, string, string, long> timingStart, Action<long, string, int> timingComplete) {
+        this.uri = uri;
+        this.timingStart = timingStart;
+        this.timingComplete = timingComplete;
+        DoWork += delegate(object sender, DoWorkEventArgs e) {
+            WorkerThreadId = Thread.CurrentThread.ManagedThreadId;
+            long timingId = timingStart("HTTP", "GitHub Get", this.uri, "Startup");
+            try {
+                ServicePointManager.SecurityProtocol = ServicePointManager.SecurityProtocol | SecurityProtocolType.Tls12;
+                var request = (HttpWebRequest)WebRequest.Create(this.uri);
+                request.Method = "GET";
+                request.UserAgent = "CafeLauncher-Updater";
+                request.Accept = "application/vnd.github+json";
+                request.Timeout = 8000;
+                request.ReadWriteTimeout = 8000;
+                using (var response = (HttpWebResponse)request.GetResponse())
+                using (var reader = new StreamReader(response.GetResponseStream(), Encoding.UTF8)) {
+                    HttpStatus = (int)response.StatusCode;
+                    RateLimitRemaining = response.Headers["X-RateLimit-Remaining"];
+                    RateLimitLimit = response.Headers["X-RateLimit-Limit"];
+                    ResultText = reader.ReadToEnd();
+                }
+                timingComplete(timingId, "Success", HttpStatus);
+            } catch (Exception error) {
+                var webError = error as WebException;
+                var response = webError == null ? null : webError.Response as HttpWebResponse;
+                if (response != null) {
+                    using (response) {
+                        HttpStatus = (int)response.StatusCode;
+                        RateLimitRemaining = response.Headers["X-RateLimit-Remaining"];
+                        RateLimitLimit = response.Headers["X-RateLimit-Limit"];
+                        try {
+                            using (var reader = new StreamReader(response.GetResponseStream(), Encoding.UTF8)) {
+                                ErrorBody = reader.ReadToEnd();
+                            }
+                        } catch { }
+                    }
+                }
+                ErrorText = error.Message;
+                timingComplete(timingId, "Failed", HttpStatus);
+            }
+        };
+    }
+}
 
 public sealed class CafeTimingEntry {
     public long Id { get; set; }
@@ -134,11 +195,19 @@ function Complete-CafeTimingOperation {
 
 function Get-CafeTimingDelegates {
     $startMethod=[CafeTimingTrace].GetMethod('StartLater',[type[]]@([string],[string],[string]))
+    $startStartupMethod=[CafeTimingTrace].GetMethod('Start',[type[]]@([string],[string],[string],[string]))
     $completeMethod=[CafeTimingTrace].GetMethod('Complete',[type[]]@([long],[string],[int]))
     return [pscustomobject]@{
         Start=[Delegate]::CreateDelegate([Func[string,string,string,long]],$startMethod)
+        StartStartup=[Delegate]::CreateDelegate([Func[string,string,string,string,long]],$startStartupMethod)
         Complete=[Delegate]::CreateDelegate([Action[long,string,int]],$completeMethod)
     }
+}
+
+function New-CafeLauncherUpdateWorker {
+    param([Parameter(Mandatory=$true)][string]$Uri)
+    $timing=Get-CafeTimingDelegates
+    return [CafeLauncherUpdateBackgroundWorker]::new($Uri,$timing.StartStartup,$timing.Complete)
 }
 
 function Invoke-CafeTimedRequest {
@@ -852,6 +921,7 @@ function Open-NvidiaControlPanel {
 # if that resolution is unavailable they keep the current resolution and maximize it.
 # The display mode helper uses a byte-array placeholder for DEVMODE's 16-byte union,
 # avoiding compiler/layout problems from the prior explicit union implementation.
+$script:NativeHelperInitializationTimingId=Start-CafeTimingOperation -Type 'Local' -Name 'Display and NVIDIA helper initialization' -Group Startup
 try {
     if (-not ("FabDisplayNative" -as [type])) {
         Add-Type -ErrorAction Stop @"
@@ -2018,6 +2088,7 @@ public static class FabNvApi {
 } catch {
     Write-Log "NVIDIA NVAPI helper could not compile/load: $($_.Exception.Message)" "ERROR"
 }
+Complete-CafeTimingOperation -Id $script:NativeHelperInitializationTimingId -Outcome 'Success'
 
 $script:ColorWatchTimer = $null
 $script:ColorWatchLastLevel = $null
@@ -2910,9 +2981,12 @@ function Get-PCDiagnostics {
 
 function Show-PCDiagnostics {
     Write-Log 'PC detection started.'
+    $diagnosticsTiming=Start-CafeTimingOperation -Type 'Local' -Name 'PC diagnostics inventory' -Group Later
     try {
         $summary = Get-PCDiagnostics
         foreach ($line in ($summary -split '\r?\n')) { if ($line) { Write-Log ('PC: ' + $line) } }
+        Complete-CafeTimingOperation -Id $diagnosticsTiming -Outcome 'Success'
+        $diagnosticsTiming=0
         $formDialog = New-Object System.Windows.Forms.Form
         $formDialog.Text='PC Detection - CafeLauncher'
         $formDialog.ClientSize=[System.Drawing.Size]::new(755,445)
@@ -2939,7 +3013,10 @@ function Show-PCDiagnostics {
         $formDialog.Controls.Add($close)
         [void]$formDialog.ShowDialog($form)
         $formDialog.Dispose()
-    } catch { Write-Log "PC detection failed: $($_.Exception.Message)" 'ERROR' }
+    } catch {
+        if($diagnosticsTiming){Complete-CafeTimingOperation -Id $diagnosticsTiming -Outcome 'Failed'}
+        Write-Log "PC detection failed: $($_.Exception.Message)" 'ERROR'
+    }
 }
 
 # ============================================================== 
@@ -3011,7 +3088,7 @@ function Restart-CafeLauncherAfterUpdate {
 }
 
 function Check-CafeLauncherUpdates {
-    param([switch]$Manual)
+    param([switch]$Manual,[object]$RemoteMetadata)
     $source=$env:CAFE_SCRIPT
     if ([string]::IsNullOrWhiteSpace($source)) {
         if ($Manual) { Write-Log 'Current BAT path not available for updater.' 'WARN' }
@@ -3019,9 +3096,10 @@ function Check-CafeLauncherUpdates {
     }
     try {
         [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
-        $uri="https://api.github.com/repos/fabjoncela/Cs-script/contents/cafe.bat?ref=main"
+        $uri=Add-CafeCacheBust -Uri 'https://api.github.com/repos/fabjoncela/Cs-script/contents/cafe.bat?ref=main'
         $timingGroup=if($Manual){'Later'}else{'Startup'}
-        $remote=Invoke-CafeGitHubRestMethod -Uri $uri -Headers @{'User-Agent'='CafeLauncher-Updater'; 'Accept'='application/vnd.github+json'} -TimeoutSec 8 -TimingGroup $timingGroup
+        if($PSBoundParameters.ContainsKey('RemoteMetadata')){$remote=$RemoteMetadata}
+        else{$remote=Invoke-CafeGitHubRestMethod -Uri $uri -Headers @{'User-Agent'='CafeLauncher-Updater'; 'Accept'='application/vnd.github+json'} -TimeoutSec 8 -TimingGroup $timingGroup}
         if ($remote.path -ne 'cafe.bat' -or $remote.sha -notmatch '^[a-fA-F0-9]{40}$' -or
             [int64]$remote.size -lt 10000 -or [int64]$remote.size -gt 1000000) { throw 'Unexpected update metadata from GitHub.' }
         # Ignore older/unversioned GitHub builds; the SHA handles same-version changes.
@@ -3159,6 +3237,59 @@ function Check-CafeLauncherUpdates {
     }
 }
 
+function Start-CafeLauncherUpdateCheckAsync {
+    if ([string]::IsNullOrWhiteSpace([string]$env:CAFE_SCRIPT)) {
+        [CafeTimingTrace]::MarkStartupComplete()
+        return
+    }
+    if ($script:CafeLauncherUpdateWorker -and $script:CafeLauncherUpdateWorker.IsBusy) { return }
+    $dispatchTiming=Start-CafeTimingOperation -Type 'Local' -Name 'Automatic launcher update check dispatch' -Group Startup
+    try {
+        $uri=Add-CafeCacheBust -Uri 'https://api.github.com/repos/fabjoncela/Cs-script/contents/cafe.bat?ref=main'
+        $worker=New-CafeLauncherUpdateWorker -Uri $uri
+        $script:CafeLauncherUpdateWorker=$worker
+        $worker.Add_RunWorkerCompleted({
+            $completedWorker=$script:CafeLauncherUpdateWorker
+            $script:CafeLauncherUpdateWorker=$null
+            if (-not $completedWorker) { return }
+            try {
+                if($form -and $form.IsDisposed){return}
+                Update-CafeGitHubRateLimitFromHeaders -Headers @{
+                    'X-RateLimit-Remaining'=[string]$completedWorker.RateLimitRemaining
+                    'X-RateLimit-Limit'=[string]$completedWorker.RateLimitLimit
+                }
+                if ($completedWorker.ErrorText) {
+                    $quotaMessage=Get-CafeUpdateRateLimitMessage -StatusCode $completedWorker.HttpStatus `
+                        -ResponseBody $completedWorker.ErrorBody -RateLimitRemaining $completedWorker.RateLimitRemaining
+                    if ($quotaMessage) {
+                        Write-Log "Automatic launcher update check blocked by GitHub API rate limiting (HTTP $($completedWorker.HttpStatus); remaining=$($completedWorker.RateLimitRemaining))." 'WARN'
+                    } else {
+                        Write-Log ('Automatic launcher update check failed: '+$completedWorker.ErrorText) 'WARN'
+                    }
+                    return
+                }
+                try {
+                    $remote=$completedWorker.ResultText | ConvertFrom-Json -ErrorAction Stop
+                    Check-CafeLauncherUpdates -RemoteMetadata $remote
+                } catch {
+                    Write-Log ('Automatic launcher update check failed: '+$_.Exception.Message) 'WARN'
+                }
+            } finally {
+                $completedWorker.Dispose()
+            }
+        })
+        $worker.RunWorkerAsync()
+        Complete-CafeTimingOperation -Id $dispatchTiming -Outcome 'Success'
+    } catch {
+        Complete-CafeTimingOperation -Id $dispatchTiming -Outcome 'Failed'
+        Write-Log ('Automatic launcher update check could not start: '+$_.Exception.Message) 'WARN'
+    } finally {
+        # Startup readiness ends once the background check has been dispatched;
+        # the request remains visible as its own span in Startup & API Timings.
+        [CafeTimingTrace]::MarkStartupComplete()
+    }
+}
+
 function Launch-All {
     param([switch]$SkipGHub)
     Start-DetectedSteam
@@ -3185,6 +3316,7 @@ function Launch-All {
 # CS2 .cfg files remain separately managed on GitHub.
 # Local unsynced edits ALWAYS win over downloaded cloud settings.
 # ==============================================================
+$script:ProfileDefinitionsTimingId=Start-CafeTimingOperation -Type 'Local' -Name 'Profile definitions and state' -Group Startup
 $script:GithubRepo = 'fabjoncela/Cs-script'
 $script:GithubBranch = 'main'
 # Public GitHub App client ID used only by the optional device sign-in flow.
@@ -3230,6 +3362,7 @@ $script:VerifiedProfileState = @{}
 $script:ProfileRefreshStatus = @{}
 $script:GraphicsPresets = [ordered]@{}
 foreach ($name in @($script:GamingProfiles.Keys)) { $script:PendingSync[$name] = $false }
+Complete-CafeTimingOperation -Id $script:ProfileDefinitionsTimingId -Outcome 'Success'
 
 function ConvertTo-CafeGraphicsPreset {
     param([string]$ProfileName,$Preset)
@@ -4934,7 +5067,14 @@ function Save-ProfileSettings {
     Write-Log "Profile settings saved locally: $script:ProfileSettingsPath"
 }
 
-Load-ProfileSettings
+$script:ProfileSettingsLoadTimingId=Start-CafeTimingOperation -Type 'Local' -Name 'Local profile settings load' -Group Startup
+try {
+    Load-ProfileSettings
+    Complete-CafeTimingOperation -Id $script:ProfileSettingsLoadTimingId -Outcome 'Success'
+} catch {
+    Complete-CafeTimingOperation -Id $script:ProfileSettingsLoadTimingId -Outcome 'Failed'
+    throw
+}
 
 function Add-CafeCacheBust {
     param([Parameter(Mandatory=$true)][string]$Uri)
@@ -7753,6 +7893,7 @@ $script:ProfileAccentColors=@{
     Provmode=[System.Drawing.Color]::FromArgb(210,105,145)
 }
 # Modern CafeLauncher dashboard. Profile actions remain separate and independently callable.
+$script:DashboardConstructionTimingId=Start-CafeTimingOperation -Type 'Local' -Name 'Dashboard construction' -Group Startup
 $form=New-Object System.Windows.Forms.Form
 $form.Text='CafeLauncher | CS2 Setup Center'
 $form.ClientSize=New-Object System.Drawing.Size(1080,825)
@@ -8372,13 +8513,19 @@ try {
     foreach($entry in $recentEntries){Add-LiveLogLine -Line $entry}
 }catch{}
 Write-Log ('CafeLauncher dashboard ready. Log file: '+$script:LogPath)
-[void](Refresh-SelectedProfileCard -Name 'FabMode')
+$script:InitialProfileRefreshTimingId=Start-CafeTimingOperation -Type 'Local' -Name 'Initial selected profile refresh' -Group Startup
+try {
+    [void](Refresh-SelectedProfileCard -Name 'FabMode')
+    Complete-CafeTimingOperation -Id $script:InitialProfileRefreshTimingId -Outcome 'Success'
+} catch {
+    Complete-CafeTimingOperation -Id $script:InitialProfileRefreshTimingId -Outcome 'Failed'
+    throw
+}
 $footer=New-CafeLabel -Text '  CAFE LAUNCHER | production dashboard | %TEMP%\CafeLauncher.log' -FontSize 9
 $root.Controls.Add($footer,0,3)
 
 $form.Add_FormClosed({
-    if($script:StartupStatusTimer){try{$script:StartupStatusTimer.Stop();$script:StartupStatusTimer.Dispose()}catch{};$script:StartupStatusTimer=$null}
-    if($script:StartupOverlay -and -not $script:StartupOverlay.IsDisposed){$script:StartupOverlay.Dispose();$script:StartupOverlay=$null}
+    if($startupTimer){try{$startupTimer.Stop();$startupTimer.Dispose()}catch{}}
     if($script:LogihubDownloadTimer){$script:LogihubDownloadTimer.Stop();$script:LogihubDownloadTimer.Dispose();$script:LogihubDownloadTimer=$null}
     if($script:LiveDpiVerificationTimer){$script:LiveDpiVerificationTimer.Stop();$script:LiveDpiVerificationTimer.Dispose();$script:LiveDpiVerificationTimer=$null}
     $script:LogihubRequestedDPI=$null
@@ -8388,100 +8535,22 @@ $form.Add_FormClosed({
     }
     if($script:LogBoldFont){$script:LogBoldFont.Dispose();$script:LogBoldFont=$null}
 })
-# On first display, inventory the machine after Windows has rendered the UI.
-# Launcher update checks also run automatically after the initial local startup inventory.
+# PC detection remains available on demand through the existing Detect PC tool.
 $script:StartupInventoryRunning=$false
-$script:StartupStatusMessage='Getting CafeLauncher ready...'
-$script:StartupSpinnerAngle=0
-$script:StartupOverlay=New-Object System.Windows.Forms.Panel
-$script:StartupOverlay.Size=New-Object System.Drawing.Size(230,132)
-$script:StartupOverlay.BackColor=$PANEL
-$script:StartupOverlay.BorderStyle='FixedSingle'
-$script:StartupOverlay.Anchor='None'
-$script:StartupOverlay.Location=New-Object System.Drawing.Point(
-    [int](($form.ClientSize.Width-$script:StartupOverlay.Width)/2),
-    [int](($form.ClientSize.Height-$script:StartupOverlay.Height)/2))
-$script:StartupOverlayLabel=New-CafeLabel -Text $script:StartupStatusMessage -FontSize 9 -Strong
-$script:StartupOverlayLabel.Dock='None'
-$script:StartupOverlayLabel.Location=New-Object System.Drawing.Point(8,84)
-$script:StartupOverlayLabel.Size=New-Object System.Drawing.Size(212,30)
-$script:StartupOverlayLabel.TextAlign='MiddleCenter'
-$script:StartupOverlay.Controls.Add($script:StartupOverlayLabel)
-$script:StartupOverlay.Add_Paint({
-    param($sender,$e)
-    $graphics=$e.Graphics
-    $graphics.SmoothingMode=[System.Drawing.Drawing2D.SmoothingMode]::AntiAlias
-    $diameter=48
-    $bounds=New-Object System.Drawing.Rectangle(
-        [int](($sender.ClientSize.Width-$diameter)/2),12,$diameter,$diameter)
-    $trackPen=[System.Drawing.Pen]::new([System.Drawing.Color]::FromArgb(70,82,101),4)
-    $activePen=[System.Drawing.Pen]::new($BLUE,4)
-    try{
-        $trackPen.StartCap=[System.Drawing.Drawing2D.LineCap]::Round
-        $trackPen.EndCap=[System.Drawing.Drawing2D.LineCap]::Round
-        $activePen.StartCap=[System.Drawing.Drawing2D.LineCap]::Round
-        $activePen.EndCap=[System.Drawing.Drawing2D.LineCap]::Round
-        $graphics.DrawArc($trackPen,$bounds,0,360)
-        $graphics.DrawArc($activePen,$bounds,[single]$script:StartupSpinnerAngle,105)
-    }finally{$trackPen.Dispose();$activePen.Dispose()}
-})
-$form.Controls.Add($script:StartupOverlay)
-$form.Add_Resize({
-    if($script:StartupOverlay -and -not $script:StartupOverlay.IsDisposed){
-        $script:StartupOverlay.Location=New-Object System.Drawing.Point(
-            [int](($form.ClientSize.Width-$script:StartupOverlay.Width)/2),
-            [int](($form.ClientSize.Height-$script:StartupOverlay.Height)/2))
-    }
-})
-$script:StartupOverlay.Hide()
-$script:StartupStatusTimer=New-Object System.Windows.Forms.Timer
-$script:StartupStatusTimer.Interval=33
-$script:StartupStatusTimer.Add_Tick({
-    if(-not $script:StartupInventoryRunning -or -not $script:StartupOverlay -or $script:StartupOverlay.IsDisposed){return}
-    $script:StartupSpinnerAngle=($script:StartupSpinnerAngle+18)%360
-    $script:StartupOverlay.Invalidate()
-})
-$startupTimer = New-Object System.Windows.Forms.Timer
+$script:StartupOverlay=$null
+$script:StartupOverlayLabel=$null
+$script:CafeLauncherUpdateWorker=$null
+$startupTimer=New-Object System.Windows.Forms.Timer
 $startupTimer.Interval=350
 $startupTimer.Add_Tick({
     $startupTimer.Stop()
     $startupTimer.Dispose()
-    $script:StartupInventoryRunning=$true
-    Set-CafeStartupStatus 'Getting CafeLauncher ready...'
-    $script:StartupOverlay.Show()
-    $script:StartupOverlay.BringToFront()
-    $script:StartupStatusTimer.Start()
-    [System.Windows.Forms.Application]::DoEvents()
-    # Profile and graphics settings refresh only when their profile is opened
-    # or applied, instead of spending requests on every profile at startup.
-    $inventoryTiming=Start-CafeTimingOperation -Type 'Local' -Name 'PC inventory' -Group Startup
-    try {
-        Write-Log 'Automatic startup inventory:'
-        $summary = Get-PCDiagnostics
-        foreach ($line in ($summary -split '\r?\n')) { if ($line) { Write-Log ('PC: ' + $line) } }
-        Complete-CafeTimingOperation -Id $inventoryTiming -Outcome 'Success'
-    } catch {
-        Complete-CafeTimingOperation -Id $inventoryTiming -Outcome 'Failed'
-        Write-Log "Startup inventory failed: $($_.Exception.Message)" 'WARN'
-    }
-    finally {
-        $script:StartupInventoryRunning=$false
-        if($script:StartupStatusTimer){$script:StartupStatusTimer.Stop();$script:StartupStatusTimer.Dispose();$script:StartupStatusTimer=$null}
-        if($script:StartupOverlay -and -not $script:StartupOverlay.IsDisposed){$script:StartupOverlay.Hide()}
-    }
-    # Check GitHub main after the local inventory and dashboard startup are complete.
-    $updateTiming=Start-CafeTimingOperation -Type 'Local' -Name 'Automatic launcher update check' -Group Startup
-    try{
-        Check-CafeLauncherUpdates
-        Complete-CafeTimingOperation -Id $updateTiming -Outcome 'Success'
-    }catch{
-        Complete-CafeTimingOperation -Id $updateTiming -Outcome 'Failed'
-        Write-Log ('Automatic launcher update check failed: '+$_.Exception.Message) 'WARN'
-    }finally{[CafeTimingTrace]::MarkStartupComplete()}
+    Start-CafeLauncherUpdateCheckAsync
 })
 $form.Add_Shown({
     Complete-CafeTimingOperation -Id $script:CafeLauncherInitializationTimingId -Outcome 'Success'
     [CafeTimingTrace]::MarkDashboardReady()
+    Complete-CafeTimingOperation -Id $script:DashboardConstructionTimingId -Outcome 'Success'
     $startupTimer.Start()
 })
 [void]$form.ShowDialog()

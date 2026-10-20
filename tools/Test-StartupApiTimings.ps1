@@ -30,7 +30,7 @@ public static class CafeTimingMockRequests {
     }
 }
 '@) -Language CSharp
-$timingFunctions=@('Start-CafeTimingOperation','Complete-CafeTimingOperation','Get-CafeTimingDelegates','Invoke-CafeTimedRequest')
+$timingFunctions=@('Start-CafeTimingOperation','Complete-CafeTimingOperation','Get-CafeTimingDelegates','New-CafeLauncherUpdateWorker','Invoke-CafeTimedRequest')
 foreach($functionName in $timingFunctions){
     $functionAst=$ast.Find({param($node)$node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $functionName},$true)
     if(-not $functionAst){throw ('Timing helper function is missing: '+$functionName)}
@@ -108,10 +108,34 @@ if(-not $uiFunction.Success -or $uiFunction.Groups[1].Value -match 'Invoke-WebRe
 if($source -notmatch 'New-Tile "Startup & API Timings" 19 \{ Show-CafeStartupApiTimings \}' -or
    $source -notmatch 'GitHub device sign-in request' -or
    $source -notmatch 'GitHub graphics history' -or
-   $source -notmatch "Name 'PC inventory' -Group Startup" -or
-   $source -notmatch "Name 'Automatic launcher update check' -Group Startup"){
+   $source -notmatch "Name 'PC diagnostics inventory' -Group Later" -or
+   $source -notmatch "Name 'Automatic launcher update check dispatch' -Group Startup" -or
+   $source -notmatch "Name 'Display and NVIDIA helper initialization' -Group Startup" -or
+   $source -notmatch "Name 'Local profile settings load' -Group Startup" -or
+   $source -notmatch "Name 'Dashboard construction' -Group Startup" -or
+   $source -notmatch "Name 'Initial selected profile refresh' -Group Startup"){
     throw 'The timing button or required startup/API instrumentation is missing.'
 }
+$updateWorkerMatch=[regex]::Match($source,"(?s)public sealed class CafeLauncherUpdateBackgroundWorker : BackgroundWorker \{(.*?)\n\}")
+if(-not $updateWorkerMatch.Success -or
+   $updateWorkerMatch.Groups[1].Value -notmatch 'timingStart\("HTTP", "GitHub Get".*"Startup"\)' -or
+   $updateWorkerMatch.Groups[1].Value -notmatch 'request\.Timeout = 8000' -or
+   $source -match '\$summary\s*=\s*Get-PCDiagnostics\s*\r?\n\s*foreach.*Automatic startup inventory'){
+    throw 'Automatic update checks must use a bounded background HTTP worker, and startup must not run PC diagnostics.'
+}
+$callerThread=[Threading.Thread]::CurrentThread.ManagedThreadId
+$updateWorker=New-CafeLauncherUpdateWorker -Uri 'http://127.0.0.1:1/update-check-test'
+$updateWorker.RunWorkerAsync()
+$workerDeadline=[DateTime]::UtcNow.AddSeconds(5)
+while($updateWorker.IsBusy -and [DateTime]::UtcNow -lt $workerDeadline){Start-Sleep -Milliseconds 20}
+if($updateWorker.IsBusy -or $updateWorker.WorkerThreadId -eq $callerThread -or -not $updateWorker.ErrorText){
+    throw 'The automatic update HTTP request must finish asynchronously on a worker thread and report connection failures.'
+}
+$updateHttpEntry=@([CafeTimingTrace]::Snapshot()|Where-Object {$_.Name -eq 'GitHub Get' -and $_.Group -eq 'Startup' -and $_.IsComplete})
+if(-not $updateHttpEntry.Count -or $updateHttpEntry[-1].Outcome -ne 'Failed'){
+    throw 'The background update worker failure was not captured as a completed startup HTTP span.'
+}
+$updateWorker.Dispose()
 for($index=0;$index -lt 510;$index++){
     $id=[CafeTimingTrace]::Start('Local','Bounded trace fixture','', 'Later')
     [CafeTimingTrace]::Complete($id,'Success',0)

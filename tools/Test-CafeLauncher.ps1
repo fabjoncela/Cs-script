@@ -477,7 +477,9 @@ if($graphicsReader.Count -ne 1 -or $graphicsReader[0].Extent.Text -notmatch '\[s
    $graphicsReader[0].Extent.Text -notmatch 'if\(\$RequireGitHub\)\{throw'){
     throw 'Editor GitHub graphics refresh must fail closed so local fallback requires a separate user confirmation.'
 }
-$startupSource=$dashboardSource.Substring($dashboardSource.IndexOf('$startupTimer = New-Object System.Windows.Forms.Timer'))
+$startupTimerMatch=[regex]::Match($dashboardSource,'\$startupTimer\s*=\s*New-Object System\.Windows\.Forms\.Timer')
+if(-not $startupTimerMatch.Success){throw 'Startup update timer is missing.'}
+$startupSource=$dashboardSource.Substring($startupTimerMatch.Index)
 if($startupSource -match 'Refresh-DashboardProfiles|Refresh-ProfileFromGitHub'){
     throw 'Dashboard startup must not spend GitHub requests refreshing all profiles.'
 }
@@ -542,10 +544,18 @@ if($definitions['Check-CafeLauncherUpdates'] -notmatch '\$runningReleaseText=Get
 $startupAt=$psSource.IndexOf('$startupTimer.Add_Tick({')
 if($startupAt -lt 0){throw 'Startup inventory timer is missing.'}
 $startupSource=$psSource.Substring($startupAt)
-$inventoryAt=$startupSource.IndexOf('Get-PCDiagnostics',[StringComparison]::Ordinal)
-$updateCheckAt=$startupSource.IndexOf('Check-CafeLauncherUpdates',[StringComparison]::Ordinal)
-if($inventoryAt -lt 0 -or $updateCheckAt -le $inventoryAt -or $startupSource -match 'Check-CafeLauncherUpdates\s+-Manual'){
-    throw 'Startup must check launcher updates automatically after the local PC inventory.'
+$startupInventoryAt=$startupSource.IndexOf('Get-PCDiagnostics',[StringComparison]::Ordinal)
+if($startupSource -match 'Get-PCDiagnostics' -or
+   $startupSource -notmatch 'Start-CafeLauncherUpdateCheckAsync' -or
+   $definitions['Start-CafeLauncherUpdateCheckAsync'] -notmatch 'RunWorkerAsync\(\)' -or
+   $definitions['Start-CafeLauncherUpdateCheckAsync'] -notmatch 'Check-CafeLauncherUpdates -RemoteMetadata \$remote' -or
+   $startupInventoryAt -ge 0){
+    throw 'Startup must defer PC diagnostics and dispatch the launcher update check asynchronously.'
+}
+if($definitions['Show-PCDiagnostics'] -notmatch "Name 'PC diagnostics inventory' -Group Later" -or
+   $definitions['Check-CafeLauncherUpdates'] -notmatch 'CafeLauncher is up to date \(\$runningRelease\)' -or
+   $definitions['Check-CafeLauncherUpdates'] -notmatch 'if \(\$Manual\).*CafeLauncher is up to date'){
+    throw 'PC inventory must be timed on demand, and a manual up-to-date check must still show its information dialog.'
 }
 if($editorSource -notmatch 'Sync-ProfileToGitHub -ProfileName \$ProfileName -Token \$token' -or
    $editorSource -notmatch 'Confirm GitHub sync'){
@@ -555,7 +565,7 @@ if($editorSource -notmatch 'Sync-ProfileToGitHub -ProfileName \$ProfileName -Tok
 # Construct the production dashboard in memory. No GUI is shown and none
 # of the profile / tool button actions are clicked, so no devices are changed.
 $dashboardStart=$psSource.IndexOf('# Modern CafeLauncher dashboard.')
-$dashboardEnd=$psSource.IndexOf('# On first display, inventory the machine',$dashboardStart)
+$dashboardEnd=$psSource.IndexOf('# PC detection remains available on demand',$dashboardStart)
 if($dashboardStart -lt 0 -or $dashboardEnd -le $dashboardStart){
     throw 'Production dashboard code region not found.'
 }
@@ -571,6 +581,8 @@ $script:PendingSync=@{}
 $script:ProfileRefreshStatus=@{}
 $script:ProfileRefreshCalls=New-Object System.Collections.ArrayList
 foreach($name in @($script:GamingProfiles.Keys)){$script:PendingSync[$name]=$false}
+function Start-CafeTimingOperation { param([string]$Type,[string]$Name,[string]$Uri,[string]$Group) return 1L }
+function Complete-CafeTimingOperation { param([long]$Id,[string]$Outcome,[int]$HttpStatus) }
 function Refresh-ProfileFromGitHub {
     param([string]$ProfileName)
     [void]$script:ProfileRefreshCalls.Add($ProfileName)
@@ -585,6 +597,7 @@ $script:GitHubRateLimitLabel=$null
 $paletteMatch=[regex]::Match($psSource,'(?ms)^\$script:ProfileAccentColors\s*=\s*@\{.*?^\}')
 if(-not $paletteMatch.Success){throw 'Production profile color palette missing.'}
 Invoke-Expression $paletteMatch.Value
+$form=$null
 try {
     Invoke-Expression $psSource.Substring($dashboardStart,$dashboardEnd-$dashboardStart)
     if($tabs.TabPages.Count -ne 2 -or $profilesGrid.Controls.Count -ne 7){
