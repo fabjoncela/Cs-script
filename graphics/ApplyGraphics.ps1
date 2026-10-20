@@ -86,7 +86,7 @@ function Confirm-CS2GraphicsPresetUse {
 }
 function Get-CS2ModeGraphicsPreset {
     param([string]$ModeName)
-    if($ModeName -notin @('FabMode','ArliMode','BrileMode','ArmlMode','OliMode')){throw 'Invalid graphics mode name.'}
+    if($ModeName -notin @('FabMode','ArliMode','BrileMode','ArmlMode','OliMode','Provmode')){throw 'Invalid graphics mode name.'}
     $fresh=[guid]::NewGuid().ToString('N')
     $url="https://api.github.com/repos/fabjoncela/Cs-script/contents/graphics/$ModeName.json?ref=main&fresh=$fresh"
     $cache=Join-Path $env:LOCALAPPDATA ("CafeLauncher\graphics-cache\"+$ModeName+'.json')

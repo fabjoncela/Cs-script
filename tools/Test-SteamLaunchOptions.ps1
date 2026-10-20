@@ -37,7 +37,7 @@ $applyText=$source.Substring($apply,$applyEnd-$apply)
 if($applyText -notmatch 'Install-ProfileCfg' -or $applyText -match '(?i)-applaunch|LaunchOptions|Set-CS2SteamLaunchOptions'){
     throw 'Normal profile application must only install the CFG, not modify Steam launch options.'
 }
-foreach($name in @('FabMode','ArliMode','BrileMode','ArmlMode','OliMode')){
+foreach($name in @('FabMode','ArliMode','BrileMode','ArmlMode','OliMode','Provmode')){
     if($source -notmatch ('New-Tile "'+[regex]::Escape($name)+'"')){throw "Missing main tile: $name"}
 }
 if($source -notmatch '\$play\.Add_Click' -or $source -notmatch 'Start-CS2WithProfileCfg -ProfileName \$selectedProfile'){
@@ -49,6 +49,7 @@ $script:GamingProfiles=[ordered]@{
     BrileMode=@{ConfigFile='brile.cfg';CfgDownloadUrl='https://raw.githubusercontent.com/fabjoncela/Cs-script/main/brile.cfg'}
     ArmlMode=@{ConfigFile='arml.cfg';CfgDownloadUrl='https://raw.githubusercontent.com/fabjoncela/Cs-script/main/arml.cfg'}
     OliMode=@{ConfigFile='oli.cfg';CfgDownloadUrl='https://raw.githubusercontent.com/fabjoncela/Cs-script/main/oli.cfg'}
+    Provmode=@{ConfigFile='prov.cfg';CfgDownloadUrl='https://raw.githubusercontent.com/fabjoncela/Cs-script/main/prov.cfg'}
 }
 $script:FabCfgCloudUrl='https://raw.githubusercontent.com/fabjoncela/Cs-script/main/fab.cfg'
 $script:Installed=@()
@@ -95,16 +96,16 @@ function Start-Process {
     $script:Launched+= @{ FilePath=$FilePath; Arguments=@($ArgumentList) }
     $script:Events+='launch'
 }
-foreach($name in @('FabMode','ArliMode','BrileMode','ArmlMode','OliMode')){
+foreach($name in @('FabMode','ArliMode','BrileMode','ArmlMode','OliMode','Provmode')){
     Start-CS2WithProfileCfg -ProfileName $name
 }
-if($script:Launched.Count -ne 5 -or $script:Installed.Count -ne 5){throw 'Expected exactly five installs and Steam launch requests.'}
+if($script:Launched.Count -ne 6 -or $script:Installed.Count -ne 6){throw 'Expected exactly six installs and Steam launch requests.'}
 if(@($script:CloudPreferredFlags | Where-Object { -not $_ }).Count -ne 0){throw 'Play + Exec must prefer the selected profile CFG from GitHub.'}
 if(@($script:InstalledUrls | Where-Object { $_ -notmatch '^https://raw\.githubusercontent\.com/.+\.cfg$' }).Count -ne 0){
     throw 'Play + Exec did not pass the selected GitHub profile CFG URL to the installer.'
 }
-if($script:Events.Count -ne 15){throw 'Expected baseline install, profile CFG install, then launch for each profile.'}
-for($i=0;$i -lt 5;$i++){
+if($script:Events.Count -ne 18){throw 'Expected baseline install, profile CFG install, then launch for each profile.'}
+for($i=0;$i -lt 6;$i++){
     if($script:Events[$i*3] -ne 'baseline' -or $script:Events[$i*3+1] -ne 'profile-cfg' -or $script:Events[$i*3+2] -ne 'launch'){
         throw 'Play + Exec did not install the reset baseline before the selected profile CFG and launch.'
     }
@@ -118,7 +119,7 @@ foreach($launch in $script:Launched){
         throw 'Incorrect Steam app launch sequence; baseline must execute before the profile CFG.'
     }
 }
-for($i=0;$i -lt 5;$i++){
+for($i=0;$i -lt 6;$i++){
     if($script:Launched[$i].Arguments[5] -ne $script:Installed[$i]){
         throw 'Wrong CFG sent to Steam for selected profile.'
     }
@@ -126,4 +127,4 @@ for($i=0;$i -lt 5;$i++){
 $failed=$false
 try {[void](Get-CS2SteamLaunchArguments -CfgName 'oli.cfg && powershell.exe')}catch{$failed=$true}
 if(-not $failed){throw 'Invalid CFG name was accepted.'}
-Write-Host 'PASS: Five Play + Exec buttons install the baseline first, preserve GitHub CFG priority, and send ordered one-time Steam exec arguments; normal Apply never edits Steam.'
+Write-Host 'PASS: Six Play + Exec buttons install the baseline first, preserve GitHub CFG priority, and send ordered one-time Steam exec arguments; normal Apply never edits Steam.'

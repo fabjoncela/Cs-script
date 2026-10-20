@@ -564,7 +564,7 @@ $PANEL=[System.Drawing.Color]::FromArgb(31,36,46)
 $BLUE=[System.Drawing.Color]::FromArgb(35,125,245)
 $MUTED=[System.Drawing.Color]::FromArgb(160,170,185)
 $script:GamingProfiles=[ordered]@{}
-foreach($name in @('FabMode','ArliMode','BrileMode','ArmlMode','OliMode')){
+foreach($name in @('FabMode','ArliMode','BrileMode','ArmlMode','OliMode','Provmode')){
     $script:GamingProfiles[$name]=@{LogitechDPI=800;PointerSpeed=10;Width=1920;Height=1080;RefreshHz=360;ConfigFile=($name.ToLower()+'.cfg')}
 }
 $script:PendingSync=@{}
@@ -587,8 +587,8 @@ if(-not $paletteMatch.Success){throw 'Production profile color palette missing.'
 Invoke-Expression $paletteMatch.Value
 try {
     Invoke-Expression $psSource.Substring($dashboardStart,$dashboardEnd-$dashboardStart)
-    if($tabs.TabPages.Count -ne 2 -or $profilesGrid.Controls.Count -ne 6){
-        throw 'Dashboard must construct two tabs and exactly five profile cards.'
+    if($tabs.TabPages.Count -ne 2 -or $profilesGrid.Controls.Count -ne 7){
+        throw 'Dashboard must construct two tabs and exactly six profile cards.'
     }
     if($script:SelectedProfileTitle.Text -ne 'FabMode' -or
        $script:ManualDpiInput.Text -ne '' -or

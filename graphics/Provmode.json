@@ -1,0 +1,26 @@
+{
+    "SchemaVersion":  1,
+    "ProfileName":  "Provmode",
+    "DisplayPolicy":  "ApplyPreset",
+    "RefreshPolicy":  "Highest",
+    "ScalingMode":  2,
+    "Settings":  {
+                     "Width":  1280,
+                     "Height":  960,
+                     "AspectRatioMode":  0,
+                     "Fullscreen":  1,
+                     "MSAASamples":  8,
+                     "ShadowQuality":  0,
+                     "DynamicShadows":  1,
+                     "TextureDetail":  1,
+                     "ShaderQuality":  0,
+                     "ParticleDetail":  0,
+                     "AmbientOcclusion":  0,
+                     "HDRDetail":  3,
+                     "NvidiaReflex":  2,
+                     "TextureFiltering":  0,
+                     "FSRDetail":  0,
+                     "VSync":  0,
+                     "CMAA":  0
+                 }
+}

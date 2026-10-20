@@ -156,7 +156,7 @@ try {
 
 # Synced profile files are user data and may be customized. Validate identity,
 # schema, policy, and supported values without pinning them to preset defaults.
-$profileNames=@('FabMode','ArliMode','BrileMode','ArmlMode','OliMode')
+$profileNames=@('FabMode','ArliMode','BrileMode','ArmlMode','OliMode','Provmode')
 foreach($name in $profileNames){
     $file=Join-Path $root ('graphics\'+$name+'.json')
     $json=Get-Content -LiteralPath $file -Raw | ConvertFrom-Json
@@ -265,7 +265,7 @@ if($displaySource -notmatch '(?s)function Apply-NvidiaGamingSettings.*?TrySetDis
    $displaySource -notmatch 'highest advertised refresh at preferred resolution'){
     throw 'The profile display apply must choose the maximum refresh at the profile resolution.'
 }
-Write-Host 'PASS: Windows File.Replace backups, Steam account guard, desktop and CS2-resolution refresh selection, five graphics presets, and graphics ranges.'
+Write-Host 'PASS: Windows File.Replace backups, Steam account guard, desktop and CS2-resolution refresh selection, six graphics presets, and graphics ranges.'
 
 # Locally saved, unsynced graphics must be applied before any cloud/cache fetch.
 $oldLocalAppData=$env:LOCALAPPDATA
