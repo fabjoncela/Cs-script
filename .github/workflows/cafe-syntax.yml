@@ -7,6 +7,7 @@ on:
       - '*.cfg'
       - 'profiles/*.json'
       - 'tools/Test-CafeLauncher.ps1'
+      - 'tools/Test-StartupApiTimings.ps1'
       - 'tools/Test-GitHubRateLimit.ps1'
       - 'tools/Test-ProfileSave.ps1'
       - 'tools/Test-CfgSensitivitySync.ps1'
@@ -45,6 +46,7 @@ on:
       - '*.cfg'
       - 'profiles/*.json'
       - 'tools/Test-CafeLauncher.ps1'
+      - 'tools/Test-StartupApiTimings.ps1'
       - 'tools/Test-GitHubRateLimit.ps1'
       - 'tools/Test-ProfileSave.ps1'
       - 'tools/Test-CfgSensitivitySync.ps1'
@@ -97,6 +99,10 @@ jobs:
         shell: powershell
         run: |
           & "$env:GITHUB_WORKSPACE\tools\Test-CafeLauncher.ps1"
+      - name: Test startup and API timing trace without network requests
+        shell: powershell
+        run: |
+          & "$env:GITHUB_WORKSPACE\tools\Test-StartupApiTimings.ps1"
       - name: Test GitHub API remaining display without extra requests
         shell: powershell
         run: |
