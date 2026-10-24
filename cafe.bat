@@ -4631,10 +4631,12 @@ function Show-CafeCS2CrosshairPreviewDialog {
     $dialog.StartPosition='CenterParent';$dialog.FormBorderStyle='FixedDialog';$dialog.MaximizeBox=$false;$dialog.MinimizeBox=$false
     $dialog.BackColor=$BG;$dialog.ForeColor=$WHITE;$dialog.Font=New-Object System.Drawing.Font('Segoe UI',9)
     $heading=New-CafeLabel -Text ('Review '+$Decoded.Format+' crosshair for '+$ProfileName+'. Import only stages it for this profile.') -FontSize 9
+    $heading.Dock='None'
     $heading.Location=[System.Drawing.Point]::new(16,12);$heading.Size=[System.Drawing.Size]::new(860,25);$heading.Anchor='Top,Left,Right';$dialog.Controls.Add($heading)
     $preview=New-Object System.Windows.Forms.Panel
     $preview.Location=[System.Drawing.Point]::new(16,48);$preview.Size=[System.Drawing.Size]::new(560,410);$preview.Anchor='Top,Bottom,Left';$preview.BackColor=[System.Drawing.Color]::FromArgb(183,170,164);$preview.BorderStyle='FixedSingle';$dialog.Controls.Add($preview)
     $backgroundLabel=New-CafeLabel -Text 'Background' -FontSize 9
+    $backgroundLabel.Dock='None'
     $backgroundLabel.Location=[System.Drawing.Point]::new(16,468);$backgroundLabel.Size=[System.Drawing.Size]::new(90,24);$dialog.Controls.Add($backgroundLabel)
     $backgroundChoice=New-Object System.Windows.Forms.ComboBox
     $backgroundChoice.DropDownStyle='DropDownList';[void]$backgroundChoice.Items.AddRange([object[]]@('Stone','Dark','Light','Foliage'));$backgroundChoice.SelectedIndex=0
@@ -4642,6 +4644,7 @@ function Show-CafeCS2CrosshairPreviewDialog {
     $recenter=New-Object System.Windows.Forms.Button;$recenter.Text='Recenter';$recenter.Location=[System.Drawing.Point]::new(270,464);$recenter.Size=[System.Drawing.Size]::new(100,30);Style-CafeButton -Button $recenter;$dialog.Controls.Add($recenter)
     $previewNote=if($model.Style -eq 9){'Static Quadrant uses reconstructed CS2 pixel shading. Game scaling may differ. Drag to inspect contrast; dragging does not change imported values.'}else{'Approximate static preview. Dynamic movement/recoil is shown at rest. Drag the crosshair to inspect contrast; dragging does not change imported values.'}
     $note=New-CafeLabel -Text $previewNote -FontSize 8
+    $note.Dock='None'
     $note.Location=[System.Drawing.Point]::new(16,504);$note.Size=[System.Drawing.Size]::new(560,54);$note.Anchor='Bottom,Left';$note.ForeColor=$MUTED;$dialog.Controls.Add($note)
     $summary=New-Object System.Windows.Forms.TextBox
     $summary.Location=[System.Drawing.Point]::new(592,48);$summary.Size=[System.Drawing.Size]::new(292,510);$summary.Anchor='Top,Bottom,Left,Right'
