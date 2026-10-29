@@ -18,7 +18,7 @@
                      "ParticleDetail":  1,
                      "AmbientOcclusion":  0,
                      "HDRDetail":  3,
-                     "NvidiaReflex":  2,
+                     "NvidiaReflex":  1,
                      "TextureFiltering":  3,
                      "FSRDetail":  0,
                      "VSync":  0,
