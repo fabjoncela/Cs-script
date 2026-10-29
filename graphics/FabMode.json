@@ -10,7 +10,7 @@
                      "RefreshHz":  360,
                      "AspectRatioMode":  0,
                      "Fullscreen":  1,
-                     "MSAASamples":  8,
+                     "MSAASamples":  2,
                      "ShadowQuality":  2,
                      "DynamicShadows":  1,
                      "TextureDetail":  1,
