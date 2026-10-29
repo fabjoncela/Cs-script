@@ -11,7 +11,7 @@
                      "AspectRatioMode":  0,
                      "Fullscreen":  1,
                      "MSAASamples":  8,
-                     "ShadowQuality":  1,
+                     "ShadowQuality":  2,
                      "DynamicShadows":  1,
                      "TextureDetail":  1,
                      "ShaderQuality":  1,
