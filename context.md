@@ -3,7 +3,7 @@
 This file gives Codex and maintainers the operational context needed to work safely in this repository. **Always follow the checked-out source tree.** The generated state block below reports the launcher release marker, not whether that code has shipped to `main`.
 
 <!-- BEGIN GENERATED LAUNCHER STATE -->
-- Launcher release: `2026.10.30.2`
+- Launcher release: `2026.10.30.3`
 - Generated from the unique `# CAFE_RELEASE` marker in `cafe.bat` by `tools/Update-Context.ps1`.
 <!-- END GENERATED LAUNCHER STATE -->
 
@@ -310,3 +310,7 @@ The checks cover:
 - Graphics fixtures, legacy DVC range mapping without hardware writes, read-only NVIDIA capability inventory, mocked Steam launch arguments, and status reporting.
 
 A real CS2/Steam account and monitor smoke test remains separate.
+
+## Per-profile optional website (2026.10.30.3)
+
+Edit Profile > CS2 / Apps exposes a custom website URL and enable checkbox. Apply with Launch Apps opens FACEIT Matchmaking, then the validated per-profile URL only if enabled. The URL and enabled flag persist through the existing local/cloud profile JSON export/import. Old profiles default to Metastack with the second website enabled. Standalone Launch All retains Spotify. Invalid imported URLs are ignored, and launch-time validation falls back to Metastack. The release number is generated from cafe.bat.
