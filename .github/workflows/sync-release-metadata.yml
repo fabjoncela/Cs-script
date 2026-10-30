@@ -1,0 +1,38 @@
+name: Sync launcher release metadata
+
+on:
+  push:
+    branches-ignore:
+      - main
+    paths:
+      - cafe.bat
+      - README.md
+      - context.md
+      - tools/Update-Context.ps1
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    if: github.event_name == 'workflow_dispatch' || github.actor != 'github-actions[bot]'
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+      - name: Generate release metadata from cafe.bat
+        shell: powershell
+        run: .\\tools\\Update-Context.ps1
+      - name: Commit generated documentation together
+        shell: powershell
+        run: |
+          git add -- README.md context.md
+          git diff --cached --quiet
+          if ($LASTEXITCODE -eq 0) {
+            Write-Host 'Release metadata already synchronized.'
+            exit 0
+          }
+          git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' commit -m 'docs: synchronize launcher release metadata'
+          git push
