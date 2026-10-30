@@ -3375,6 +3375,7 @@ function Launch-ProfileApps {
     )
 
     Open-FaceitMatchmaking
+    # Profile-specific website is optional; standalone Launch All retains Spotify.
     if ($ProfileName) {
         if((Get-Variable -Name GamingProfiles -Scope Script -ErrorAction SilentlyContinue) -and $script:GamingProfiles.Contains($ProfileName) -and [bool]$script:GamingProfiles[$ProfileName].LaunchWebsiteEnabled){
             Open-ProfileWebsite -Url (Get-ProfileLaunchWebsite -ProfileName $ProfileName)
