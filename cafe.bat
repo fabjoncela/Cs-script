@@ -4,7 +4,7 @@ start "" powershell.exe -NoProfile -ExecutionPolicy Bypass -STA -WindowStyle Hid
 exit /b
 
 # POWERSHELL_GUI
-# CAFE_RELEASE=2026.10.20.4
+# CAFE_RELEASE=2026.10.30.2
 
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
@@ -742,6 +742,15 @@ function Open-Spotify {
         Start-Process -FilePath $chrome -ArgumentList "https://open.spotify.com/"
     } else {
         Start-Process "https://open.spotify.com/"
+    }
+}
+
+function Open-Metastack {
+    $chrome = Get-ChromePath
+    if ($chrome) {
+        Start-Process -FilePath $chrome -ArgumentList "https://metastack.gg/"
+    } else {
+        Start-Process "https://metastack.gg/"
     }
 }
 
@@ -3331,8 +3340,8 @@ function Start-CafeLauncherUpdateCheckAsync {
     }
 }
 
-function Launch-All {
-    param([switch]$SkipGHub)
+function Launch-ProfileApps {
+    param([switch]$SkipGHub,[string]$ProfileName='')
     Start-DetectedSteam
 
     Launch-App -Name "FACEIT Anti-Cheat" -Paths @(
@@ -3341,7 +3350,11 @@ function Launch-All {
     )
 
     Open-FaceitMatchmaking
-    Open-Spotify
+    if ($ProfileName) {
+        Open-Metastack
+    } else {
+        Open-Spotify
+    }
     if(-not $SkipGHub){
         Open-GHub
     }else{
@@ -6744,7 +6757,7 @@ function Show-ProfileEditor {
     }.GetNewClosure())
 
     $apps=New-Object System.Windows.Forms.CheckBox
-    $apps.Text='Launch Steam, FACEIT, Spotify, Mouse Options (no G HUB)'
+    $apps.Text='Launch Steam, FACEIT, Metastack, Mouse Options (no G HUB)'
     $apps.Checked=[bool]$p.LaunchApps
     Add-EditorTabWide -Grid $cs2Grid -Control $apps -Row 3
     $cs2Hint=New-Object System.Windows.Forms.Label
@@ -7723,7 +7736,7 @@ function Invoke-GamingProfile {
         } }
     }
     if ($profile.LaunchApps) {
-        $steps += @{ Name = 'Launch apps (without G HUB; including Mouse Pointer Options)'; Action = { Launch-All -SkipGHub } }
+        $steps += @{ Name = 'Launch apps (without G HUB; including Mouse Pointer Options)'; Action = { Launch-ProfileApps -SkipGHub -ProfileName $ProfileName } }
     }
     # Profile launch never starts G HUB, which can overwrite the requested mouse DPI.
     # Apply live DPI last via our better-logihub helper. Never write onboard here.
@@ -8360,7 +8373,7 @@ function Show-CafeStartupApiTimings {
 Complete-CafeTimingOperation -Id $script:DashboardHelpersTimingId -Outcome 'Success'
 
 $script:DashboardActionTilesTimingId=Start-CafeTimingOperation -Type 'Local' -Name 'Dashboard action tiles' -Group Startup
-New-Tile "LAUNCH ALL" 0 { Launch-All } -Primary
+New-Tile "LAUNCH ALL" 0 { Launch-ProfileApps } -Primary
 New-Tile "Steam" 1 { Start-DetectedSteam }
 New-Tile "Workshop Cleanup" 18 { Show-CafeWorkshopCleanupDialog }
 New-Tile "FACEIT Anti-Cheat" 2 {
