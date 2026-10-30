@@ -5109,7 +5109,7 @@ function Export-ProfileValues {
         ApplyNvidia=[bool]$p.ApplyNvidia; Width=[int]$p.Width; Height=[int]$p.Height
         RefreshHz=[int]$p.RefreshHz; Vibrance=[int]$p.Vibrance; Hue=[int]$p.Hue; ScalingMode=[int]$p.ScalingMode
         VoicePushToTalkKey=$(if($p.Contains('VoicePushToTalkKey')){[string]$p['VoicePushToTalkKey']}else{''}); CfgDownloadUrl=[string]$p.CfgDownloadUrl
-        LaunchApps=[bool]$p.LaunchApps; LaunchWebsiteEnabled=[bool]$p.LaunchWebsiteEnabled; LaunchWebsiteUrl=[string]$p.LaunchWebsiteUrl
+        LaunchApps=[bool]$p.LaunchApps; LaunchWebsiteEnabled=$(if($p.Contains('LaunchWebsiteEnabled')){[bool]$p['LaunchWebsiteEnabled']}else{$true}); LaunchWebsiteUrl=$(if($p.Contains('LaunchWebsiteUrl')){[string]$p['LaunchWebsiteUrl']}else{'https://metastack.gg/'})
     }
     # Preserve the dictionary as ONE pipeline object on Windows PowerShell 5.1.
     Write-Output -NoEnumerate $profileValues
@@ -6727,7 +6727,9 @@ function Show-ProfileEditor {
     $nv.Checked=[bool]$p.ApplyNvidia
     Add-EditorTabWide -Grid $displayGrid -Control $nv -Row 4
 
-    $cs2Grid=New-EditorTabGrid -Page $cs2Page -Rows 30
+    $cs2Grid=New-EditorTabGrid -Page $cs2Page -Rows 28
+    # Website controls extend the grid below the original CS2 graphics rows.
+    $cs2Grid.RowCount=30
     $cfgFile=New-Object CafeEditorScrollTextBox
     $cfgFile.Text=[string]$p.ConfigFile
     $cfgFile.ReadOnly=$true
