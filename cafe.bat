@@ -4,7 +4,7 @@ start "" powershell.exe -NoProfile -ExecutionPolicy Bypass -STA -WindowStyle Hid
 exit /b
 
 # POWERSHELL_GUI
-# CAFE_RELEASE=2026.10.30.2
+# CAFE_RELEASE=2026.10.30.3
 
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
@@ -743,6 +743,31 @@ function Open-Spotify {
     } else {
         Start-Process "https://open.spotify.com/"
     }
+}
+
+function Assert-LaunchWebsiteUrl {
+    param([string]$Url)
+    $value=([string]$Url).Trim()
+    if($value.Length -gt 2048 -or [string]::IsNullOrWhiteSpace($value) -or $value -match '[\x00-\x1f\x7f]'){throw 'Website must be a valid web URL (max 2048 characters).'}
+    $uri=$null
+    if(-not [Uri]::TryCreate($value,[UriKind]::Absolute,[ref]$uri) -or $uri.Scheme -notin @('http','https') -or [string]::IsNullOrWhiteSpace($uri.Host) -or -not [string]::IsNullOrEmpty($uri.UserInfo)){throw 'Enter an absolute http:// or https:// URL without login credentials.'}
+    return $uri.AbsoluteUri
+}
+
+function Get-ProfileLaunchWebsite {
+    param([string]$ProfileName)
+    $profile=$script:GamingProfiles[$ProfileName]
+    if(-not $profile){return 'https://metastack.gg/'}
+    try{return Assert-LaunchWebsiteUrl ([string]$profile.LaunchWebsiteUrl)}
+    catch{Write-Log "Invalid saved website for $ProfileName; using Metastack." 'WARN';return 'https://metastack.gg/'}
+}
+
+function Open-ProfileWebsite {
+    param([string]$Url)
+    $safeUrl=Assert-LaunchWebsiteUrl $Url
+    $chrome=Get-ChromePath
+    if($chrome){Start-Process -FilePath $chrome -ArgumentList $safeUrl}
+    else{Start-Process $safeUrl}
 }
 
 function Open-Metastack {
@@ -3351,7 +3376,9 @@ function Launch-ProfileApps {
 
     Open-FaceitMatchmaking
     if ($ProfileName) {
-        Open-Metastack
+        if($script:GamingProfiles.Contains($ProfileName) -and [bool]$script:GamingProfiles[$ProfileName].LaunchWebsiteEnabled){
+            Open-ProfileWebsite -Url (Get-ProfileLaunchWebsite -ProfileName $ProfileName)
+        }
     } else {
         Open-Spotify
     }
@@ -3381,32 +3408,32 @@ $script:GamingProfiles = [ordered]@{
     FabMode = @{
         PointerSpeed=10; LogitechDPI=800; DisableAcceleration=$true; ApplyNvidia=$true; ScalingMode=2
         Width=1920; Height=1080; RefreshHz=360; Vibrance=75; Hue=-1
-        VoicePushToTalkKey=''; ConfigFile='fab.cfg'; CfgDownloadUrl=$script:FabCfgCloudUrl; LaunchApps=$true
+        VoicePushToTalkKey=''; ConfigFile='fab.cfg'; CfgDownloadUrl=$script:FabCfgCloudUrl; LaunchApps=$true; LaunchWebsiteEnabled=$true; LaunchWebsiteUrl='https://metastack.gg/'
     }
     ArliMode = @{
         PointerSpeed=10; LogitechDPI=800; DisableAcceleration=$true; ApplyNvidia=$true; ScalingMode=2
         Width=1920; Height=1080; RefreshHz=360; Vibrance=75; Hue=-1
-        VoicePushToTalkKey=''; ConfigFile='arli.cfg'; CfgDownloadUrl='https://raw.githubusercontent.com/fabjoncela/Cs-script/main/arli.cfg'; LaunchApps=$true
+        VoicePushToTalkKey=''; ConfigFile='arli.cfg'; CfgDownloadUrl='https://raw.githubusercontent.com/fabjoncela/Cs-script/main/arli.cfg'; LaunchApps=$true; LaunchWebsiteEnabled=$true; LaunchWebsiteUrl='https://metastack.gg/'
     }
     BrileMode = @{
         PointerSpeed=10; LogitechDPI=800; DisableAcceleration=$true; ApplyNvidia=$true; ScalingMode=2
         Width=1920; Height=1080; RefreshHz=360; Vibrance=75; Hue=-1
-        VoicePushToTalkKey=''; ConfigFile='brile.cfg'; CfgDownloadUrl='https://raw.githubusercontent.com/fabjoncela/Cs-script/main/brile.cfg'; LaunchApps=$true
+        VoicePushToTalkKey=''; ConfigFile='brile.cfg'; CfgDownloadUrl='https://raw.githubusercontent.com/fabjoncela/Cs-script/main/brile.cfg'; LaunchApps=$true; LaunchWebsiteEnabled=$true; LaunchWebsiteUrl='https://metastack.gg/'
     }
     ArmlMode = @{
         PointerSpeed=10; LogitechDPI=800; DisableAcceleration=$true; ApplyNvidia=$true; ScalingMode=2
         Width=1920; Height=1080; RefreshHz=360; Vibrance=75; Hue=-1
-        VoicePushToTalkKey=''; ConfigFile='arml.cfg'; CfgDownloadUrl='https://raw.githubusercontent.com/fabjoncela/Cs-script/main/arml.cfg'; LaunchApps=$true
+        VoicePushToTalkKey=''; ConfigFile='arml.cfg'; CfgDownloadUrl='https://raw.githubusercontent.com/fabjoncela/Cs-script/main/arml.cfg'; LaunchApps=$true; LaunchWebsiteEnabled=$true; LaunchWebsiteUrl='https://metastack.gg/'
     }
     OliMode = @{
         PointerSpeed=10; LogitechDPI=800; DisableAcceleration=$true; ApplyNvidia=$true; ScalingMode=2
         Width=1920; Height=1080; RefreshHz=360; Vibrance=75; Hue=-1
-        VoicePushToTalkKey=''; ConfigFile='oli.cfg'; CfgDownloadUrl='https://raw.githubusercontent.com/fabjoncela/Cs-script/main/oli.cfg'; LaunchApps=$true
+        VoicePushToTalkKey=''; ConfigFile='oli.cfg'; CfgDownloadUrl='https://raw.githubusercontent.com/fabjoncela/Cs-script/main/oli.cfg'; LaunchApps=$true; LaunchWebsiteEnabled=$true; LaunchWebsiteUrl='https://metastack.gg/'
     }
     Provmode = @{
         PointerSpeed=8; LogitechDPI=350; DisableAcceleration=$true; ApplyNvidia=$true; ScalingMode=2
         Width=1920; Height=1080; RefreshHz=300; Vibrance=75; Hue=-1
-        VoicePushToTalkKey=''; ConfigFile='prov.cfg'; CfgDownloadUrl='https://raw.githubusercontent.com/fabjoncela/Cs-script/main/prov.cfg'; LaunchApps=$true
+        VoicePushToTalkKey=''; ConfigFile='prov.cfg'; CfgDownloadUrl='https://raw.githubusercontent.com/fabjoncela/Cs-script/main/prov.cfg'; LaunchApps=$true; LaunchWebsiteEnabled=$true; LaunchWebsiteUrl='https://metastack.gg/'
     }
 }
 $script:ProfileSettingsPath = Join-Path $env:LOCALAPPDATA 'CafeLauncher\profiles.json'
@@ -4991,7 +5018,7 @@ function Get-ProfileGraphicsVersion {
 function Import-ProfileValues {
     param([string]$ProfileName, $SavedProfile, [string]$SourceLabel = 'local')
     if (-not $script:GamingProfiles.Contains($ProfileName) -or -not $SavedProfile) { return }
-    foreach ($setting in @('PointerSpeed','LogitechDPI','DisableAcceleration','ApplyNvidia','Width','Height','RefreshHz','Vibrance','Hue','ScalingMode','VoicePushToTalkKey','CfgDownloadUrl','LaunchApps')) {
+    foreach ($setting in @('PointerSpeed','LogitechDPI','DisableAcceleration','ApplyNvidia','Width','Height','RefreshHz','Vibrance','Hue','ScalingMode','VoicePushToTalkKey','CfgDownloadUrl','LaunchApps','LaunchWebsiteEnabled','LaunchWebsiteUrl')) {
         $saved = $SavedProfile.PSObject.Properties[$setting]
         if (-not $saved) { continue }
         $value = $saved.Value
@@ -5017,8 +5044,9 @@ function Import-ProfileValues {
                     }
                     if ($value) { Assert-ConfigUrl $value }
                 }
+                'LaunchWebsiteUrl' { $value=Assert-LaunchWebsiteUrl ([string]$value) }
                 default {
-                    if ($setting -in @('DisableAcceleration','ApplyNvidia','LaunchApps')) {
+                    if ($setting -in @('DisableAcceleration','ApplyNvidia','LaunchApps','LaunchWebsiteEnabled')) {
                         if ($value -isnot [bool]) { throw 'boolean expected' }
                     }
                 }
@@ -5081,7 +5109,7 @@ function Export-ProfileValues {
         ApplyNvidia=[bool]$p.ApplyNvidia; Width=[int]$p.Width; Height=[int]$p.Height
         RefreshHz=[int]$p.RefreshHz; Vibrance=[int]$p.Vibrance; Hue=[int]$p.Hue; ScalingMode=[int]$p.ScalingMode
         VoicePushToTalkKey=$(if($p.Contains('VoicePushToTalkKey')){[string]$p['VoicePushToTalkKey']}else{''}); CfgDownloadUrl=[string]$p.CfgDownloadUrl
-        LaunchApps=[bool]$p.LaunchApps
+        LaunchApps=[bool]$p.LaunchApps; LaunchWebsiteEnabled=[bool]$p.LaunchWebsiteEnabled; LaunchWebsiteUrl=[string]$p.LaunchWebsiteUrl
     }
     # Preserve the dictionary as ONE pipeline object on Windows PowerShell 5.1.
     Write-Output -NoEnumerate $profileValues
@@ -6757,9 +6785,21 @@ function Show-ProfileEditor {
     }.GetNewClosure())
 
     $apps=New-Object System.Windows.Forms.CheckBox
-    $apps.Text='Launch Steam, FACEIT, Metastack, Mouse Options (no G HUB)'
+    $apps.Text='Launch Steam, FACEIT, optional website, Mouse Options (no G HUB)'
     $apps.Checked=[bool]$p.LaunchApps
     Add-EditorTabWide -Grid $cs2Grid -Control $apps -Row 3
+    $websiteEnabled=New-Object System.Windows.Forms.CheckBox
+    $websiteEnabled.Text='Open custom website after FACEIT'
+    $websiteEnabled.Checked=[bool]$p.LaunchWebsiteEnabled
+    Add-EditorTabWide -Grid $cs2Grid -Control $websiteEnabled -Row 28
+    $websiteUrl=New-Object System.Windows.Forms.TextBox
+    $websiteUrl.Text=[string]$p.LaunchWebsiteUrl
+    $websiteUrl.MaxLength=2048
+    [void](Add-EditorTabField -Grid $cs2Grid -Title 'Second website URL (FACEIT always stays)' -Control $websiteUrl -Column 0 -Row 29)
+    $websiteReset=New-Object System.Windows.Forms.Button
+    $websiteReset.Text='Reset to Metastack'
+    $websiteReset.Add_Click({$websiteUrl.Text='https://metastack.gg/'}.GetNewClosure())
+    [void](Add-EditorTabField -Grid $cs2Grid -Title 'Restore default website' -Control $websiteReset -Column 1 -Row 29)
     $cs2Hint=New-Object System.Windows.Forms.Label
     $cs2Hint.Text='Apply Graphics and Play + Exec remain separate actions on the dashboard.'
     $cs2Hint.ForeColor=$MUTED
@@ -7195,7 +7235,10 @@ function Show-ProfileEditor {
         $p.Vibrance=[int]$vibrance.Value
         $p.Hue=[int]$hue.Value
         $p.ApplyNvidia=[bool]$nv.Checked
+        $validatedWebsite=Assert-LaunchWebsiteUrl ([string]$websiteUrl.Text)
         $p.LaunchApps=[bool]$apps.Checked
+        $p.LaunchWebsiteEnabled=[bool]$websiteEnabled.Checked
+        $p.LaunchWebsiteUrl=$validatedWebsite
         $pendingCfgSensitivityState[$ProfileName]=$sensValue
         $p.VoicePushToTalkKey=[string]$voiceBox.Tag[$voiceBox.SelectedIndex]
         # Use the captured shared dictionary, not script: scope in this closure.
