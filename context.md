@@ -3,7 +3,7 @@
 This file gives Codex and maintainers the operational context needed to work safely in this repository. **Always follow the checked-out source tree.** The generated state block below reports the launcher release marker, not whether that code has shipped to `main`.
 
 <!-- BEGIN GENERATED LAUNCHER STATE -->
-- Launcher release: `2026.10.20.4`
+- Launcher release: `2026.10.30.2`
 - Generated from the unique `# CAFE_RELEASE` marker in `cafe.bat` by `tools/Update-Context.ps1`.
 <!-- END GENERATED LAUNCHER STATE -->
 
@@ -185,6 +185,7 @@ Dashboard **Apply Graphics** is a separate action from the normal profile Apply 
 
 - Startup PC detection is informational. It must not change monitor settings.
 - A normal profile Apply refreshes the selected profile immediately before applying mouse/NVIDIA settings, installing its CFG, and optionally launching configured apps. Play + Exec also refreshes the selected profile before installing its CFG. Neither starts CS2 with normal profile Apply nor writes persistent Steam launch options.
+- `Launch-ProfileApps` is the shared app-launch routine. When Launch Apps is enabled, applying any profile (FabMode, ArliMode, BrileMode, ArmlMode, OliMode, or Provmode) passes its name and opens `https://metastack.gg/` instead of Spotify. The standalone Launch All action calls the routine without a profile name and still opens Spotify; the separate Spotify tile is unchanged. Profile Apply continues to skip G HUB.
 - Run summaries report step totals and per-setting requested values, targets, outcomes, and verified values where available. NVIDIA scaling entries include profile, human-readable mode and NVAPI mode number, Windows display target, outcome, and NVAPI result/read-back or failure detail.
 - LIVE LOGS keeps successful per-setting rows compact; full requested, target, actual, and detail fields remain in `%TEMP%\CafeLauncher.log`. The viewer uses one row per entry, horizontal scrolling, status/value colors, and bold profile/action names. Selected text can be copied with Ctrl+C or the right-click **Copy** menu item.
 - The viewer loads current-session entries and available retained history (up to 2,000 lines) the first time **Show Logs** is opened, using the current log file so cleared or newly written entries are reflected. If loading fails, the next open retries. The session log retains the last 2,000 lines across launches, including exception stack traces. Startup exceptions are appended so a manual reopen preserves automatic-restart failures.

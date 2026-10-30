@@ -342,7 +342,7 @@ foreach($def in $psAst.FindAll({
 },$true)){
     $definitions[$def.Name]=$def.Extent.Text
 }
-if(-not $definitions.ContainsKey('Launch-All') -or -not $definitions.ContainsKey('Invoke-GamingProfile') -or -not $definitions.ContainsKey('Show-ProfileEditor')){
+if(-not $definitions.ContainsKey('Launch-ProfileApps') -or -not $definitions.ContainsKey('Invoke-GamingProfile') -or -not $definitions.ContainsKey('Show-ProfileEditor')){
     throw 'Missing expected launcher and editor functions.'
 }
 if(-not $definitions.ContainsKey('Get-CafeLauncherRelease')){throw 'Dynamic launcher release lookup is missing.'}
@@ -353,11 +353,11 @@ $script:LauncherRunningRelease='2026.10.14.15'
 if((Get-CafeLauncherRelease) -ne $script:LauncherRunningRelease){throw 'Launcher release lookup must retain the version captured by the running process even if the BAT on disk is replaced.'}
 $script:LauncherRunningRelease=$expectedRelease
 if((Get-CafeLauncherRelease) -ne $expectedRelease){throw 'Launcher release lookup must use the active CAFE_RELEASE marker captured at startup.'}
-if($definitions['Invoke-GamingProfile'] -notmatch 'Launch-All -SkipGHub' -or
+if($definitions['Invoke-GamingProfile'] -notmatch 'Launch-ProfileApps -SkipGHub -ProfileName \$ProfileName' -or
    $definitions['Invoke-GamingProfile'] -notmatch 'Request-LogitechLiveDPI -DPI'){
     throw 'Profile actions must skip G HUB while retaining custom live DPI.'
 }
-if($psSource -notmatch '(?m)^New-Tile "LAUNCH ALL" 0 \{ Launch-All \}' -or
+if($psSource -notmatch '(?m)^New-Tile "LAUNCH ALL" 0 \{ Launch-ProfileApps \}' -or
    $psSource -notmatch '(?m)^New-Tile "Logitech G HUB" 5 \{ Open-GHub \}'){
     throw 'Standalone Launch All and G HUB buttons must remain unchanged.'
 }
@@ -365,18 +365,27 @@ if($definitions['Show-ProfileEditor'] -notmatch 'Mouse Options \(no G HUB\)'){
     throw 'Profile editor must explain that Launch Apps skips G HUB.'
 }
 $script:TestGHubCalls=0
+$script:TestSpotifyCalls=0
+$script:TestMetastackCalls=0
 function Start-DetectedSteam {}
 function Launch-App {param([string]$Name,[string[]]$Paths)}
 function Open-FaceitMatchmaking {}
-function Open-Spotify {}
+function Open-Spotify {$script:TestSpotifyCalls++}
+function Open-Metastack {$script:TestMetastackCalls++}
 function Open-GHub {$script:TestGHubCalls++}
 function Open-MousePointerOptions {}
 function Write-Log {param([string]$Message,[string]$Level='INFO')}
-Invoke-Expression $definitions['Launch-All']
-Launch-All -SkipGHub
+Invoke-Expression $definitions['Launch-ProfileApps']
+Launch-ProfileApps -SkipGHub -ProfileName ArliMode
 if($script:TestGHubCalls -ne 0){throw 'Profile launch unexpectedly starts G HUB.'}
-Launch-All
+if($script:TestMetastackCalls -ne 1 -or $script:TestSpotifyCalls -ne 0){throw 'ArliMode must open Metastack instead of Spotify.'}
+foreach($otherProfile in @('BrileMode','ArmlMode','OliMode','Provmode')){Launch-ProfileApps -SkipGHub -ProfileName $otherProfile}
+if($script:TestMetastackCalls -ne 5 -or $script:TestSpotifyCalls -ne 0){throw 'Non-Fab profiles must open Metastack instead of Spotify.'}
+Launch-ProfileApps -SkipGHub -ProfileName FabMode
+if($script:TestMetastackCalls -ne 6 -or $script:TestSpotifyCalls -ne 0){throw 'FabMode must open Metastack instead of Spotify.'}
+Launch-ProfileApps
 if($script:TestGHubCalls -ne 1){throw 'Standalone Launch All must still open G HUB.'}
+if($script:TestMetastackCalls -ne 6 -or $script:TestSpotifyCalls -ne 1){throw 'Standalone Launch All must still open Spotify.'}
 
 # Preview UI: fixed-coordinate label overlays have been replaced by isolated
 # table cells on distinct tabs, so labels cannot cover neighboring inputs.
