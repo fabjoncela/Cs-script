@@ -3376,7 +3376,7 @@ function Launch-ProfileApps {
 
     Open-FaceitMatchmaking
     if ($ProfileName) {
-        if($script:GamingProfiles.Contains($ProfileName) -and [bool]$script:GamingProfiles[$ProfileName].LaunchWebsiteEnabled){
+        if((Get-Variable -Name GamingProfiles -Scope Script -ErrorAction SilentlyContinue) -and $script:GamingProfiles.Contains($ProfileName) -and [bool]$script:GamingProfiles[$ProfileName].LaunchWebsiteEnabled){
             Open-ProfileWebsite -Url (Get-ProfileLaunchWebsite -ProfileName $ProfileName)
         }
     } else {
