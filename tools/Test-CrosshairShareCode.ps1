@@ -208,6 +208,10 @@ foreach($required in @(
     Assert-True ($editor.Extent.Text.Contains($required)) ('Crosshair import UI contract is missing: '+$required)
 }
 if($editor.Extent.Text.IndexOf('Show-CafeCS2CrosshairPreviewDialog -Decoded $decoded') -gt $editor.Extent.Text.IndexOf('Set-CafeProfileCrosshairImportStage -ProfileName $ProfileName')){throw 'Crosshair import staging must occur only after the visual preview dialog.'}
+$previewDialog=$ast.FindAll({param($node)$node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Show-CafeCS2CrosshairPreviewDialog'},$true)|Select-Object -First 1
+foreach($required in @('$heading.Dock=''None''','$backgroundLabel.Dock=''None''','$note.Dock=''None''')){
+    Assert-True ($previewDialog.Extent.Text.Contains($required)) ('Crosshair preview layout must keep fixed-position labels undocked: '+$required)
+}
 if($ast.Extent.Text -notmatch 'Add_Paint\(\$paintPreview\)' -or $ast.Extent.Text -notmatch 'System\.Drawing\.Graphics'){throw 'Crosshair visual preview must use the WinForms paint event and built-in System.Drawing renderer.'}
 
 Write-Host 'PASS: legacy-v1/v3/v4 and current CS2 share-code decode, preview model/rendering, scope-dot CFG sync, and selected-profile staging.'

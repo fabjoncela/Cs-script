@@ -5,7 +5,7 @@ CafeLauncher is a portable Windows setup launcher for CS2 internet cafés. It ru
 [Technical architecture and maintenance notes](./context.md)
 
 <!-- BEGIN GENERATED LAUNCHER RELEASE -->
-> Launcher release: **2026.10.20.1**. Features depend on the PC's hardware, installed programs and user permissions.
+> Launcher release: **2026.10.30.3**. Features depend on the PC's hardware, installed programs and user permissions.
 <!-- END GENERATED LAUNCHER RELEASE -->
 
 ## Download and start
@@ -73,13 +73,15 @@ The **Tools & Apps** tab contains less-used shortcuts, and the dashboard can lau
 
 - **Workshop Cleanup** previews installed CS2 Workshop items against the signed-in Steam account's subscriptions. It protects subscribed items, removes only selected safe local folders, and clears matching stale Steam manifest entries after confirmation. Manifest edits get a timestamped backup; subscriptions are unchanged. Steam must be running and signed in, CS2 must be closed, and Steam's manifest/download state must be readable and stable.
 
-The dashboard reports profile-step outcomes and includes an API allowance indicator based on responses it already receives; the indicator does not make a separate polling request. LIVE LOGS keeps all entries from the current session and shows available retained history when it opens; use its horizontal scrollbar to read long messages. Statuses and key values are color-coded. `%TEMP%\CafeLauncher.log` retains the last 2,000 lines across launches, including detailed errors and stack traces. Startup errors are also written to `%TEMP%\CafeLauncher-startup-error.log`.
+The **Startup & API Timings** tool reports app-observed dashboard readiness, total startup time, detailed local startup stages, dashboard layout/control setup phases, and each observed HTTP/API request. Startup profile requests identify their commit-check or content-fetch operation and profile. It keeps the latest 500 timing entries in memory for the current run; query strings and credentials are excluded, and refreshing the view makes no request. The dashboard also reports profile-step outcomes and an API allowance indicator based on responses it already receives; the indicator does not make a separate polling request. LIVE LOGS loads available retained history the first time it opens while keeping all entries from the current session; use its horizontal scrollbar to read long messages. Statuses and key values are color-coded. `%TEMP%\CafeLauncher.log` retains the last 2,000 lines across launches, including detailed errors and stack traces. Startup errors are also written to `%TEMP%\CafeLauncher-startup-error.log`.
 
 **Send Logs** uploads the current `CafeLauncher.log` to the configured Sentry project only when pressed. It needs no player login and shows a report ID when Sentry accepts the upload. The log remains on the PC. During testing, the launcher sends the raw file without filtering local paths or usernames or applying its own size limit; Sentry may still reject an oversized report. Sentry email alerts link to the report and its log attachment.
 
 ## Launcher updates
 
-The launcher checks for a newer release when you press **Check for Updates**. It compares the running release with `main/cafe.bat`, validates the downloaded file's size, Git blob hash, and PowerShell syntax, normalizes Windows line endings, and keeps a backup before replacing the local BAT. If the newer file is already installed, close and reopen the launcher. Updating the local BAT does not change a Google Drive copy; a Deep Freeze reboot may also remove local updates and cached files.
+After the dashboard appears, the launcher checks for a newer release in the background and stays quiet when it is up to date. If a different verified build is available, it asks before downloading. **Check for Updates** in Tools & Apps remains manual and shows an up-to-date message when appropriate. Update downloads are checked for size, Git blob hash, and PowerShell syntax, normalized to Windows line endings, and backed up before replacing the local BAT. If the newer file is already installed, close and reopen the launcher. Updating the local BAT does not change a Google Drive copy; a Deep Freeze reboot may also remove local updates and cached files.
+
+**Detect PC** runs the read-only hardware/software inventory on demand; the launcher no longer scans the PC during startup.
 
 Backups are stored under `%LOCALAPPDATA%\CafeLauncher\backups`. If the original BAT cannot be replaced, the updated file may be saved to Downloads instead.
 

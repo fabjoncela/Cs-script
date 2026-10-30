@@ -37,8 +37,9 @@ $applyText=$source.Substring($apply,$applyEnd-$apply)
 if($applyText -notmatch 'Install-ProfileCfg' -or $applyText -match '(?i)-applaunch|LaunchOptions|Set-CS2SteamLaunchOptions'){
     throw 'Normal profile application must only install the CFG, not modify Steam launch options.'
 }
-foreach($name in @('FabMode','ArliMode','BrileMode','ArmlMode','OliMode','Provmode')){
-    if($source -notmatch ('New-Tile "'+[regex]::Escape($name)+'"')){throw "Missing main tile: $name"}
+if($source -notmatch '\$script:GamingProfiles\s*=\s*\[ordered\]@\{' -or
+   $source -notmatch '(?s)foreach\(\$profileName in @\(\$script:GamingProfiles\.Keys\)\)\s*\{.*?New-Tile \$profileForAction.*?Set-ProfileDashboardPage'){
+    throw 'Dashboard profile tiles must be generated from the ordered profile registry.'
 }
 if($source -notmatch '\$play\.Add_Click' -or $source -notmatch 'Start-CS2WithProfileCfg -ProfileName \$selectedProfile'){
     throw 'Missing independent Play + Exec profile button handler.'

@@ -61,7 +61,7 @@ foreach($functionName in $rateLimitFunctionNames){
     if($functionAst.Count -ne 1){throw ('Missing or duplicate GitHub rate-limit function: '+$functionName)}
     Invoke-Expression $functionAst[0].Extent.Text
 }
-if($psSource -match '(?i)Invoke-RestMethod\s+-Uri\s+(?!''https://api\.steampowered\.com/ISteamRemoteStorage/GetPublishedFileDetails/v1/''|"https://api\.steampowered\.com/ISteamRemoteStorage/GetPublishedFileDetails/v1/")'){
+if($psSource -match '(?i)Invoke-RestMethod\s+-Uri\s+(?!''https://api\.steampowered\.com/ISteamRemoteStorage/GetPublishedFileDetails/v1/''|"https://api\.steampowered\.com/ISteamRemoteStorage/GetPublishedFileDetails/v1/"|\$workshopUri)'){
     throw 'GitHub REST requests must use the response-header tracking wrapper.'
 }
 
@@ -86,7 +86,7 @@ foreach($requiredEditorFeature in @(
     '$pointerSpeedSelectionState.UserChanged',
     '$p.PointerSpeed=$pointerSpeedOriginalValue',
     '$cs2Page.Text=''CS2 / Apps''',
-    '$cs2Grid=New-EditorTabGrid -Page $cs2Page -Rows 29',
+    '$cs2Grid=New-EditorTabGrid -Page $cs2Page -Rows 31',
     'function Add-EditorTabFullRowField',
     'function New-EditorTabFullRowChoice',
     '$captureGraphics.Text=''Capture from CS2''',
@@ -297,7 +297,8 @@ $script:ProfileApiFixture=$null
 $script:ProfileApiRequest=$null
 function Invoke-CafeGitHubRestMethod {
     [CmdletBinding()]
-    param([string]$Uri,[string]$Method,$Headers,[int]$TimeoutSec,[int]$MaximumRedirection)
+    param([string]$Uri,[string]$Method,$Headers,[int]$TimeoutSec,[int]$MaximumRedirection,
+        [string]$TimingName,[string]$TimingGroup)
     $script:ProfileApiRequest=[pscustomobject]@{Uri=$Uri;Headers=$Headers;Method=$Method}
     return $script:ProfileApiFixture
 }
@@ -342,7 +343,7 @@ foreach($def in $psAst.FindAll({
 },$true)){
     $definitions[$def.Name]=$def.Extent.Text
 }
-if(-not $definitions.ContainsKey('Launch-All') -or -not $definitions.ContainsKey('Invoke-GamingProfile') -or -not $definitions.ContainsKey('Show-ProfileEditor')){
+if(-not $definitions.ContainsKey('Launch-ProfileApps') -or -not $definitions.ContainsKey('Invoke-GamingProfile') -or -not $definitions.ContainsKey('Show-ProfileEditor')){
     throw 'Missing expected launcher and editor functions.'
 }
 if(-not $definitions.ContainsKey('Get-CafeLauncherRelease')){throw 'Dynamic launcher release lookup is missing.'}
@@ -353,11 +354,11 @@ $script:LauncherRunningRelease='2026.10.14.15'
 if((Get-CafeLauncherRelease) -ne $script:LauncherRunningRelease){throw 'Launcher release lookup must retain the version captured by the running process even if the BAT on disk is replaced.'}
 $script:LauncherRunningRelease=$expectedRelease
 if((Get-CafeLauncherRelease) -ne $expectedRelease){throw 'Launcher release lookup must use the active CAFE_RELEASE marker captured at startup.'}
-if($definitions['Invoke-GamingProfile'] -notmatch 'Launch-All -SkipGHub' -or
+if($definitions['Invoke-GamingProfile'] -notmatch 'Launch-ProfileApps -SkipGHub -ProfileName \$ProfileName' -or
    $definitions['Invoke-GamingProfile'] -notmatch 'Request-LogitechLiveDPI -DPI'){
     throw 'Profile actions must skip G HUB while retaining custom live DPI.'
 }
-if($psSource -notmatch '(?m)^New-Tile "LAUNCH ALL" 0 \{ Launch-All \}' -or
+if($psSource -notmatch '(?m)^New-Tile "LAUNCH ALL" 0 \{ Launch-ProfileApps \}' -or
    $psSource -notmatch '(?m)^New-Tile "Logitech G HUB" 5 \{ Open-GHub \}'){
     throw 'Standalone Launch All and G HUB buttons must remain unchanged.'
 }
@@ -365,18 +366,38 @@ if($definitions['Show-ProfileEditor'] -notmatch 'Mouse Options \(no G HUB\)'){
     throw 'Profile editor must explain that Launch Apps skips G HUB.'
 }
 $script:TestGHubCalls=0
+$script:TestSpotifyCalls=0
+$script:TestWebsiteUrls=New-Object System.Collections.ArrayList
+$script:GamingProfiles=@{}
+foreach($profileName in @('FabMode','ArliMode','BrileMode','ArmlMode','OliMode','Provmode')){
+    $script:GamingProfiles[$profileName]=@{LaunchWebsiteEnabled=$true;LaunchWebsiteUrl='https://metastack.gg/'}
+}
 function Start-DetectedSteam {}
 function Launch-App {param([string]$Name,[string[]]$Paths)}
 function Open-FaceitMatchmaking {}
-function Open-Spotify {}
+function Open-Spotify {$script:TestSpotifyCalls++}
+function Open-ProfileWebsite {param([string]$Url);[void]$script:TestWebsiteUrls.Add($Url)}
+function Get-ProfileLaunchWebsite {param([string]$ProfileName);return $script:GamingProfiles[$ProfileName].LaunchWebsiteUrl}
 function Open-GHub {$script:TestGHubCalls++}
 function Open-MousePointerOptions {}
 function Write-Log {param([string]$Message,[string]$Level='INFO')}
-Invoke-Expression $definitions['Launch-All']
-Launch-All -SkipGHub
+Invoke-Expression $definitions['Launch-ProfileApps']
+Launch-ProfileApps -SkipGHub -ProfileName ArliMode
 if($script:TestGHubCalls -ne 0){throw 'Profile launch unexpectedly starts G HUB.'}
-Launch-All
+if($script:TestWebsiteUrls.Count -ne 1 -or $script:TestWebsiteUrls[0] -ne 'https://metastack.gg/' -or $script:TestSpotifyCalls -ne 0){throw 'ArliMode must open its default website instead of Spotify.'}
+foreach($otherProfile in @('BrileMode','ArmlMode','OliMode','Provmode')){Launch-ProfileApps -SkipGHub -ProfileName $otherProfile}
+if($script:TestWebsiteUrls.Count -ne 5 -or $script:TestSpotifyCalls -ne 0){throw 'Other profiles must open their configured websites instead of Spotify.'}
+Launch-ProfileApps -SkipGHub -ProfileName FabMode
+if($script:TestWebsiteUrls.Count -ne 6 -or $script:TestSpotifyCalls -ne 0){throw 'FabMode must open its configured website instead of Spotify.'}
+$script:GamingProfiles['FabMode'].LaunchWebsiteUrl='https://example.com/'
+Launch-ProfileApps -SkipGHub -ProfileName FabMode
+if($script:TestWebsiteUrls.Count -ne 7 -or $script:TestWebsiteUrls[6] -ne 'https://example.com/'){throw 'Custom website URL was not respected.'}
+$script:GamingProfiles['FabMode'].LaunchWebsiteEnabled=$false
+Launch-ProfileApps -SkipGHub -ProfileName FabMode
+if($script:TestWebsiteUrls.Count -ne 7){throw 'Disabled second website must not launch.'}
+Launch-ProfileApps
 if($script:TestGHubCalls -ne 1){throw 'Standalone Launch All must still open G HUB.'}
+if($script:TestWebsiteUrls.Count -ne 7 -or $script:TestSpotifyCalls -ne 1){throw 'Standalone Launch All must still open Spotify.'}
 
 # Preview UI: fixed-coordinate label overlays have been replaced by isolated
 # table cells on distinct tabs, so labels cannot cover neighboring inputs.
@@ -466,6 +487,18 @@ if($dashboardSource -notmatch 'New-Object System.Windows.Forms.TabControl' -or
    $dashboardSource -notmatch 'Tools & Apps'){
     throw 'Main dashboard, selected-profile GitHub refresh, profile summary, tools, or collapsible logs are missing, or dashboard still refreshes every profile.'
 }
+$liveLogHistory=@($psAst.FindAll({param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Initialize-LiveLogHistory'},$true))
+if($liveLogHistory.Count -ne 1 -or
+   $liveLogHistory[0].Extent.Text -notmatch "Name 'Retained log load' -Group Later" -or
+   $liveLogHistory[0].Extent.Text -notmatch '-Tail 2000' -or
+   $liveLogHistory[0].Extent.Text -notmatch '\$script:LiveLogHydrated' -or
+   $dashboardSource -notmatch '\$logToggle\.Add_Click\(\{(?s:.*?)Initialize-LiveLogHistory' -or
+   $psSource -notmatch '\$liveSequence -gt \$script:LiveLogHydrationCutoff'){
+    throw 'Retained LIVE LOGS history must load on demand, retry after failure, and suppress queued duplicates.'
+}
+if(([regex]::Matches($psSource,'Initialize-LiveLogHistory')).Count -ne 2){
+    throw 'Retained LIVE LOGS history must only be initialized by its helper and the Show Logs action.'
+}
 if($editorSource -notmatch 'Refresh-ProfileFromGitHub -ProfileName \$ProfileName' -or
    $editorSource -notmatch 'Get-ProfileGraphicsPreset -ProfileName \$ProfileName -RequireGitHub' -or
    $editorSource -notmatch 'Resolve-PendingProfileChanges -ProfileName \$ProfileName' -or
@@ -478,7 +511,9 @@ if($graphicsReader.Count -ne 1 -or $graphicsReader[0].Extent.Text -notmatch '\[s
    $graphicsReader[0].Extent.Text -notmatch 'if\(\$RequireGitHub\)\{throw'){
     throw 'Editor GitHub graphics refresh must fail closed so local fallback requires a separate user confirmation.'
 }
-$startupSource=$dashboardSource.Substring($dashboardSource.IndexOf('$startupTimer = New-Object System.Windows.Forms.Timer'))
+$startupTimerMatch=[regex]::Match($dashboardSource,'\$startupTimer\s*=\s*New-Object System\.Windows\.Forms\.Timer')
+if(-not $startupTimerMatch.Success){throw 'Startup update timer is missing.'}
+$startupSource=$dashboardSource.Substring($startupTimerMatch.Index)
 if($startupSource -match 'Refresh-DashboardProfiles|Refresh-ProfileFromGitHub'){
     throw 'Dashboard startup must not spend GitHub requests refreshing all profiles.'
 }
@@ -543,10 +578,18 @@ if($definitions['Check-CafeLauncherUpdates'] -notmatch '\$runningReleaseText=Get
 $startupAt=$psSource.IndexOf('$startupTimer.Add_Tick({')
 if($startupAt -lt 0){throw 'Startup inventory timer is missing.'}
 $startupSource=$psSource.Substring($startupAt)
-$inventoryAt=$startupSource.IndexOf('Get-PCDiagnostics',[StringComparison]::Ordinal)
-$updateCheckAt=$startupSource.IndexOf('Check-CafeLauncherUpdates',[StringComparison]::Ordinal)
-if($inventoryAt -lt 0 -or $updateCheckAt -le $inventoryAt -or $startupSource -match 'Check-CafeLauncherUpdates\s+-Manual'){
-    throw 'Startup must check launcher updates automatically after the local PC inventory.'
+$startupInventoryAt=$startupSource.IndexOf('Get-PCDiagnostics',[StringComparison]::Ordinal)
+if($startupSource -match 'Get-PCDiagnostics' -or
+   $startupSource -notmatch 'Start-CafeLauncherUpdateCheckAsync' -or
+   $definitions['Start-CafeLauncherUpdateCheckAsync'] -notmatch 'RunWorkerAsync\(\)' -or
+   $definitions['Start-CafeLauncherUpdateCheckAsync'] -notmatch 'Check-CafeLauncherUpdates -RemoteMetadata \$remote' -or
+   $startupInventoryAt -ge 0){
+    throw 'Startup must defer PC diagnostics and dispatch the launcher update check asynchronously.'
+}
+if($definitions['Show-PCDiagnostics'] -notmatch "Name 'PC diagnostics inventory' -Group Later" -or
+   $definitions['Check-CafeLauncherUpdates'] -notmatch 'CafeLauncher is up to date \(\$runningRelease\)' -or
+   $definitions['Check-CafeLauncherUpdates'] -notmatch 'if \(\$Manual\).*CafeLauncher is up to date'){
+    throw 'PC inventory must be timed on demand, and a manual up-to-date check must still show its information dialog.'
 }
 if($editorSource -notmatch 'Sync-ProfileToGitHub -ProfileName \$ProfileName -Token \$token' -or
    $editorSource -notmatch 'Confirm GitHub sync'){
@@ -556,7 +599,7 @@ if($editorSource -notmatch 'Sync-ProfileToGitHub -ProfileName \$ProfileName -Tok
 # Construct the production dashboard in memory. No GUI is shown and none
 # of the profile / tool button actions are clicked, so no devices are changed.
 $dashboardStart=$psSource.IndexOf('# Modern CafeLauncher dashboard.')
-$dashboardEnd=$psSource.IndexOf('# On first display, inventory the machine',$dashboardStart)
+$dashboardEnd=$psSource.IndexOf('# PC detection remains available on demand',$dashboardStart)
 if($dashboardStart -lt 0 -or $dashboardEnd -le $dashboardStart){
     throw 'Production dashboard code region not found.'
 }
@@ -572,6 +615,8 @@ $script:PendingSync=@{}
 $script:ProfileRefreshStatus=@{}
 $script:ProfileRefreshCalls=New-Object System.Collections.ArrayList
 foreach($name in @($script:GamingProfiles.Keys)){$script:PendingSync[$name]=$false}
+function Start-CafeTimingOperation { param([string]$Type,[string]$Name,[string]$Uri,[string]$Group) return 1L }
+function Complete-CafeTimingOperation { param([long]$Id,[string]$Outcome,[int]$HttpStatus) }
 function Refresh-ProfileFromGitHub {
     param([string]$ProfileName)
     [void]$script:ProfileRefreshCalls.Add($ProfileName)
@@ -586,11 +631,37 @@ $script:GitHubRateLimitLabel=$null
 $paletteMatch=[regex]::Match($psSource,'(?ms)^\$script:ProfileAccentColors\s*=\s*@\{.*?^\}')
 if(-not $paletteMatch.Success){throw 'Production profile color palette missing.'}
 Invoke-Expression $paletteMatch.Value
+$form=$null
 try {
     Invoke-Expression $psSource.Substring($dashboardStart,$dashboardEnd-$dashboardStart)
     if($tabs.TabPages.Count -ne 2 -or $profilesGrid.Controls.Count -ne 7){
         throw 'Dashboard must construct two tabs and exactly six profile cards.'
     }
+    $pageOneProfiles=@(for($row=1;$row -le 5;$row++){
+        $card=$profilesGrid.GetControlFromPosition(0,$row)
+        if($card -and $card.Tag){[string]$card.Tag}
+    })
+    if($script:ProfileDashboardPageLabel.Text -ne 'Page 1 of 2' -or
+       -not $script:ProfileDashboardNext.Enabled -or
+       $script:ProfileDashboardPrevious.Enabled -or
+       $pageOneProfiles.Count -ne 5 -or
+       $pageOneProfiles -contains 'Provmode'){
+        throw 'Dashboard page 1 must show five profiles and leave Provmode for page 2.'
+    }
+    Set-ProfileDashboardPage -PageIndex 1
+    $pageTwoProfiles=@(for($row=1;$row -le 5;$row++){
+        $card=$profilesGrid.GetControlFromPosition(0,$row)
+        if($card -and $card.Tag){[string]$card.Tag}
+    })
+    if($script:ProfileDashboardPageLabel.Text -ne 'Page 2 of 2' -or
+       $script:ProfileDashboardNext.Enabled -or
+       -not $script:ProfileDashboardPrevious.Enabled -or
+       $pageTwoProfiles.Count -ne 1 -or
+       $pageTwoProfiles[0] -cne 'Provmode' -or
+       $script:ProfileRefreshCalls.Count -ne 1){
+        throw 'Dashboard page 2 must show only Provmode without refreshing profile data.'
+    }
+    Set-ProfileDashboardPage -PageIndex 0
     if($script:SelectedProfileTitle.Text -ne 'FabMode' -or
        $script:ManualDpiInput.Text -ne '' -or
        $toolsFlow.Controls.Count -lt 9){
