@@ -6727,7 +6727,7 @@ function Show-ProfileEditor {
     $nv.Checked=[bool]$p.ApplyNvidia
     Add-EditorTabWide -Grid $displayGrid -Control $nv -Row 4
 
-    $cs2Grid=New-EditorTabGrid -Page $cs2Page -Rows 28
+    $cs2Grid=New-EditorTabGrid -Page $cs2Page -Rows 30
     $cfgFile=New-Object CafeEditorScrollTextBox
     $cfgFile.Text=[string]$p.ConfigFile
     $cfgFile.ReadOnly=$true
