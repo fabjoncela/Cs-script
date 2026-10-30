@@ -366,26 +366,37 @@ if($definitions['Show-ProfileEditor'] -notmatch 'Mouse Options \(no G HUB\)'){
 }
 $script:TestGHubCalls=0
 $script:TestSpotifyCalls=0
-$script:TestMetastackCalls=0
+$script:TestWebsiteUrls=New-Object System.Collections.ArrayList
+$script:GamingProfiles=@{}
+foreach($profileName in @('FabMode','ArliMode','BrileMode','ArmlMode','OliMode','Provmode')){
+    $script:GamingProfiles[$profileName]=@{LaunchWebsiteEnabled=$true;LaunchWebsiteUrl='https://metastack.gg/'}
+}
 function Start-DetectedSteam {}
 function Launch-App {param([string]$Name,[string[]]$Paths)}
 function Open-FaceitMatchmaking {}
 function Open-Spotify {$script:TestSpotifyCalls++}
-function Open-Metastack {$script:TestMetastackCalls++}
+function Open-ProfileWebsite {param([string]$Url);[void]$script:TestWebsiteUrls.Add($Url)}
+function Get-ProfileLaunchWebsite {param([string]$ProfileName);return $script:GamingProfiles[$ProfileName].LaunchWebsiteUrl}
 function Open-GHub {$script:TestGHubCalls++}
 function Open-MousePointerOptions {}
 function Write-Log {param([string]$Message,[string]$Level='INFO')}
 Invoke-Expression $definitions['Launch-ProfileApps']
 Launch-ProfileApps -SkipGHub -ProfileName ArliMode
 if($script:TestGHubCalls -ne 0){throw 'Profile launch unexpectedly starts G HUB.'}
-if($script:TestMetastackCalls -ne 1 -or $script:TestSpotifyCalls -ne 0){throw 'ArliMode must open Metastack instead of Spotify.'}
+if($script:TestWebsiteUrls.Count -ne 1 -or $script:TestWebsiteUrls[0] -ne 'https://metastack.gg/' -or $script:TestSpotifyCalls -ne 0){throw 'ArliMode must open its default website instead of Spotify.'}
 foreach($otherProfile in @('BrileMode','ArmlMode','OliMode','Provmode')){Launch-ProfileApps -SkipGHub -ProfileName $otherProfile}
-if($script:TestMetastackCalls -ne 5 -or $script:TestSpotifyCalls -ne 0){throw 'Non-Fab profiles must open Metastack instead of Spotify.'}
+if($script:TestWebsiteUrls.Count -ne 5 -or $script:TestSpotifyCalls -ne 0){throw 'Other profiles must open their configured websites instead of Spotify.'}
 Launch-ProfileApps -SkipGHub -ProfileName FabMode
-if($script:TestMetastackCalls -ne 6 -or $script:TestSpotifyCalls -ne 0){throw 'FabMode must open Metastack instead of Spotify.'}
+if($script:TestWebsiteUrls.Count -ne 6 -or $script:TestSpotifyCalls -ne 0){throw 'FabMode must open its configured website instead of Spotify.'}
+$script:GamingProfiles['FabMode'].LaunchWebsiteUrl='https://example.com/'
+Launch-ProfileApps -SkipGHub -ProfileName FabMode
+if($script:TestWebsiteUrls.Count -ne 7 -or $script:TestWebsiteUrls[6] -ne 'https://example.com/'){throw 'Custom website URL was not respected.'}
+$script:GamingProfiles['FabMode'].LaunchWebsiteEnabled=$false
+Launch-ProfileApps -SkipGHub -ProfileName FabMode
+if($script:TestWebsiteUrls.Count -ne 7){throw 'Disabled second website must not launch.'}
 Launch-ProfileApps
 if($script:TestGHubCalls -ne 1){throw 'Standalone Launch All must still open G HUB.'}
-if($script:TestMetastackCalls -ne 6 -or $script:TestSpotifyCalls -ne 1){throw 'Standalone Launch All must still open Spotify.'}
+if($script:TestWebsiteUrls.Count -ne 7 -or $script:TestSpotifyCalls -ne 1){throw 'Standalone Launch All must still open Spotify.'}
 
 # Preview UI: fixed-coordinate label overlays have been replaced by isolated
 # table cells on distinct tabs, so labels cannot cover neighboring inputs.
