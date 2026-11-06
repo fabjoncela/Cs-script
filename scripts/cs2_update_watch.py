@@ -30,7 +30,8 @@ RULES = (
      ("Run Play + Exec with CS2 closed and verify the baseline runs before the profile CFG.",
       "Switch profiles and verify the second profile applies without stale binds.")),
     (r"\b(?:key[ -]?bind(?:ing)?s?|binds?|unbind(?:all)?|user_keys\w*|"
-     r"input bind(?:ing)?s?|multi[- ]action binds?)\b",
+     r"input bind(?:ing)?s?|multi[- ]action binds?|switchhands|toggleconsole|player_ping|"
+     r"slot(?:6|7|8|10))\b|(?<!\w)\+(?:jump|reload|voicerecord|lookatweapon)\b",
      "Profile binds or the baseline reset may stop applying or persisting as expected.",
      ("Apply a profile that uses the affected bind and verify the key in a practice session.",
       "Switch profiles and restart CS2 to check for stale or reset binds.")),
@@ -41,23 +42,41 @@ RULES = (
       "If capture or share codes are affected, compare the imported values with the in-game settings.")),
     (r"\b(?:cs2_video\.txt|videocfg_\w+|video (?:config(?:uration)?|settings?|options?)|"
      r"graphics (?:settings?|options?|presets?)|aspect ratio|display mode|refresh rate|"
-     r"fullscreen|msaa|cmaa|nvidia reflex|fidelityfx|shadow quality)\b",
+     r"full[ -]?screen|windowed|screen resolution|display resolution|vertical sync|v[ -]?sync|"
+     r"frame pacing|anti[- ]aliasing|msaa|cmaa\w*|nvidia reflex|fidelityfx|fsr|"
+     r"shadow quality|dynamic shadows|ambient occlusion|texture filtering|"
+     r"(?:shader|particle|texture|model) (?:detail|quality)|high dynamic range|hdr|"
+     r"player visibility|boost player contrast|r_player_visibility_mode)\b"
+     r"|\bsetting\.[a-z0-9_]+\b",
      "Apply Graphics or Capture CS2 may need a new file path, key, value mapping, or startup check.",
      ("Close CS2 and apply the affected setting on the active Steam account.",
       "Compare the saved file and in-game value after launch and check an unrelated key.")),
     (r"\b(?:launch (?:options?|arguments?|parameters?|flags?)|"
      r"(?:startup|command[- ]line) (?:arguments?|options?|parameters?|flags?)|"
-     r"steam (?:launch|startup|cloud|userdata)|steam://(?:run|rungameid))\b",
+     r"steam (?:launch|startup|cloud|userdata|libraries|library folders?|install paths?|"
+     r"accounts?|account switching)|steam://(?:run|rungameid)|"
+     r"libraryfolders\.vdf|appmanifest_730\.acf|cs2\.exe|"
+     r"(?:cs2|game) (?:installation|install (?:paths?|folders?|locations?)|executable)|"
+     r"(?:active|signed[- ]in) steam (?:user|account)|userdata[/\\])",
      "Steam may pass different launch arguments or load different account settings in Play + Exec.",
      ("Test Play + Exec with Steam closed and already running.",
       "If account behavior changed, switch Steam accounts and verify the settings load for the active one.")),
     (r"\b(?:console (?:commands?|variables?)|developer console|cvars?|convars?|"
      r"cs2_user_convars\w*|con_enable|r_low_latency|fps_max|zoom_sensitivity_ratio|"
-     r"cl_radar_\w+|cl_hud_radar_scale|viewmodel_\w+|cl_mute_enemy_team|"
+     r"cl_radar_\w+|cl_hud_radar_scale|cl_teamcounter_playercount_instead_of_avatars|"
+     r"viewmodel_\w+|cl_mute_enemy_team|raw (?:mouse )?input|mouse acceleration|"
      r"(?:mouse |zoom )?sensitivity)\b",
      "An affected profile command may be rejected, interpreted differently, or overwritten.",
      ("Execute the affected command and check for errors or changed values in the console.",
       "Run the profile CFG and verify the expected behavior in a practice session.")),
+    (r"\b(?:isteamugc\w*|steam_api64\.dll|steamworks (?:runtime|sdk|api)|"
+     r"get(?:num)?subscribeditems|appworkshop_730\.acf|"
+     r"workshop (?:subscriptions?|manifests?|install(?:ation)? (?:paths?|folders?|directories)|"
+     r"downloads?|content (?:paths?|folders?|directories))|"
+     r"subscribed (?:workshop )?items)\b",
+     "Workshop Cleanup may need to adapt how it checks subscriptions, manifests, or installed items.",
+     ("Run a scan with a signed-in Steam account and compare subscribed items with Steam.",
+      "Verify unknown or downloading items stay protected and cancel before removing files.")),
 )
 CHANGE = re.compile(
     r"\b(?:add(?:ed|s)?|allow(?:ed|s)?|apply|appl(?:ied|ies)|accept(?:ed|s)?|"
@@ -65,11 +84,10 @@ CHANGE = re.compile(
     r"execut(?:e|ed|es|ion)|fix(?:ed|es)?|ignor(?:e|ed|es)|limit(?:ed|s)?|"
     r"load(?:ed|s)?|mov(?:ed|es)|now|overrid\w+|persist\w*|reject\w*|"
     r"remov(?:ed|es)|renam(?:ed|es)|replac(?:ed|es)|requir\w+|reset\w*|"
-    r"restrict\w*|sav(?:ed|es)|support\w*|us(?:ed|es)|writ\w*)\b", re.I
+    r"restrict\w*|brok\w*|prevent\w*|no longer|sav(?:ed|es)|support\w*|us(?:ed|es)|writ\w*)\b", re.I
 )
 SECTION = re.compile(r"\\*\s*\[\s*([^\[\]]+)\s*\]")
-UNRELATED = re.compile(r"\b(?:spectat\w*|demo playback|observer|workshop|"
-                       r"inventory|sticker|cosmetic|chicken|crosshair placement|crosshair sticker)\b", re.I)
+UNRELATED = re.compile(r"\b(?:spectat\w*|demo playback|observer|inventory|sticker|cosmetic|chicken)\b", re.I)
 BB_BREAK = re.compile(r"\[(?:/?(?:p|list|olist|h[1-6])|\*)\]", re.I)
 BB_INLINE = re.compile(r"\[/?(?:b|i|u|s|code|url(?:=[^\]]*)?)\]", re.I)
 
@@ -142,7 +160,8 @@ def valve_events(data):
 def get_updates(since):
     # Valve's Counter-Strike site loads this Steam endpoint for its release notes.
     # The RSS feed uses the same announcement IDs and provides a second listing.
-    updates = {update.id: update for update in steam_rss(fetch(RSS))}
+    rss_updates = {update.id: update for update in steam_rss(fetch(RSS))}
+    event_updates = {}
     cutoff = since - REVIEW_WINDOW
     for offset in range(0, 500, 50):
         query = urlencode({"clan_accountid": 0, "appid": 730, "offset": offset,
@@ -152,12 +171,14 @@ def get_updates(since):
             if not offset:
                 raise ValueError("Valve release-note feed returned no announcements")
             break
-        updates.update((update.id, update) for update in page)
+        event_updates.update((update.id, update) for update in page)
         if min(update.posted for update in page) < cutoff:
             break
     else:
         raise ValueError("Could not fetch enough release-note history to cover the last successful check")
-    return updates.values()
+    print(f"Steam CS2 announcement RSS: {len(rss_updates)} announcements.")
+    print(f"Valve CS2 release-note feed: {len(event_updates)} announcements.")
+    return (rss_updates | event_updates).values()
 
 
 def relevant_notes(notes):
@@ -167,11 +188,15 @@ def relevant_notes(notes):
         if header := SECTION.fullmatch(line):
             section = header[1].lower()
             continue
-        if section in {"maps", "map scripting", "scripting", "workshop", "cosmetics", "armory"}:
-            continue
         if UNRELATED.search(line) or not CHANGE.search(line):
             continue
-        matches = [rule for rule in RULES if re.search(rule[0], line, re.I)]
+        if section in {"workshop", "map scripting", "scripting"} or re.search(r"\bworkshop\b", line, re.I):
+            rules = RULES[-1:]
+        elif section in {"maps", "cosmetics", "armory"}:
+            continue
+        else:
+            rules = RULES
+        matches = [rule for rule in rules if re.search(rule[0], line, re.I)]
         if matches:
             yield line, matches
 

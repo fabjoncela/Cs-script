@@ -317,7 +317,7 @@ Edit Profile > CS2 / Apps exposes a custom website URL and enable checkbox. Appl
 
 ## CS2 update watch
 
-`.github/workflows/cs2-update-watch.yml` runs the standalone Python watch on a GitHub-hosted runner daily at 07:17 Europe/Tirane. It checks Valve's release-note feed and Steam announcement RSS, matches their announcement IDs, and uses rules to identify changes that may affect the launcher. Only qualifying changes produce email. It does not run on café PCs or use GitHub REST/GraphQL or an AI API.
+`.github/workflows/cs2-update-watch.yml` runs the standalone Python watch on a GitHub-hosted runner at 07:17, 15:17, and 23:17 Europe/Tirane. It checks Valve's release-note feed and Steam announcement RSS, matches their announcement IDs, and uses rules to identify changes that may affect the launcher. Each run logs the count from each source before deduplicating. The rules cover profile CFG execution and settings, graphics apply and capture, Steam launch and install discovery, and Workshop Cleanup dependencies. Only qualifying changes produce email. It does not run on café PCs or use GitHub REST/GraphQL or an AI API.
 
 Setup on the default branch:
 
