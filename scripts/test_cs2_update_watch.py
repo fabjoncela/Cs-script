@@ -32,6 +32,20 @@ class WatchTests(unittest.TestCase):
         notes = UNRELATED + f"\n[ MISC ]\n{CFG}\n{VIDEO}"
         self.assertEqual([line for line, _ in watch.relevant_notes(notes)], [CFG, VIDEO])
 
+    def test_launcher_dependencies_named_in_patch_notes(self):
+        notes = (
+            "Fixed Steam libraryfolders.vdf loading.",
+            "VSync no longer resets at launch.",
+            "Fixed r_player_visibility_mode being ignored.",
+            "Changed how +voicerecord works.",
+            "Fixed cl_teamcounter_playercount_instead_of_avatars.",
+            "[ WORKSHOP ]",
+            "Added a workshop map.",
+            "Changed ISteamUGC workshop subscription behavior.",
+        )
+        self.assertEqual([line for line, _ in watch.relevant_notes("\n".join(notes))],
+                         [*notes[:5], notes[-1]])
+
     def test_official_feeds_share_announcement_id(self):
         rss = b"""<rss><channel><item>
           <link>https://steamcommunity.com/games/CSGO/announcements/detail/123</link>
