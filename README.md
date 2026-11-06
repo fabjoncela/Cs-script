@@ -97,3 +97,5 @@ Backups are stored under `%LOCALAPPDATA%\CafeLauncher\backups`. If the original 
 The application is a hybrid BAT/PowerShell launcher; there is no compile or install step. Keep `cafe.bat` in Windows CRLF format and increment its `# CAFE_RELEASE` marker for a launcher release. The release line in this README and the one in `context.md` are generated from that marker by [`tools/Update-Context.ps1`](./tools/Update-Context.ps1). Git hooks refresh the generated text, and GitHub Actions checks that it is current.
 
 Windows PowerShell 5.1 regression checks are in [`tools/`](./tools/). GitHub Actions runs the relevant validation jobs for pull requests and pushes to `main`. Automated checks do not replace a real Windows/Steam/CS2/monitor smoke test. See [context.md](./context.md) for the full architecture, safety boundaries, and verification commands.
+
+For the maintainer workflow that monitors Valve patch notes, see [CS2 update watch](./context.md#cs2-update-watch).
