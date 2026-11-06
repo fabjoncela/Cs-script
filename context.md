@@ -319,6 +319,8 @@ Edit Profile > CS2 / Apps exposes a custom website URL and enable checkbox. Appl
 
 `.github/workflows/cs2-update-watch.yml` runs the standalone Python watch on a GitHub-hosted runner at 07:17, 15:17, and 23:17 Europe/Tirane. It checks Valve's release-note feed and Steam announcement RSS, matches their announcement IDs, and uses rules to identify changes that may affect the launcher. Each run logs the count from each source before deduplicating. The rules cover profile CFG execution and settings, graphics apply and capture, Steam launch and install discovery, and Workshop Cleanup dependencies. Only qualifying changes produce email. It does not run on café PCs or use GitHub REST/GraphQL or an AI API.
 
+[PR #76](https://github.com/fabjoncela/Cs-script/pull/76) shipped the three daily runs, per-feed counts, and broader alert coverage for profile commands, graphics settings, Steam install and account discovery, and Workshop Cleanup.
+
 Setup on the default branch:
 
 1. In **Settings > Secrets and variables > Actions**, set `SMTP_HOST`, `SMTP_PORT` (465 for TLS or 587 for STARTTLS), `SMTP_USERNAME`, `SMTP_PASSWORD`, `SMTP_FROM` and `SMTP_TO` as repository secrets. Use SMTP credentials supported by the email provider.
@@ -329,3 +331,9 @@ Setup on the default branch:
 The initial alert window is 24 hours. Subsequent checks resume from the last successful check and revisit at least two weeks of notes for edits. A fetch or SMTP failure keeps the previous window available for retry. Runs are serialized. If SMTP accepts an email and Git then fails to persist its receipt, retrying can send that email again. Rules may miss changes that Valve describes without naming an affected setting or behavior.
 
 Run the focused tests with `python3 -B -m unittest discover -s scripts -p 'test_cs2_update_watch.py'`.
+
+### TODO: Refine CS2 alert rules
+
+- [ ] Catch crosshair changes that affect resolution scaling, including thickness and length expressed in pixels. Use the [September 22](https://steamcommunity.com/games/CSGO/announcements/detail/674006995886407686) and [September 23](https://steamcommunity.com/games/CSGO/announcements/detail/674006995886408820) Valve notes as regression cases.
+- [ ] Suppress alerts for [dedicated-server round-backup flags](https://steamcommunity.com/games/CSGO/announcements/detail/687519694976975305) and [community-map command restrictions](https://steamcommunity.com/games/CSGO/announcements/detail/499470950023037645). Add regression cases that preserve alerts for client launch options and Workshop Cleanup dependencies.
+- [ ] Replay the same 150-post sample after changing the rules and review which matches were added or removed. The baseline flagged 28 lines across 17 posts.
