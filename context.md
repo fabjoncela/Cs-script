@@ -314,3 +314,18 @@ A real CS2/Steam account and monitor smoke test remains separate.
 ## Per-profile optional website (2026.10.30.3)
 
 Edit Profile > CS2 / Apps exposes a custom website URL and enable checkbox. Apply with Launch Apps opens FACEIT Matchmaking, then the validated per-profile URL only if enabled. The URL and enabled flag persist through the existing local/cloud profile JSON export/import. Old profiles default to Metastack with the second website enabled. Standalone Launch All retains Spotify. Invalid imported URLs are ignored, and launch-time validation falls back to Metastack. The release number is generated from cafe.bat.
+
+## CS2 update watch
+
+`.github/workflows/cs2-update-watch.yml` runs the standalone Python watch on a GitHub-hosted runner daily at 07:17 Europe/Tirane. It checks Valve's release-note feed and Steam announcement RSS, matches their announcement IDs, and uses rules to identify changes that may affect the launcher. Only qualifying changes produce email. It does not run on café PCs or use GitHub REST/GraphQL or an AI API.
+
+Setup on the default branch:
+
+1. In **Settings > Secrets and variables > Actions**, set `SMTP_HOST`, `SMTP_PORT` (465 for TLS or 587 for STARTTLS), `SMTP_USERNAME`, `SMTP_PASSWORD`, `SMTP_FROM` and `SMTP_TO` as repository secrets. Use SMTP credentials supported by the email provider.
+2. In **Actions > CafeLauncher CS2 update watch**, run `dry-run` to preview findings, then `test-email` to verify delivery. Neither mode updates alert history.
+3. Set the Actions variable `CS2_WATCH_ENABLED` to `true`. Run `live` manually or wait for the next scheduled check. The workflow uses its built-in token to create and update the `cs2-watch-state` branch through Git. That branch contains only a timestamp and announcement fingerprints. If branch rules apply, permit the workflow to write to this branch.
+4. Run the live check again to verify that previously emailed changes stay quiet. If switching from the ChatGPT watch, pause it once GitHub delivery is verified.
+
+The initial alert window is 24 hours. Subsequent checks resume from the last successful check and revisit at least two weeks of notes for edits. A fetch or SMTP failure keeps the previous window available for retry. Runs are serialized. If SMTP accepts an email and Git then fails to persist its receipt, retrying can send that email again. Rules may miss changes that Valve describes without naming an affected setting or behavior.
+
+Run the focused tests with `python3 -B -m unittest discover -s scripts -p 'test_cs2_update_watch.py'`.
