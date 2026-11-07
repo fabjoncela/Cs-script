@@ -8866,7 +8866,8 @@ function New-Tile {
             if($card.IsDisposed){$rowHover.Stop();$rowHover.Dispose();return}
             $pointer=$card.PointToClient([System.Windows.Forms.Cursor]::Position)
             $inside=$card.ClientRectangle.Contains($pointer)
-            $desired=if($inside){[System.Drawing.Color]::FromArgb(238,238,245)}else{$profileColor}
+            $dashboardInteractive=$script:DashboardWindowActive -and $form.Visible -and ($tabs.SelectedTab -eq $dashboard)
+            $desired=if($dashboardInteractive -and $inside){[System.Drawing.Color]::FromArgb(238,238,245)}else{$profileColor}
             if($card.BackColor.ToArgb() -ne $desired.ToArgb()){$card.BackColor=$desired}
         }.GetNewClosure())
         $script:ProfileDashboardTimers[$selectedProfile]=$rowHover
@@ -9015,6 +9016,20 @@ foreach($profileName in @($script:GamingProfiles.Keys)){
 }
 Set-ProfileDashboardPage -PageIndex $script:ProfileDashboardPage
 Complete-CafeTimingOperation -Id $script:DashboardProfileCardsTimingId -Outcome 'Success'
+
+# Hover feedback belongs only to the active dashboard. Clear it immediately when
+# another window (including the profile editor) takes focus.
+$script:DashboardWindowActive=$true
+$form.Add_Deactivate({
+    $script:DashboardWindowActive=$false
+    foreach($profileName in $script:ProfileDashboardCards.Keys){
+        $card=$script:ProfileDashboardCards[$profileName]
+        if(-not $card.IsDisposed -and $script:ProfileAccentColors.Contains($profileName)){
+            $card.BackColor=$script:ProfileAccentColors[$profileName]
+        }
+    }
+})
+$form.Add_Activated({$script:DashboardWindowActive=$true})
 
 $script:DashboardToolsTilesTimingId=Start-CafeTimingOperation -Type 'Local' -Name 'Tools & Apps tiles' -Group Startup
 New-Tile "Mouse Pointer Options" 11 { Open-MousePointerOptions }
