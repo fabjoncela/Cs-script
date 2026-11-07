@@ -13,5 +13,7 @@
     "ScalingMode":  2,
     "VoicePushToTalkKey":  "V",
     "CfgDownloadUrl":  "https://raw.githubusercontent.com/fabjoncela/Cs-script/main/fab.cfg",
-    "LaunchApps":  true
+    "LaunchApps":  true,
+    "LaunchWebsiteEnabled":  true,
+    "LaunchWebsiteUrl":  "https://metastack.gg/"
 }
