@@ -4925,6 +4925,7 @@ function ConvertFrom-CafeCS2ViewmodelPaste {
     if($Text.Length -gt 4096){throw 'Viewmodel command text is too long.'}
     $convars=[ordered]@{}
     $binds=[ordered]@{}
+    $convarCommands=New-Object 'System.Collections.Generic.List[string]'
     foreach($command in @($Text -split '[;\r\n]+'|Where-Object{$_.Trim()})){
         if($command -match '(?i)^\s*bind\s+(?:"(?<quotedKey>[a-z0-9_]{1,24})"|(?<bareKey>[a-z0-9_]{1,24}))\s+(?:"(?<quotedAction>switchhands)"|(?<bareAction>switchhands))\s*$'){
             $key=[string]$Matches.quotedKey;if(-not $key){$key=[string]$Matches.bareKey};$key=$key.ToUpperInvariant()
@@ -4933,9 +4934,9 @@ function ConvertFrom-CafeCS2ViewmodelPaste {
             $binds[$key]=$action
             continue
         }
-        $parsed=ConvertFrom-CafeCS2ViewmodelCommands -Text $command
-        foreach($name in $parsed.Keys){$convars[[string]$name]=[string]$parsed[$name]}
+        $convarCommands.Add([string]$command)
     }
+    if($convarCommands.Count){$convars=ConvertFrom-CafeCS2ViewmodelCommands -Text ($convarCommands -join ';')}
     if(-not $convars.Count -and -not $binds.Count){throw 'Paste at least one supported viewmodel setting or hand-switch bind.'}
     $hasCustomValues=$false
     foreach($name in @('viewmodel_fov','viewmodel_offset_x','viewmodel_offset_y','viewmodel_offset_z')){if($convars.Contains($name)){$hasCustomValues=$true;break}}
@@ -4950,7 +4951,22 @@ function ConvertFrom-CafeCS2ViewmodelPaste {
 }
 function Merge-CafeCS2ViewmodelCommands {
     param([Parameter(Mandatory=$true)][string]$Text,$Existing)
-    $values=(ConvertFrom-CafeCS2ViewmodelPaste -Text $Text).Convars
+    $convarCommands=New-Object 'System.Collections.Generic.List[string]'
+    foreach($command in @($Text -split '[;\r\n]+'|Where-Object{$_.Trim()})){
+        if($command -match '(?i)^\s*bind\s+(?:"[a-z0-9_]{1,24}"|[a-z0-9_]{1,24})\s+(?:"switchhands"|switchhands)\s*$'){continue}
+        $convarCommands.Add([string]$command)
+    }
+    $values=[ordered]@{}
+    if($convarCommands.Count){$values=ConvertFrom-CafeCS2ViewmodelCommands -Text ($convarCommands -join ';')}
+    $hasCustomValues=$false
+    foreach($name in @('viewmodel_fov','viewmodel_offset_x','viewmodel_offset_y','viewmodel_offset_z')){if($values.Contains($name)){$hasCustomValues=$true;break}}
+    $preset=if($values.Contains('viewmodel_presetpos')){[string]$values['viewmodel_presetpos']}else{''}
+    if($preset -in @('1','2') -and $hasCustomValues){throw 'A built-in preset cannot be combined with custom FOV or offsets. Paste presetpos 1 or 2 alone, or use presetpos 0 for custom values.'}
+    if($preset -in @('1','2')){
+        foreach($name in @('viewmodel_fov','viewmodel_offset_x','viewmodel_offset_y','viewmodel_offset_z')){$values[$name]=$script:CafeCS2ResetToDefaultMarker}
+    }elseif($hasCustomValues -and -not $values.Contains('viewmodel_presetpos')){
+        $values['viewmodel_presetpos']='0'
+    }
     $merged=@{}
     if($Existing -is [System.Collections.IDictionary]){foreach($name in $Existing.Keys){$merged[[string]$name]=[string]$Existing[$name]}}
     foreach($name in $values.Keys){$merged[[string]$name]=[string]$values[$name]}
