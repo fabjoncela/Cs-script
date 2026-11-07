@@ -4950,7 +4950,7 @@ function ConvertFrom-CafeCS2ViewmodelPaste {
 }
 function Merge-CafeCS2ViewmodelCommands {
     param([Parameter(Mandatory=$true)][string]$Text,$Existing)
-    $values=ConvertFrom-CafeCS2ViewmodelCommands -Text $Text
+    $values=(ConvertFrom-CafeCS2ViewmodelPaste -Text $Text).Convars
     $merged=@{}
     if($Existing -is [System.Collections.IDictionary]){foreach($name in $Existing.Keys){$merged[[string]$name]=[string]$Existing[$name]}}
     foreach($name in $values.Keys){$merged[[string]$name]=[string]$values[$name]}
@@ -7965,7 +7965,6 @@ function Show-ProfileEditor {
             if($capturedCS2ConvarsState.ContainsKey($ProfileName)){
                 foreach($name in $capturedCS2ConvarsState[$ProfileName].Keys){$existingConvars[[string]$name]=[string]$capturedCS2ConvarsState[$ProfileName][$name]}
             }
-            foreach($name in $parsedPaste.Convars.Keys){$existingConvars[[string]$name]=[string]$parsedPaste.Convars[$name]}
             $existingBinds=[ordered]@{}
             if($parsedPaste.Binds.Count){
                 $selectedVoiceKey=[string]$voiceBox.Tag[$voiceBox.SelectedIndex]
@@ -7975,7 +7974,7 @@ function Show-ProfileEditor {
                     $existingBinds[[string]$key]=[string]$parsedPaste.Binds[$key]
                 }
             }
-            if($existingConvars.Count){$capturedCS2ConvarsState[$ProfileName]=$existingConvars}
+            if($parsedPaste.Convars.Count){$capturedCS2ConvarsState[$ProfileName]=Merge-CafeCS2ViewmodelCommands -Text ([string]$pastedCommands) -Existing $existingConvars}
             if($parsedPaste.Binds.Count){$capturedCS2BindsState[$ProfileName]=$existingBinds}
             $pendingSyncState[$ProfileName]=$true
             $status.Text='Viewmodel settings and binds staged for this profile. Choose Save Locally or Save & Sync to keep them.';$status.ForeColor=[System.Drawing.Color]::FromArgb(255,190,105)
