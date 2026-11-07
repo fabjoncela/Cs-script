@@ -66,7 +66,8 @@ if(-not $eventBumpedRelease){
     if($DryRun){
         Write-Host ("Would bump CafeLauncher release from {0} to {1}." -f $baseRelease,$nextRelease)
     }else{
-        $updated=[regex]::Replace($launcher,$releasePattern,('# CAFE_RELEASE='+$nextRelease),1)
+        $carriageReturn=if($launcher.Contains("`r`n")){"`r"}else{''}
+        $updated=[regex]::Replace($launcher,$releasePattern,('# CAFE_RELEASE='+$nextRelease+$carriageReturn),1)
         [IO.File]::WriteAllText($launcherPath,$updated,(New-Object Text.UTF8Encoding($false)))
         Write-Host ("Bumped CafeLauncher release from {0} to {1}." -f $baseRelease,$nextRelease)
     }
