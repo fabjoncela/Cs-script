@@ -681,7 +681,7 @@ if(-not $paletteMatch.Success){throw 'Production dashboard palette missing.'}
 Invoke-Expression $paletteMatch.Value
 foreach($dashboardHelper in @('New-CafeRoundedPath','Update-CafeDashboardRoundedRegion')){
     if(-not $definitions.ContainsKey($dashboardHelper)){throw ('Production dashboard helper missing: '+$dashboardHelper)}
-    Invoke-Expression $definitions[$dashboardHelper]
+    Set-Item -Path ("Function:\global:"+$dashboardHelper) -Value ([scriptblock]::Create($definitions[$dashboardHelper]))
 }
 $form=$null
 try {
