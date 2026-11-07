@@ -7732,7 +7732,7 @@ function Show-ProfileEditor {
         }finally{$dialog.Cursor=[System.Windows.Forms.Cursors]::Default}
     }.GetNewClosure())
 
-    $historyState=[pscustomobject]@{Loaded=$false;Worker=$null;PollTimer=$null}
+    $historyState=[pscustomobject]@{Loaded=$false;Worker=$null}
     $showGraphicsHistory={
         param($versions)
         $historyChoice.Items.Clear()
@@ -7777,22 +7777,17 @@ function Show-ProfileEditor {
         try{
             $worker=New-CafeGraphicsHistoryWorker
             $historyState.Worker=$worker
-            $pollTimer=New-Object System.Windows.Forms.Timer
-            $pollTimer.Interval=200
-            $pollTimer.Add_Tick({
-                if($worker.IsBusy){return}
-                $pollTimer.Stop()
-                $pollTimer.Dispose()
-                $historyState.PollTimer=$null
-                $historyState.Worker=$null
+            $worker.Add_RunWorkerCompleted({
+                param($sender,$eventArgs)
                 if($dialog.IsDisposed -or $dialog.Disposing){return}
                 try{
-                    if($worker.RateLimitRemaining){
-                        Set-CafeGitHubRateLimitDisplay -Remaining ([string]$worker.RateLimitRemaining) `
-                            -Limit ([string]$worker.RateLimitLimit)
+                    if($eventArgs.Error){throw $eventArgs.Error}
+                    if($sender.RateLimitRemaining){
+                        Set-CafeGitHubRateLimitDisplay -Remaining ([string]$sender.RateLimitRemaining) `
+                            -Limit ([string]$sender.RateLimitLimit)
                     }
-                    if($worker.ErrorText){throw ([System.Exception]::new([string]$worker.ErrorText))}
-                    $versions=@(Get-ProfileGraphicsHistory -ProfileName $ProfileName -ForceRefresh -ResponseJson ([string]$worker.ResultText))
+                    if($sender.ErrorText){throw ([System.Exception]::new([string]$sender.ErrorText))}
+                    $versions=@(Get-ProfileGraphicsHistory -ProfileName $ProfileName -ForceRefresh -ResponseJson ([string]$sender.ResultText))
                     [void](& $showGraphicsHistory $versions)
                 }catch{
                     $message=$_.Exception.Message
@@ -7809,11 +7804,8 @@ function Show-ProfileEditor {
                     }
                 }
             }.GetNewClosure())
-            $historyState.PollTimer=$pollTimer
             $worker.RunWorkerAsync($historyUri)
-            $pollTimer.Start()
         }catch{
-            if($historyState.PollTimer){$historyState.PollTimer.Stop();$historyState.PollTimer.Dispose();$historyState.PollTimer=$null}
             $historyState.Worker=$null
             $loadHistory.Enabled=$true
             $available=@($historyChoice.Tag)

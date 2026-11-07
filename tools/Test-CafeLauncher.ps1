@@ -97,7 +97,7 @@ foreach($requiredEditorFeature in @(
     'Stretch / scaling',
     'Earlier GitHub file revisions (commit ID shown)',
     'Restore selected version',
-    'Get-ProfileGraphicsHistory -ProfileName $ProfileName -ForceRefresh -ResponseJson ([string]$worker.ResultText)',
+    'Get-ProfileGraphicsHistory -ProfileName $ProfileName -ForceRefresh -ResponseJson ([string]$sender.ResultText)',
     'Get-ProfileGraphicsVersion -ProfileName $ProfileName -Version $version',
     '$graphicsPresetState[$ProfileName]=$graphicsPreset',
     'GraphicsSettings',
@@ -411,9 +411,10 @@ $historyLoadStart=$editorSource.IndexOf('$loadHistory.Add_Click({',[StringCompar
 $historyLoadEnd=$editorSource.IndexOf('}.GetNewClosure())',$historyLoadStart,[StringComparison]::Ordinal)
 if($historyLoadStart -lt 0 -or $historyLoadEnd -le $historyLoadStart){throw 'Cannot identify graphics history load handler.'}
 $historyLoadBody=$editorSource.Substring($historyLoadStart,$historyLoadEnd-$historyLoadStart)
-if(-not $editorSource.Contains('$pollTimer.Add_Tick({') -or
+if(-not $editorSource.Contains('$worker.Add_RunWorkerCompleted({') -or
    $editorSource -notmatch '\$worker\.RunWorkerAsync\(\$historyUri\)' -or
-   $editorSource -notmatch '\$worker\.IsBusy' -or
+   $editorSource -notmatch '\$historyState\.Worker\.IsBusy' -or
+   $editorSource -match 'PollTimer' -or
    $definitions['New-CafeGraphicsHistoryWorker'] -notmatch 'class CafeGraphicsHistoryBackgroundWorker : BackgroundWorker'){
     throw 'Graphics history must load in the background without blocking its button handler.'
 }

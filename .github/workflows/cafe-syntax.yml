@@ -40,7 +40,6 @@ on:
       - 'tools/Auto-Bump-CafeRelease.ps1'
       - 'graphics/**'
       - '.github/workflows/cafe-syntax.yml'
-      - '.github/workflows/auto-bump-cafe-release.yml'
   push:
     branches: [main]
     paths:
@@ -81,7 +80,6 @@ on:
       - 'tools/Auto-Bump-CafeRelease.ps1'
       - 'graphics/**'
       - '.github/workflows/cafe-syntax.yml'
-      - '.github/workflows/auto-bump-cafe-release.yml'
   workflow_dispatch:
 
 permissions:
@@ -211,16 +209,59 @@ jobs:
         shell: powershell
         run: |
           & "$env:GITHUB_WORKSPACE\tools\Test-StepResults.ps1"
+  release-bump:
+    name: Auto-bump launcher release
+    runs-on: windows-latest
+    timeout-minutes: 5
+    concurrency:
+      group: cafe-release-main
+      cancel-in-progress: false
+    if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    permissions:
+      contents: write
+    outputs:
+      release_sha: ${{ steps.update-release.outputs.release_sha }}
+    steps:
+      - name: Check out current main and push history
+        uses: actions/checkout@v7
+        with:
+          ref: main
+          fetch-depth: 0
+      - name: Bump release only when cafe.bat changed without a newer marker
+        id: update-release
+        shell: powershell
+        env:
+          PREVIOUS_COMMIT: ${{ github.event.before }}
+          EVENT_COMMIT: ${{ github.sha }}
+        run: |
+          & "$env:GITHUB_WORKSPACE\tools\Auto-Bump-CafeRelease.ps1" -PreviousCommit $env:PREVIOUS_COMMIT -EventCommit $env:EVENT_COMMIT
+          if ($LASTEXITCODE -ne 0) { throw 'Automatic release update failed.' }
+          & "$env:GITHUB_WORKSPACE\tools\Test-CafeLauncher.ps1"
+          if ($LASTEXITCODE -ne 0) { throw 'Launcher validation failed after release update.' }
+          & "$env:GITHUB_WORKSPACE\tools\Test-ContextFreshness.ps1"
+          if ($LASTEXITCODE -ne 0) { throw 'Generated release metadata validation failed.' }
+          git add -- cafe.bat README.md context.md
+          git diff --cached --quiet
+          if ($LASTEXITCODE -eq 0) {
+            "release_sha=$(git rev-parse HEAD)" >> $env:GITHUB_OUTPUT
+            exit 0
+          }
+          git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' commit -m 'chore: update CafeLauncher release metadata'
+          if ($LASTEXITCODE -ne 0) { throw 'Could not commit the automatic release update.' }
+          git push origin HEAD:main
+          if ($LASTEXITCODE -ne 0) { throw 'Could not push the automatic release update to main.' }
+          "release_sha=$(git rev-parse HEAD)" >> $env:GITHUB_OUTPUT
   publish-drive:
     name: Publish cafe.bat to Google Drive
     runs-on: ubuntu-latest
-    needs: [core, profiles, cs2, hardware, ui]
+    needs: [core, profiles, cs2, hardware, ui, release-bump]
     if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
     steps:
       - name: Checkout full history for change detection
         uses: actions/checkout@v7
         with:
           fetch-depth: 0
+          ref: ${{ needs.release-bump.outputs.release_sha || github.sha }}
       - name: Replace the existing Drive file
         shell: pwsh
         env:
