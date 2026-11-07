@@ -78,20 +78,22 @@ public sealed class CafeLauncherUpdateBackgroundWorker : BackgroundWorker {
     }
 }
 
-public sealed class CafeLiveLogHistoryBackgroundWorker : BackgroundWorker {
+public sealed class CafeLiveLogHistoryBackgroundWorker {
     private readonly string path;
     private readonly long snapshotLength;
+    private readonly System.Threading.Tasks.Task work;
     public string[] Entries { get; private set; }
     public string ErrorText { get; private set; }
+    public bool IsBusy { get { return !work.IsCompleted; } }
 
     public CafeLiveLogHistoryBackgroundWorker(string path, long snapshotLength) {
         this.path = path;
         this.snapshotLength = snapshotLength;
         Entries = new string[0];
-        DoWork += delegate(object sender, DoWorkEventArgs e) {
+        work = System.Threading.Tasks.Task.Factory.StartNew((Action)delegate {
             try { Entries = ReadEntries(); }
             catch (Exception error) { ErrorText = error.Message; }
-        };
+        }, System.Threading.CancellationToken.None, System.Threading.Tasks.TaskCreationOptions.None, System.Threading.Tasks.TaskScheduler.Default);
     }
 
     private string[] ReadEntries() {
@@ -458,33 +460,7 @@ function Initialize-LiveLogHistory {
         if($script:ClearLogsButton -and -not $script:ClearLogsButton.IsDisposed){$script:ClearLogsButton.Enabled=$false}
         $worker=[CafeLiveLogHistoryBackgroundWorker]::new([string]$script:LogPath,[long]$snapshotLength)
         $script:LiveLogHydrationWorker=$worker
-        $worker.Add_RunWorkerCompleted({
-            $completed=$script:LiveLogHydrationWorker
-            $script:LiveLogHydrationWorker=$null
-            if(-not $completed){return}
-            if($form -and $form.IsDisposed){
-                $script:LiveLogHydrating=$false
-                if($script:LiveLogHydrationTimingId){Complete-CafeTimingOperation -Id $script:LiveLogHydrationTimingId -Outcome 'Canceled';$script:LiveLogHydrationTimingId=0}
-                $completed.Dispose();return
-            }
-            if($completed.ErrorText){
-                [System.Threading.Monitor]::Enter($script:LogFileSyncRoot)
-                try{$script:LiveLogPendingEntries.Clear();$script:LiveLogHydrating=$false}
-                finally{[System.Threading.Monitor]::Exit($script:LogFileSyncRoot)}
-                $script:LogBox.Clear()
-                if($script:ClearLogsButton -and -not $script:ClearLogsButton.IsDisposed){$script:ClearLogsButton.Enabled=$true}
-                if($script:StatusLine -and -not $script:StatusLine.IsDisposed){$script:StatusLine.Text='Could not load log history; hide and reopen Show Logs to retry.'}
-                if($script:LiveLogHydrationTimingId){Complete-CafeTimingOperation -Id $script:LiveLogHydrationTimingId -Outcome 'Failed';$script:LiveLogHydrationTimingId=0}
-                Write-Log ('Retained log load failed: '+$completed.ErrorText) 'WARN'
-                $completed.Dispose();return
-            }
-            $script:LiveLogHydrationEntries=[string[]]$completed.Entries
-            $script:LiveLogHydrationIndex=0
-            $completed.Dispose()
-            if($script:LiveLogHydrationEntries.Count -eq 0){Complete-LiveLogHistoryHydration}
-            elseif($script:LiveLogHydrationTimer){$script:LiveLogHydrationTimer.Start()}
-        }.GetNewClosure())
-        $worker.RunWorkerAsync()
+        $script:LiveLogHydrationTimer.Start()
     }catch{
         [System.Threading.Monitor]::Enter($script:LogFileSyncRoot)
         try{$script:LiveLogPendingEntries.Clear();$script:LiveLogHydrating=$false}
@@ -9375,6 +9351,30 @@ $script:LiveLogHydrationTimer.Interval=15
 $script:LiveLogHydrationTimer.Add_Tick({
     if(-not $script:LogBox -or $script:LogBox.IsDisposed){$script:LiveLogHydrationTimer.Stop();return}
     try{
+        $worker=$script:LiveLogHydrationWorker
+        if($worker){
+            if($worker.IsBusy){return}
+            $script:LiveLogHydrationWorker=$null
+            if($form -and $form.IsDisposed){
+                $script:LiveLogHydrating=$false
+                if($script:LiveLogHydrationTimingId){Complete-CafeTimingOperation -Id $script:LiveLogHydrationTimingId -Outcome 'Canceled';$script:LiveLogHydrationTimingId=0}
+                $script:LiveLogHydrationTimer.Stop();return
+            }
+            if($worker.ErrorText){
+                [System.Threading.Monitor]::Enter($script:LogFileSyncRoot)
+                try{$script:LiveLogPendingEntries.Clear();$script:LiveLogHydrating=$false}
+                finally{[System.Threading.Monitor]::Exit($script:LogFileSyncRoot)}
+                $script:LogBox.Clear()
+                if($script:ClearLogsButton -and -not $script:ClearLogsButton.IsDisposed){$script:ClearLogsButton.Enabled=$true}
+                if($script:StatusLine -and -not $script:StatusLine.IsDisposed){$script:StatusLine.Text='Could not load log history; hide and reopen Show Logs to retry.'}
+                if($script:LiveLogHydrationTimingId){Complete-CafeTimingOperation -Id $script:LiveLogHydrationTimingId -Outcome 'Failed';$script:LiveLogHydrationTimingId=0}
+                Write-Log ('Retained log load failed: '+$worker.ErrorText) 'WARN'
+                $script:LiveLogHydrationTimer.Stop();return
+            }
+            $script:LiveLogHydrationEntries=[string[]]$worker.Entries
+            $script:LiveLogHydrationIndex=0
+            if($script:LiveLogHydrationEntries.Count -eq 0){Complete-LiveLogHistoryHydration;return}
+        }
         $processed=0
         while($script:LiveLogHydrationIndex -lt $script:LiveLogHydrationEntries.Count -and $processed -lt 15){
             Add-LiveLogLine -Line $script:LiveLogHydrationEntries[$script:LiveLogHydrationIndex] -NoScroll

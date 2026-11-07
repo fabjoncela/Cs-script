@@ -492,6 +492,10 @@ $liveLogHistory=@($psAst.FindAll({param($node) $node -is [Management.Automation.
 if($liveLogHistory.Count -ne 1 -or
    $liveLogHistory[0].Extent.Text -notmatch "Name 'Retained log load' -Group Later" -or
    $liveLogHistory[0].Extent.Text -notmatch '\[CafeLiveLogHistoryBackgroundWorker\]::new' -or
+   $liveLogHistory[0].Extent.Text -match 'Add_RunWorkerCompleted' -or
+   $psSource -notmatch 'Task\.Factory\.StartNew' -or
+   $psSource -notmatch '\$worker\.IsBusy\)\{return\}' -or
+   $liveLogHistory[0].Extent.Text -notmatch '\$script:LiveLogHydrationTimer\.Start\(\)' -or
    $psSource -notmatch '\$script:LiveLogHydrationTimer\.Interval=15' -or
    $psSource -notmatch '\$processed -lt 15' -or
    $liveLogHistory[0].Extent.Text -notmatch '\$script:LiveLogHydrated' -or
