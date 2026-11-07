@@ -27,6 +27,7 @@ if ($lineFeeds -lt 10) { throw 'cafe.bat does not contain enough lines.' }
 
 $lines = [System.IO.File]::ReadAllLines($batPath)
 if ($lines[0] -cne '@echo off') { throw 'cafe.bat must begin with @echo off.' }
+$batchSource = [string]::Join([Environment]::NewLine, [string[]]$lines[0..($lines.Length - 1)])
 
 $markers = @(
     for ($i = 0; $i -lt $lines.Length; $i++) {
@@ -578,12 +579,16 @@ if($definitions['Check-CafeLauncherUpdates'] -notmatch '\$runningReleaseText=Get
    $definitions['Check-CafeLauncherUpdates'] -notmatch 'Newer Build Already Installed' -or
    $definitions['Check-CafeLauncherUpdates'] -notmatch 'Click OK to restart' -or
    $definitions['Check-CafeLauncherUpdates'] -notmatch 'Restart-CafeLauncherAfterUpdate -Path \$source' -or
-   $definitions['Restart-CafeLauncherAfterUpdate'] -notmatch "Join-Path \`$PSHOME 'powershell\.exe'" -or
-   $definitions['Restart-CafeLauncherAfterUpdate'] -notmatch '\-EncodedCommand' -or
-   $definitions['Restart-CafeLauncherAfterUpdate'] -notmatch '\$env:CAFE_SCRIPT=\$sourcePath' -or
-   $definitions['Restart-CafeLauncherAfterUpdate'] -match 'Start-Process -FilePath \$Path' -or
+   $batchSource -notmatch '(?m)^:CAFE_LAUNCH\r?$' -or
+   $batchSource -notmatch 'set "CAFE_RESTART_SIGNAL=' -or
+   $batchSource -notmatch 'if exist "%CAFE_RESTART_SIGNAL%"' -or
+   $batchSource -notmatch 'goto CAFE_LAUNCH' -or
+   $batchSource -match '(?im)^start\s+""\s+powershell\.exe' -or
+   $definitions['Restart-CafeLauncherAfterUpdate'] -notmatch '\$env:CAFE_RESTART_SIGNAL' -or
+   $definitions['Restart-CafeLauncherAfterUpdate'] -notmatch '\[IO\.File\]::WriteAllText\(\$restartSignal' -or
+   $definitions['Restart-CafeLauncherAfterUpdate'] -match 'Start-Process' -or
    $definitions['Restart-CafeLauncherAfterUpdate'] -notmatch '\[System\.Windows\.Forms\.Application\]::Exit\(\)'){
-    throw 'Update confirmation must relaunch the installed BAT and close the old launcher.'
+    throw 'Launcher updates must exit through the supervising BAT loop so the next PowerShell process starts only after the old one exits.'
 }
 $startupAt=$psSource.IndexOf('$startupTimer.Add_Tick({')
 if($startupAt -lt 0){throw 'Startup inventory timer is missing.'}
