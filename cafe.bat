@@ -5014,6 +5014,15 @@ function Get-CafeCS2UserConvarsCapture {
     $reader=New-Object IO.StreamReader($path,$true)
     try{$content=$reader.ReadToEnd()}finally{$reader.Dispose()}
     $values=ConvertFrom-CafeCS2UserConvarsText -Text $content -Groups $Groups
+    $machinePath=Join-Path (Split-Path -Parent $Source.Path) 'cs2_machine_convars.vcfg'
+    if('Audio' -in $Groups -and (Test-Path -LiteralPath $machinePath -PathType Leaf)){
+        $machineFile=Get-Item -LiteralPath $machinePath -ErrorAction Stop
+        if($machineFile.Length -lt 10 -or $machineFile.Length -gt 1048576){throw 'Invalid machine convars file size.'}
+        $machineReader=New-Object IO.StreamReader($machinePath,$true)
+        try{$machineContent=$machineReader.ReadToEnd()}finally{$machineReader.Dispose()}
+        $machineValues=ConvertFrom-CafeCS2UserConvarsText -Text $machineContent -Groups @('Audio')
+        foreach($name in $machineValues.Keys){$values[$name]=$machineValues[$name]}
+    }
     $active=Get-CafeActiveSteamVideoFile
     if($active.AccountID -cne $Source.AccountID -or $active.Path -ine $Source.Path){throw 'Steam account changed during capture.'}
     return [pscustomobject]@{Values=$values;Path=$path}

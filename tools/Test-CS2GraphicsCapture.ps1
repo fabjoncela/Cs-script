@@ -96,11 +96,13 @@ $script:CaptureTestGameRunning=$false
 $steamExe=Join-Path $script:CaptureTestSteamRoot 'steam.exe'
 $videoPath=Join-Path $script:CaptureTestSteamRoot 'userdata\12345\730\local\cfg\cs2_video.txt'
 $convarsPath=Join-Path (Split-Path -Parent $videoPath) 'cs2_user_convars_0_slot0.vcfg'
+$machineConvarsPath=Join-Path (Split-Path -Parent $videoPath) 'cs2_machine_convars.vcfg'
 $keysPath=Join-Path (Split-Path -Parent $videoPath) 'cs2_user_keys_0_slot0.vcfg'
 [void](New-Item -ItemType Directory -Path (Split-Path -Parent $videoPath) -Force)
 [IO.File]::WriteAllText($steamExe,'fixture')
 [IO.File]::WriteAllText($videoPath,$video)
 [IO.File]::WriteAllText($convarsPath,('{'+[Environment]::NewLine+'"sensitivity" "1.8"'+[Environment]::NewLine+'"viewmodel_fov" "68"'+[Environment]::NewLine+'"cl_radar_scale" "0.7"'+[Environment]::NewLine+'}'))
+[IO.File]::WriteAllText($machineConvarsPath,('"config"'+[Environment]::NewLine+'{'+[Environment]::NewLine+'"convars"'+[Environment]::NewLine+'{'+[Environment]::NewLine+'"volume" "0.8464"'+[Environment]::NewLine+'"voice_modenable" "true"'+[Environment]::NewLine+'"snd_headphone_eq" "1"'+[Environment]::NewLine+'}'+[Environment]::NewLine+'}'))
 [IO.File]::WriteAllText($keysPath,('"bindings"'+[Environment]::NewLine+'{'+[Environment]::NewLine+'"SPACE" "+jump"'+[Environment]::NewLine+'"V" "+voicerecord"'+[Environment]::NewLine+'"MWHEELDOWN" ""'+[Environment]::NewLine+'}'))
 function Get-Process {
     [CmdletBinding()]
@@ -121,8 +123,10 @@ function Get-ItemProperty {
 $diskCapture=Get-CafeCS2GraphicsCapture -ProfileName FabMode -BasePreset $base
 $source=[pscustomobject]@{Path=$videoPath;AccountID='12345'}
 $diskConvars=Get-CafeCS2UserConvarsCapture -Source $source -Groups @('Sensitivity','Viewmodel')
+$audioCapture=Get-CafeCS2UserConvarsCapture -Source $source -Groups @('Audio')
 $diskBinds=Get-CafeCS2UserKeysCapture -Source $source -Groups @('Jump','Scroll wheel')
 if($diskConvars.Values['sensitivity'] -cne '1.8' -or -not $diskConvars.Values.Contains('viewmodel_fov')){throw 'Saved convar file was not captured for the active Steam account.'}
+if($audioCapture.Values['volume'] -cne '0.8464' -or $audioCapture.Values['voice_modenable'] -cne 'true' -or $audioCapture.Values['snd_headphone_eq'] -cne '1'){throw 'Audio convars were not captured from the machine convars file.'}
 if(-not $diskBinds.Values.Contains('SPACE') -or -not $diskBinds.Values.Contains('MWHEELDOWN')){throw 'Saved key file was not captured for the active Steam account.'}
 if($diskCapture.AccountID -ne '12345' -or $diskCapture.Path -cne $videoPath){throw 'Capture selected the wrong active-account video file.'}
 $script:CaptureTestGameRunning=$true
