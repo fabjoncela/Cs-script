@@ -11,7 +11,7 @@ del /q "%CAFE_RESTART_SIGNAL%" >nul 2>&1
 exit /b
 
 # POWERSHELL_GUI
-# CAFE_RELEASE=2026.11.07.15
+# CAFE_RELEASE=2026.11.07.16
 
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
@@ -8833,6 +8833,26 @@ $script:ProfileAccentColors=@{
     OliMode=[System.Drawing.Color]::FromArgb(71,193,207)
     Provmode=[System.Drawing.Color]::FromArgb(210,105,145)
 }
+$script:DashboardPalette=@{
+    Background=[System.Drawing.Color]::FromArgb(14,19,27)
+    Header=[System.Drawing.Color]::FromArgb(20,29,40)
+    Panel=[System.Drawing.Color]::FromArgb(22,31,42)
+    Surface=[System.Drawing.Color]::FromArgb(29,42,56)
+    Border=[System.Drawing.Color]::FromArgb(52,70,88)
+    RowBorder=[System.Drawing.Color]::FromArgb(43,63,80)
+    RowBorderHover=[System.Drawing.Color]::FromArgb(62,91,110)
+    Primary=[System.Drawing.Color]::FromArgb(14,157,190)
+    PrimaryHover=[System.Drawing.Color]::FromArgb(20,177,207)
+    PrimaryPressed=[System.Drawing.Color]::FromArgb(11,132,161)
+    Secondary=[System.Drawing.Color]::FromArgb(34,48,63)
+    SecondaryHover=[System.Drawing.Color]::FromArgb(46,64,82)
+    SecondaryPressed=[System.Drawing.Color]::FromArgb(27,39,52)
+    Text=[System.Drawing.Color]::FromArgb(232,240,248)
+    Muted=[System.Drawing.Color]::FromArgb(157,174,190)
+    Accent=[System.Drawing.Color]::FromArgb(35,190,218)
+    LogBackground=[System.Drawing.Color]::FromArgb(10,14,20)
+    LogText=[System.Drawing.Color]::FromArgb(196,214,226)
+}
 # Modern CafeLauncher dashboard. Profile actions remain separate and independently callable.
 $script:DashboardConstructionTimingId=Start-CafeTimingOperation -Type 'Local' -Name 'Dashboard construction' -Group Startup
 $script:DashboardLayoutTimingId=Start-CafeTimingOperation -Type 'Local' -Name 'Dashboard layout' -Group Startup
@@ -8841,8 +8861,8 @@ $form.Text='CafeLauncher | CS2 Setup Center'
 $form.ClientSize=New-Object System.Drawing.Size(1080,825)
 $form.MinimumSize=New-Object System.Drawing.Size(960,780)
 $form.StartPosition='CenterScreen'
-$form.BackColor=$BG
-$form.ForeColor=$WHITE
+$form.BackColor=$script:DashboardPalette.Background
+$form.ForeColor=$script:DashboardPalette.Text
 $form.Font=New-Object System.Drawing.Font('Segoe UI',10)
 $form.AutoScaleMode=[System.Windows.Forms.AutoScaleMode]::Font
 
@@ -8870,6 +8890,55 @@ function Style-CafeButton {
     $Button.Font=New-Object System.Drawing.Font('Segoe UI',9,[System.Drawing.FontStyle]::Bold)
     $Button.Cursor=[System.Windows.Forms.Cursors]::Hand
     $Button.Margin=New-Object System.Windows.Forms.Padding(4)
+}
+function New-CafeRoundedPath {
+    param([System.Drawing.Rectangle]$Bounds,[int]$Radius=8)
+    $path=New-Object System.Drawing.Drawing2D.GraphicsPath
+    if($Bounds.Width -le 1 -or $Bounds.Height -le 1){return $path}
+    $radius=[math]::Max(1,[math]::Min($Radius,[int][math]::Floor([math]::Min($Bounds.Width,$Bounds.Height)/2)))
+    $diameter=$radius*2
+    $path.AddArc($Bounds.X,$Bounds.Y,$diameter,$diameter,180,90)
+    $path.AddArc(($Bounds.Right-$diameter),$Bounds.Y,$diameter,$diameter,270,90)
+    $path.AddArc(($Bounds.Right-$diameter),($Bounds.Bottom-$diameter),$diameter,$diameter,0,90)
+    $path.AddArc($Bounds.X,($Bounds.Bottom-$diameter),$diameter,$diameter,90,90)
+    $path.CloseFigure()
+    return $path
+}
+function Update-CafeDashboardRoundedRegion {
+    param($Control,[int]$Radius=8)
+    if(-not $Control -or $Control.IsDisposed -or $Control.Width -lt 2 -or $Control.Height -lt 2){return}
+    $scale=1.0
+    try{$scale=[double]$Control.DeviceDpi/96.0}catch{}
+    $scaledRadius=[math]::Max(4,[int][math]::Round($Radius*$scale))
+    $bounds=New-Object System.Drawing.Rectangle(0,0,$Control.Width,$Control.Height)
+    $path=New-CafeRoundedPath -Bounds $bounds -Radius $scaledRadius
+    try{
+        $region=[System.Drawing.Region]::new($path)
+        $oldRegion=$Control.Region
+        $Control.Region=$region
+        if($oldRegion){$oldRegion.Dispose()}
+    }finally{$path.Dispose()}
+}
+function Style-CafeDashboardButton {
+    param($Button,[switch]$Primary)
+    Style-CafeButton -Button $Button
+    $Button.UseVisualStyleBackColor=$false
+    $Button.ForeColor=$script:DashboardPalette.Text
+    $Button.FlatAppearance.BorderSize=1
+    if($Primary){
+        $Button.BackColor=$script:DashboardPalette.Primary
+        $Button.FlatAppearance.BorderColor=$script:DashboardPalette.Accent
+        $Button.FlatAppearance.MouseOverBackColor=$script:DashboardPalette.PrimaryHover
+        $Button.FlatAppearance.MouseDownBackColor=$script:DashboardPalette.PrimaryPressed
+    }else{
+        $Button.BackColor=$script:DashboardPalette.Secondary
+        $Button.FlatAppearance.BorderColor=$script:DashboardPalette.Border
+        $Button.FlatAppearance.MouseOverBackColor=$script:DashboardPalette.SecondaryHover
+        $Button.FlatAppearance.MouseDownBackColor=$script:DashboardPalette.SecondaryPressed
+    }
+    $roundedButton=$Button
+    $Button.Add_SizeChanged({Update-CafeDashboardRoundedRegion -Control $roundedButton -Radius 8}.GetNewClosure())
+    Update-CafeDashboardRoundedRegion -Control $Button -Radius 8
 }
 function Update-SelectedProfileCard {
     param([string]$Name)
@@ -8913,14 +8982,16 @@ $root.RowCount=4
 $form.Controls.Add($root)
 $header=New-Object System.Windows.Forms.Panel
 $header.Dock='Fill'
-$header.BackColor=$PANEL
+$header.BackColor=$script:DashboardPalette.Header
 $root.Controls.Add($header,0,0)
 $title=New-CafeLabel -Text 'CAFE  LAUNCHER' -FontSize 22 -Strong
+$title.ForeColor=$script:DashboardPalette.Text
 $title.Dock='None'
 $title.Location=New-Object System.Drawing.Point(24,8)
 $title.Size=New-Object System.Drawing.Size(450,39)
 $header.Controls.Add($title)
 $subtitle=New-CafeLabel -Text 'CS2 Setup Center   |   Profiles / Graphics / DPI' -FontSize 9
+$subtitle.ForeColor=$script:DashboardPalette.Muted
 $subtitle.Dock='None'
 $subtitle.Location=New-Object System.Drawing.Point(28,49)
 $subtitle.Size=New-Object System.Drawing.Size(600,25)
@@ -8929,20 +9000,20 @@ $headerStatus=New-Object System.Windows.Forms.Panel
 $headerStatus.Dock='Right'
 $headerStatus.Width=270
 $headerStatus.Height=82
-$headerStatus.BackColor=$PANEL
+$headerStatus.BackColor=$script:DashboardPalette.Header
 $header.Controls.Add($headerStatus)
 $versionTag=New-CafeLabel -Text ('v'+(Get-CafeLauncherRelease)) -Strong
 $versionTag.Dock='None'
 $versionTag.Location=New-Object System.Drawing.Point(8,12)
 $versionTag.Size=New-Object System.Drawing.Size(250,27)
-$versionTag.ForeColor=[System.Drawing.Color]::FromArgb(111,177,255)
+$versionTag.ForeColor=$script:DashboardPalette.Accent
 $versionTag.TextAlign='MiddleRight'
 $headerStatus.Controls.Add($versionTag)
 $script:GitHubRateLimitLabel=New-CafeLabel -Text 'GitHub API: waiting for request' -FontSize 8
 $script:GitHubRateLimitLabel.Dock='None'
 $script:GitHubRateLimitLabel.Location=New-Object System.Drawing.Point(8,43)
 $script:GitHubRateLimitLabel.Size=New-Object System.Drawing.Size(250,36)
-$script:GitHubRateLimitLabel.ForeColor=$MUTED
+$script:GitHubRateLimitLabel.ForeColor=$script:DashboardPalette.Muted
 $script:GitHubRateLimitLabel.TextAlign='MiddleRight'
 $headerStatus.Controls.Add($script:GitHubRateLimitLabel)
 if($script:GitHubRateLimitSnapshot){
@@ -8952,18 +9023,46 @@ if($script:GitHubRateLimitSnapshot){
 
 $tabs=New-Object System.Windows.Forms.TabControl
 $tabs.Dock='Fill'
+$tabs.BackColor=$script:DashboardPalette.Background
 $tabs.Margin=New-Object System.Windows.Forms.Padding(13,8,13,8)
+$tabs.DrawMode=[System.Windows.Forms.TabDrawMode]::OwnerDrawFixed
+$tabs.Add_DrawItem({
+    param($sender,$e)
+    if($e.Index -lt 0 -or $e.Index -ge $sender.TabPages.Count){return}
+    $isSelected=($e.Index -eq $sender.SelectedIndex)
+    $tabBounds=New-Object System.Drawing.Rectangle(($e.Bounds.X+2),($e.Bounds.Y+2),([math]::Max(1,$e.Bounds.Width-4)),([math]::Max(1,$e.Bounds.Height-2)))
+    $path=New-CafeRoundedPath -Bounds $tabBounds -Radius 7
+    $fillColor=if($isSelected){$script:DashboardPalette.Surface}else{$script:DashboardPalette.Header}
+    $fillBrush=New-Object System.Drawing.SolidBrush($fillColor)
+    $textBrush=New-Object System.Drawing.SolidBrush($(if($isSelected){$script:DashboardPalette.Text}else{$script:DashboardPalette.Muted}))
+    $font=New-Object System.Drawing.Font('Segoe UI',9,$(if($isSelected){[System.Drawing.FontStyle]::Bold}else{[System.Drawing.FontStyle]::Regular}))
+    $format=New-Object System.Drawing.StringFormat
+    $textBounds=[System.Drawing.RectangleF]::new([single]$tabBounds.X,[single]$tabBounds.Y,[single]$tabBounds.Width,[single]$tabBounds.Height)
+    $accentPen=$null
+    try{
+        $e.Graphics.SmoothingMode=[System.Drawing.Drawing2D.SmoothingMode]::AntiAlias
+        $e.Graphics.FillPath($fillBrush,$path)
+        if($isSelected){
+            $accentPen=New-Object System.Drawing.Pen($script:DashboardPalette.Accent,2)
+            $e.Graphics.DrawLine($accentPen,$tabBounds.X+7,$tabBounds.Bottom-2,$tabBounds.Right-7,$tabBounds.Bottom-2)
+        }
+        $format.Alignment=[System.Drawing.StringAlignment]::Center
+        $format.LineAlignment=[System.Drawing.StringAlignment]::Center
+        $e.Graphics.DrawString([string]$sender.TabPages[$e.Index].Text,$font,$textBrush,$textBounds,$format)
+    }finally{$path.Dispose();$fillBrush.Dispose();$textBrush.Dispose();$font.Dispose();$format.Dispose();if($accentPen){$accentPen.Dispose()}}
+}.GetNewClosure())
 $root.Controls.Add($tabs,0,1)
 $dashboard=New-Object System.Windows.Forms.TabPage
 $dashboard.Text='Dashboard'
-$dashboard.BackColor=$BG
+$dashboard.BackColor=$script:DashboardPalette.Background
 $utilities=New-Object System.Windows.Forms.TabPage
 $utilities.Text='Tools & Apps'
-$utilities.BackColor=$BG
+$utilities.BackColor=$script:DashboardPalette.Background
 [void]$tabs.TabPages.Add($dashboard)
 [void]$tabs.TabPages.Add($utilities)
 $dashGrid=New-Object System.Windows.Forms.TableLayoutPanel
 $dashGrid.Dock='Fill'
+$dashGrid.BackColor=$script:DashboardPalette.Background
 $dashGrid.ColumnCount=2
 $dashGrid.Padding=New-Object System.Windows.Forms.Padding(8)
 [void]$dashGrid.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle('Percent',57)))
@@ -8971,6 +9070,7 @@ $dashGrid.Padding=New-Object System.Windows.Forms.Padding(8)
 $dashboard.Controls.Add($dashGrid)
 $profilesGrid=New-Object System.Windows.Forms.TableLayoutPanel
 $profilesGrid.Dock='Fill'
+$profilesGrid.BackColor=$script:DashboardPalette.Background
 $profilesGrid.RowCount=7
 $profilesGrid.ColumnCount=1
 [void]$profilesGrid.RowStyles.Add((New-Object System.Windows.Forms.RowStyle('Absolute',45)))
@@ -8981,6 +9081,7 @@ $script:ProfileDashboardPage=0
 $script:ProfileDashboardCards=[ordered]@{}
 $script:ProfileDashboardTimers=@{}
 $script:ProfileDashboardHeading=New-CafeLabel -Text 'NEW? Capture CS2 settings into a profile  |  Apply, Play, Graphics, Edit' -Strong
+$script:ProfileDashboardHeading.ForeColor=$script:DashboardPalette.Text
 $profilesGrid.Controls.Add($script:ProfileDashboardHeading,0,0)
 $script:ProfileDashboardPager=New-Object System.Windows.Forms.TableLayoutPanel
 $script:ProfileDashboardPager.Dock='Fill'
@@ -8991,14 +9092,14 @@ $script:ProfileDashboardPager.RowCount=1
 [void]$script:ProfileDashboardPager.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle('Absolute',92)))
 $script:ProfileDashboardPrevious=New-Object System.Windows.Forms.Button
 $script:ProfileDashboardPrevious.Text='Previous'
-Style-CafeButton -Button $script:ProfileDashboardPrevious
+Style-CafeDashboardButton -Button $script:ProfileDashboardPrevious
 $script:ProfileDashboardPrevious.Dock='Fill'
 $script:ProfileDashboardPrevious.Add_Click({Set-ProfileDashboardPage -PageIndex ($script:ProfileDashboardPage-1)})
 $script:ProfileDashboardPageLabel=New-CafeLabel -Text 'Page 1 of 1' -FontSize 9
 $script:ProfileDashboardPageLabel.TextAlign='MiddleCenter'
 $script:ProfileDashboardNext=New-Object System.Windows.Forms.Button
 $script:ProfileDashboardNext.Text='Next'
-Style-CafeButton -Button $script:ProfileDashboardNext
+Style-CafeDashboardButton -Button $script:ProfileDashboardNext
 $script:ProfileDashboardNext.Dock='Fill'
 $script:ProfileDashboardNext.Add_Click({Set-ProfileDashboardPage -PageIndex ($script:ProfileDashboardPage+1)})
 $script:ProfileDashboardPager.Controls.Add($script:ProfileDashboardPrevious,0,0)
@@ -9009,6 +9110,7 @@ $dashGrid.Controls.Add($profilesGrid,0,0)
 
 $rightGrid=New-Object System.Windows.Forms.TableLayoutPanel
 $rightGrid.Dock='Fill'
+$rightGrid.BackColor=$script:DashboardPalette.Background
 $rightGrid.ColumnCount=1
 $rightGrid.RowCount=5
 $rightGrid.Padding=New-Object System.Windows.Forms.Padding(10)
@@ -9019,13 +9121,18 @@ foreach($size in @(38,48,110,55)){
 $dashGrid.Controls.Add($rightGrid,1,0)
 $rightGrid.Controls.Add((New-CafeLabel -Text 'SELECTED PROFILE' -Strong),0,0)
 $script:SelectedProfileTitle=New-CafeLabel -Text 'FabMode' -FontSize 22 -Strong
+$script:SelectedProfileTitle.ForeColor=$script:DashboardPalette.Text
 $rightGrid.Controls.Add($script:SelectedProfileTitle,0,1)
 $script:SelectedProfileDetails=New-CafeLabel -Text '' -FontSize 11
-$script:SelectedProfileDetails.ForeColor=$WHITE
-$script:SelectedProfileDetails.BackColor=$PANEL
+$script:SelectedProfileDetails.ForeColor=$script:DashboardPalette.Text
+$script:SelectedProfileDetails.BackColor=$script:DashboardPalette.Surface
 $script:SelectedProfileDetails.Padding=New-Object System.Windows.Forms.Padding(14)
+$selectedDetailsControl=$script:SelectedProfileDetails
+$script:SelectedProfileDetails.Add_SizeChanged({Update-CafeDashboardRoundedRegion -Control $selectedDetailsControl -Radius 9}.GetNewClosure())
+$script:SelectedProfileDetails.BorderStyle='None'
 $rightGrid.Controls.Add($script:SelectedProfileDetails,0,2)
 $script:SelectedProfileHint=New-CafeLabel -Text 'Graphics is separate from profile Apply.' -FontSize 9
+$script:SelectedProfileHint.ForeColor=$script:DashboardPalette.Muted
 $rightGrid.Controls.Add($script:SelectedProfileHint,0,3)
 
 $toolsGrid=New-Object System.Windows.Forms.TableLayoutPanel
@@ -9057,15 +9164,18 @@ function New-Tile {
         $card.Dock='Fill'
         $card.ColumnCount=6
         $card.RowCount=1
-        $profileColor=if($script:ProfileAccentColors.Contains($selectedProfile)){$script:ProfileAccentColors[$selectedProfile]}else{[System.Drawing.Color]::FromArgb(56,137,240)}
+        $profileColor=$script:DashboardPalette.RowBorder
         $card.BackColor=$profileColor
         $card.Padding=New-Object System.Windows.Forms.Padding(2)
         $card.Tag=$selectedProfile
         $card.Margin=New-Object System.Windows.Forms.Padding(3)
+        $roundedCard=$card
+        $card.Add_SizeChanged({Update-CafeDashboardRoundedRegion -Control $roundedCard -Radius 9}.GetNewClosure())
         foreach($pct in @(24,20,20)){[void]$card.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle('Percent',$pct)))}
         [void]$card.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle('Absolute',12)))
         foreach($pct in @(14,22)){[void]$card.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle('Percent',$pct)))}
         $button.Dock='Fill'
+        Style-CafeDashboardButton -Button $button -Primary
         $button.Add_Click({
             Update-SelectedProfileCard -Name $selectedProfile
             Write-Log ('Clicked: Apply '+$selectedProfile)
@@ -9075,8 +9185,7 @@ function New-Tile {
         $card.Controls.Add($button,0,0)
         $play=New-Object System.Windows.Forms.Button
         $play.Text='3.Play + Settings'
-        Style-CafeButton -Button $play
-        $play.BackColor=[System.Drawing.Color]::FromArgb(38,132,102)
+        Style-CafeDashboardButton -Button $play
         $play.Dock='Fill'
         $play.Add_Click({
             Update-SelectedProfileCard -Name $selectedProfile
@@ -9086,8 +9195,7 @@ function New-Tile {
         $card.Controls.Add($play,2,0)
         $graphics=New-Object System.Windows.Forms.Button
         $graphics.Text='2.Game Graphics'
-        Style-CafeButton -Button $graphics
-        $graphics.BackColor=[System.Drawing.Color]::FromArgb(77,72,125)
+        Style-CafeDashboardButton -Button $graphics
         $graphics.Dock='Fill'
         $graphics.Add_Click({
             Update-SelectedProfileCard -Name $selectedProfile
@@ -9097,8 +9205,7 @@ function New-Tile {
         $card.Controls.Add($graphics,1,0)
         $edit=New-Object System.Windows.Forms.Button
         $edit.Text=[string]([char]0x2699)+' Edit '+$selectedProfile
-        Style-CafeButton -Button $edit
-        $edit.BackColor=[System.Drawing.Color]::FromArgb(47,56,72)
+        Style-CafeDashboardButton -Button $edit
         $edit.Dock='Fill'
         $edit.Add_Click({
             Update-SelectedProfileCard -Name $selectedProfile
@@ -9110,8 +9217,7 @@ function New-Tile {
         $card.Controls.Add($edit,4,0)
         $capture=New-Object System.Windows.Forms.Button
         $capture.Text='Capture CS2'
-        Style-CafeButton -Button $capture
-        $capture.BackColor=[System.Drawing.Color]::FromArgb(44,90,112)
+        Style-CafeDashboardButton -Button $capture
         $capture.Dock='Fill'
         $capture.Add_Click({
             try{
@@ -9129,7 +9235,7 @@ function New-Tile {
             $pointer=$card.PointToClient([System.Windows.Forms.Cursor]::Position)
             $inside=$card.ClientRectangle.Contains($pointer)
             $dashboardInteractive=$script:DashboardWindowActive -and $form.Visible -and ($tabs.SelectedTab -eq $dashboard)
-            $desired=if($dashboardInteractive -and $inside){[System.Drawing.Color]::FromArgb(238,238,245)}else{$profileColor}
+            $desired=if($dashboardInteractive -and $inside){$script:DashboardPalette.RowBorderHover}else{$profileColor}
             if($card.BackColor.ToArgb() -ne $desired.ToArgb()){$card.BackColor=$desired}
         }.GetNewClosure())
         $script:ProfileDashboardTimers[$selectedProfile]=$rowHover
@@ -9281,8 +9387,8 @@ $form.Add_Deactivate({
     $script:DashboardWindowActive=$false
     foreach($profileName in $script:ProfileDashboardCards.Keys){
         $card=$script:ProfileDashboardCards[$profileName]
-        if(-not $card.IsDisposed -and $script:ProfileAccentColors.Contains($profileName)){
-            $card.BackColor=$script:ProfileAccentColors[$profileName]
+        if(-not $card.IsDisposed){
+            $card.BackColor=$script:DashboardPalette.RowBorder
         }
     }
 })
@@ -9362,8 +9468,10 @@ $logPane=New-Object System.Windows.Forms.TableLayoutPanel
 $logPane.Dock='Fill'
 $logPane.ColumnCount=4
 $logPane.RowCount=2
-$logPane.BackColor=$PANEL
+$logPane.BackColor=$script:DashboardPalette.Panel
 $logPane.Margin=New-Object System.Windows.Forms.Padding(15,0,15,0)
+$roundedLogPane=$logPane
+$logPane.Add_SizeChanged({Update-CafeDashboardRoundedRegion -Control $roundedLogPane -Radius 10}.GetNewClosure())
 [void]$logPane.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle('Percent',100)))
 [void]$logPane.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle('Absolute',110)))
 [void]$logPane.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle('Absolute',110)))
@@ -9372,21 +9480,22 @@ $logPane.Margin=New-Object System.Windows.Forms.Padding(15,0,15,0)
 [void]$logPane.RowStyles.Add((New-Object System.Windows.Forms.RowStyle('Percent',100)))
 $root.Controls.Add($logPane,0,2)
 $statusLine=New-CafeLabel -Text 'Ready - check logs for detailed operation results.' -FontSize 9
+$statusLine.ForeColor=$script:DashboardPalette.Muted
 $script:StatusLine=$statusLine
 $logPane.Controls.Add($statusLine,0,0)
 $logToggle=New-Object System.Windows.Forms.Button
 $logToggle.Text='Show Logs'
-Style-CafeButton -Button $logToggle
+Style-CafeDashboardButton -Button $logToggle
 $logToggle.Dock='Fill'
 $logPane.Controls.Add($logToggle,1,0)
 $clearLogs=New-Object System.Windows.Forms.Button
 $clearLogs.Text='Clear Logs'
-Style-CafeButton -Button $clearLogs
+Style-CafeDashboardButton -Button $clearLogs
 $clearLogs.Dock='Fill'
 $logPane.Controls.Add($clearLogs,2,0)
 $sendLogs=New-Object System.Windows.Forms.Button
 $sendLogs.Text='Send Logs'
-Style-CafeButton -Button $sendLogs
+Style-CafeDashboardButton -Button $sendLogs
 $sendLogs.Dock='Fill'
 $logPane.Controls.Add($sendLogs,3,0)
 $script:ClearLogsButton=$clearLogs
@@ -9394,11 +9503,12 @@ $script:LogBox=New-Object System.Windows.Forms.RichTextBox
 $script:LogBox.Dock='Fill'
 $script:LogBox.Multiline=$true
 $script:LogBox.ReadOnly=$true
+$script:LogBox.BorderStyle=[System.Windows.Forms.BorderStyle]::FixedSingle
 $script:LogBox.DetectUrls=$false
 $script:LogBox.ScrollBars=[System.Windows.Forms.RichTextBoxScrollBars]::Both
 $script:LogBox.WordWrap=$false
-$script:LogBox.BackColor=[System.Drawing.Color]::FromArgb(12,15,20)
-$script:LogBox.ForeColor=[System.Drawing.Color]::FromArgb(190,220,190)
+$script:LogBox.BackColor=$script:DashboardPalette.LogBackground
+$script:LogBox.ForeColor=$script:DashboardPalette.LogText
 $script:LogBox.Font=New-Object System.Drawing.Font('Consolas',9)
 $script:LogBaseColor=$script:LogBox.ForeColor
 $script:LogBaseFont=$script:LogBox.Font
@@ -9528,6 +9638,7 @@ try {
 }
 $script:DashboardFinalizationTimingId=Start-CafeTimingOperation -Type 'Local' -Name 'Dashboard finalization' -Group Startup
 $footer=New-CafeLabel -Text '  CAFE LAUNCHER | production dashboard | %TEMP%\CafeLauncher.log' -FontSize 9
+$footer.ForeColor=$script:DashboardPalette.Muted
 $root.Controls.Add($footer,0,3)
 
 $form.Add_FormClosed({

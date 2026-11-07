@@ -641,14 +641,17 @@ function Refresh-ProfileFromGitHub {
 $script:LogPath=Join-Path $env:TEMP ('CafeLauncher-dashboard-CI-'+[Guid]::NewGuid().ToString('N')+'.log')
 $script:GitHubRateLimitSnapshot=$null
 $script:GitHubRateLimitLabel=$null
-# Load the production palette explicitly: this CI test evaluates the dashboard
-# separately from the editor, where ProfileAccentColors is normally initialized.
-$paletteMatch=[regex]::Match($psSource,'(?ms)^\$script:ProfileAccentColors\s*=\s*@\{.*?^\}')
-if(-not $paletteMatch.Success){throw 'Production profile color palette missing.'}
+# Load the production dashboard palette explicitly because this CI test evaluates
+# the dashboard code separately from the launcher startup sequence.
+$paletteMatch=[regex]::Match($psSource,'(?ms)^\$script:DashboardPalette\s*=\s*@\{.*?^\}')
+if(-not $paletteMatch.Success){throw 'Production dashboard palette missing.'}
 Invoke-Expression $paletteMatch.Value
 $form=$null
 try {
     Invoke-Expression $psSource.Substring($dashboardStart,$dashboardEnd-$dashboardStart)
+    $form.CreateControl();$tabs.Size=New-Object System.Drawing.Size(360,300);$tabs.CreateControl()
+    $tabBitmap=New-Object System.Drawing.Bitmap(360,300)
+    try{$tabs.DrawToBitmap($tabBitmap,(New-Object System.Drawing.Rectangle(0,0,360,300)))}finally{$tabBitmap.Dispose()}
     if($tabs.TabPages.Count -ne 2 -or $profilesGrid.Controls.Count -ne 7){
         throw 'Dashboard must construct two tabs and exactly six profile cards.'
     }
