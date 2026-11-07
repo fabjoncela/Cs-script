@@ -8867,9 +8867,9 @@ $dashGrid.Controls.Add($profilesGrid,0,0)
 $rightGrid=New-Object System.Windows.Forms.TableLayoutPanel
 $rightGrid.Dock='Fill'
 $rightGrid.ColumnCount=1
-$rightGrid.RowCount=7
+$rightGrid.RowCount=5
 $rightGrid.Padding=New-Object System.Windows.Forms.Padding(10)
-foreach($size in @(38,48,110,55,110,66)){
+foreach($size in @(38,48,110,55)){
     [void]$rightGrid.RowStyles.Add((New-Object System.Windows.Forms.RowStyle('Absolute',$size)))
 }
 [void]$rightGrid.RowStyles.Add((New-Object System.Windows.Forms.RowStyle('Percent',100)))
@@ -8884,7 +8884,6 @@ $script:SelectedProfileDetails.Padding=New-Object System.Windows.Forms.Padding(1
 $rightGrid.Controls.Add($script:SelectedProfileDetails,0,2)
 $script:SelectedProfileHint=New-CafeLabel -Text 'Graphics is separate from profile Apply.' -FontSize 9
 $rightGrid.Controls.Add($script:SelectedProfileHint,0,3)
-$rightGrid.Controls.Add((New-CafeLabel -Text 'Apply changes to the mouse with the control above.' -FontSize 9),0,6)
 
 $toolsGrid=New-Object System.Windows.Forms.TableLayoutPanel
 $toolsGrid.Dock='Fill'
@@ -8999,13 +8998,8 @@ function New-Tile {
                 [void][System.Windows.Forms.MessageBox]::Show($_.Exception.Message,'CafeLauncher','OK','Warning')
             }
         }.GetNewClosure())
-        if($Index -eq 0){
-            $button.Dock='Fill'
-            $rightGrid.Controls.Add($button,0,5)
-        }else{
-            $button.Size=New-Object System.Drawing.Size(198,58)
-            $toolsFlow.Controls.Add($button)
-        }
+        $button.Size=New-Object System.Drawing.Size(198,58)
+        $toolsFlow.Controls.Add($button)
     }
 }
 
@@ -9161,10 +9155,9 @@ Complete-CafeTimingOperation -Id $script:DashboardToolsTilesTimingId -Outcome 'S
 # Editable DPI input replaces the fixed-800 live button in tile 18.
 $script:DashboardDpiControlsTimingId=Start-CafeTimingOperation -Type 'Local' -Name 'Manual DPI controls' -Group Startup
 $manualDpiPanel=New-Object System.Windows.Forms.Panel
-$manualDpiPanel.Dock='Fill'
+$manualDpiPanel.Size=New-Object System.Drawing.Size(300,84)
 $manualDpiPanel.Margin=New-Object System.Windows.Forms.Padding(5,8,5,8)
 $manualDpiPanel.BackColor=$PANEL
-$rightGrid.Controls.Add($manualDpiPanel,0,4)
 
 $manualDpiLabel=New-Object System.Windows.Forms.Label
 $manualDpiLabel.Text='DPI (100 - 25600)'
@@ -9214,6 +9207,7 @@ $script:ManualDpiInput.Add_KeyDown({
         $script:ManualDpiChangeButton.PerformClick()
     }
 })
+$toolsFlow.Controls.Add($manualDpiPanel)
 Complete-CafeTimingOperation -Id $script:DashboardDpiControlsTimingId -Outcome 'Success'
 # New-Tile "Set DPI 800 (Onboard)" 19 { Invoke-LogitechDpiButton -Onboard } # disabled until hardware tested
 
