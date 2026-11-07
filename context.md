@@ -112,6 +112,7 @@ The **CS2 / Apps** editor can load the three previous versions of `graphics/<Pro
 - Restore fetches and validates the chosen version, then fills the editor without saving or applying it. Saving or syncing remains a separate user action.
 - History works offline only when the version is already listed in the fresh cache. Fetching an older preset requires internet.
 - The background completion callback receives its profile and WinForms controls through the worker instance's `RequestContext` property; it does not depend on nested PowerShell closure captures. Empty history and HTTP 404 show the no-earlier-versions state, while other failures remain visible and retryable. The request URI and status are logged for diagnosis. `tools/Test-GraphicsHistoryUI.ps1` covers callback wiring and UI recovery. See [graphics history loading diagnosis](./GRAPHICS_HISTORY_LOADING_DIAGNOSIS.md).
+- The Load history click handler captures the configured repository and branch before `GetNewClosure()` creates its private script scope. `New-CafeGraphicsHistoryRequestUri` validates those values and is covered by `Test-GraphicsHistory.ps1`.
 
 ### Planned: Profile graphics, settings, and crosshair history (not implemented)
 

@@ -13,11 +13,20 @@ if(@($errors).Count){throw ('Launcher syntax error: '+$errors[0].Message)}
 $uiFunction=$ast.Find({param($n)$n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Set-CafeGraphicsHistoryUi'},$true)
 $editorFunction=$ast.Find({param($n)$n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Show-ProfileEditor'},$true)
 $workerFunction=$ast.Find({param($n)$n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'New-CafeGraphicsHistoryWorker'},$true)
-if(-not $uiFunction -or -not $editorFunction -or -not $workerFunction){throw 'Graphics history UI, editor, or background worker source was not found.'}
+$uriFunction=$ast.Find({param($n)$n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'New-CafeGraphicsHistoryRequestUri'},$true)
+if(-not $uiFunction -or -not $editorFunction -or -not $workerFunction -or -not $uriFunction){throw 'Graphics history UI, editor, request builder, or background worker source was not found.'}
 Invoke-Expression $uiFunction.Extent.Text
+Invoke-Expression $uriFunction.Extent.Text
+$expectedUri='https://api.github.com/repos/fabjoncela/Cs-script/commits?path=graphics%2FFabMode.json&per_page=4&sha=main'
+if((New-CafeGraphicsHistoryRequestUri -Repo 'fabjoncela/Cs-script' -Branch 'main' -ProfileName FabMode) -cne $expectedUri){
+    throw 'The graphics history request URL must include its configured repository and branch.'
+}
 $editorSource=$editorFunction.Extent.Text
 foreach($required in @(
     '$worker.RequestContext=$historyUiContext',
+    '$historyRepo=[string]$script:GithubRepo',
+    '$historyBranch=[string]$script:GithubBranch',
+    '$historyUri=New-CafeGraphicsHistoryRequestUri -Repo $historyRepo -Branch $historyBranch -ProfileName $ProfileName',
     '$request=$sender.RequestContext',
     'Set-CafeGraphicsHistoryUi -Context $request -ErrorMessage $message',
     'Set-CafeGraphicsHistoryUi -Context $request -NoHistory'
@@ -27,6 +36,13 @@ foreach($required in @(
 $completionStart=$editorSource.IndexOf('$worker.Add_RunWorkerCompleted({',[StringComparison]::Ordinal)
 $completionEnd=$editorSource.IndexOf('$worker.RunWorkerAsync($historyUri)',$completionStart,[StringComparison]::Ordinal)
 if($completionStart -lt 0 -or $completionEnd -le $completionStart){throw 'Cannot isolate the graphics-history completion callback.'}
+$loadHandlerStart=$editorSource.IndexOf('$loadHistory.Add_Click({',[StringComparison]::Ordinal)
+$loadHandlerEnd=$editorSource.IndexOf('}.GetNewClosure())',$loadHandlerStart,[StringComparison]::Ordinal)
+if($loadHandlerStart -lt 0 -or $loadHandlerEnd -le $loadHandlerStart){throw 'Cannot isolate the closed-over Load history handler.'}
+$loadHandlerSource=$editorSource.Substring($loadHandlerStart,$loadHandlerEnd-$loadHandlerStart)
+if($loadHandlerSource -match '\$script:Github(Repo|Branch)'){
+    throw 'The closed-over Load history handler must use its captured repository and branch values, not its private script scope.'
+}
 $completionSource=$editorSource.Substring($completionStart,$completionEnd-$completionStart)
 if($completionSource -match '\.GetNewClosure\(\)'){
     throw 'The asynchronous completion callback must not capture editor locals in a nested closure.'
@@ -74,4 +90,4 @@ try{
     $context.HistoryChoice.Dispose();$context.LoadButton.Dispose()
     $context.RestoreButton.Dispose();$context.StatusLabel.Dispose()
 }
-Write-Host 'PASS: graphics-history callback wiring and error, 404, success, retry, and control recovery states.'
+Write-Host 'PASS: graphics-history request configuration, callback wiring, and error, 404, success, retry, and control recovery states.'

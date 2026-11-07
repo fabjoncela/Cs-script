@@ -5612,6 +5612,19 @@ function ConvertTo-CafeGraphicsHistoryEntry {
     if($message.Length -gt 120){$message=$message.Substring(0,117)+'...'}
     return [pscustomobject]@{Sha=([string]$Commit.sha).ToLowerInvariant();DateUtc=$date.ToUniversalTime().ToString('o');Message=$message}
 }
+function New-CafeGraphicsHistoryRequestUri {
+    param(
+        [Parameter(Mandatory=$true)][string]$Repo,
+        [Parameter(Mandatory=$true)][string]$Branch,
+        [Parameter(Mandatory=$true)][string]$ProfileName
+    )
+    if($Repo -notmatch '^[^/\s]+/[^/\s]+$'){throw 'GitHub graphics history requires a repository in owner/name form.'}
+    if([string]::IsNullOrWhiteSpace($Branch)){throw 'GitHub graphics history requires a branch name.'}
+    if($ProfileName -notmatch '^[A-Za-z0-9_-]+$'){throw 'GitHub graphics history received an invalid profile name.'}
+    $encodedPath=[Uri]::EscapeDataString('graphics/'+$ProfileName+'.json')
+    $encodedBranch=[Uri]::EscapeDataString($Branch)
+    return ('https://api.github.com/repos/'+$Repo+'/commits?path='+$encodedPath+'&per_page=4&sha='+$encodedBranch)
+}
 function Clear-ProfileGraphicsHistoryCache {
     param([Parameter(Mandatory=$true)][string]$ProfileName)
     if(-not $script:GamingProfiles.Contains($ProfileName)){throw ('Unknown graphics profile: '+$ProfileName)}
@@ -5658,9 +5671,7 @@ function Get-ProfileGraphicsHistory {
         if([string]::IsNullOrWhiteSpace($ResponseJson)){throw 'GitHub returned an empty graphics history response.'}
         $response=ConvertFrom-Json -InputObject $ResponseJson -ErrorAction Stop
     }else{
-        $encodedPath=[Uri]::EscapeDataString('graphics/'+$ProfileName+'.json')
-        $encodedBranch=[Uri]::EscapeDataString([string]$script:GithubBranch)
-        $uri='https://api.github.com/repos/'+$script:GithubRepo+'/commits?path='+$encodedPath+'&per_page=4&sha='+$encodedBranch
+        $uri=New-CafeGraphicsHistoryRequestUri -Repo ([string]$script:GithubRepo) -Branch ([string]$script:GithubBranch) -ProfileName $ProfileName
         $headers=@{'User-Agent'='CafeLauncher-Graphics-History';'Accept'='application/vnd.github+json'}
         $response=Invoke-CafeGitHubRestMethod -Uri $uri -Method Get -Headers $headers -TimeoutSec 12
     }
@@ -7828,6 +7839,11 @@ function Show-ProfileEditor {
     }.GetNewClosure())
 
     $historyState=[pscustomobject]@{Loaded=$false;Worker=$null}
+    # GetNewClosure() gives the event handler its own script scope. Capture
+    # these configuration values before registering it so $script: does not
+    # resolve to the closure module and produce an empty GitHub URL.
+    $historyRepo=[string]$script:GithubRepo
+    $historyBranch=[string]$script:GithubBranch
     $historyUiContext=@{
         ProfileName=$ProfileName;Dialog=$dialog;LoadButton=$loadHistory
         HistoryChoice=$historyChoice;RestoreButton=$restoreHistory;StatusLabel=$status
@@ -7841,9 +7857,7 @@ function Show-ProfileEditor {
                 if($cachedHistory.Found){Set-CafeGraphicsHistoryUi -Context $historyUiContext -Versions ([object[]]$cachedHistory.Versions);return}
             }catch{Write-Log ('Could not read cached graphics history for '+$ProfileName+': '+$_.Exception.Message) 'WARN'}
         }
-        $encodedPath=[Uri]::EscapeDataString('graphics/'+$ProfileName+'.json')
-        $encodedBranch=[Uri]::EscapeDataString([string]$script:GithubBranch)
-        $historyUri='https://api.github.com/repos/'+$script:GithubRepo+'/commits?path='+$encodedPath+'&per_page=4&sha='+$encodedBranch
+        $historyUri=New-CafeGraphicsHistoryRequestUri -Repo $historyRepo -Branch $historyBranch -ProfileName $ProfileName
         $loadHistory.Enabled=$false
         $historyChoice.Enabled=$false
         $restoreHistory.Enabled=$false

@@ -403,7 +403,7 @@ if($script:TestWebsiteUrls.Count -ne 7 -or $script:TestSpotifyCalls -ne 1){throw
 # Preview UI: fixed-coordinate label overlays have been replaced by isolated
 # table cells on distinct tabs, so labels cannot cover neighboring inputs.
 $editorSource=$definitions['Show-ProfileEditor']
-foreach($historyFunction in @('ConvertTo-CafeGraphicsHistoryEntry','Get-CachedProfileGraphicsHistory','Get-ProfileGraphicsHistory','Set-CafeGraphicsHistoryUi','Get-ProfileGraphicsVersion','New-CafeGraphicsHistoryWorker')){
+foreach($historyFunction in @('ConvertTo-CafeGraphicsHistoryEntry','New-CafeGraphicsHistoryRequestUri','Get-CachedProfileGraphicsHistory','Get-ProfileGraphicsHistory','Set-CafeGraphicsHistoryUi','Get-ProfileGraphicsVersion','New-CafeGraphicsHistoryWorker')){
     if(-not $definitions.ContainsKey($historyFunction)){
         throw ('GitHub graphics history helper missing: '+$historyFunction)
     }

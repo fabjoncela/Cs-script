@@ -47,6 +47,18 @@ Run these focused Windows PowerShell 5.1 checks after changing the history flow:
 
 The full `Test-CafeLauncher.ps1` script also exercises the dashboard. If it stops at an unrelated dashboard assertion, report that separately; do not remove or weaken the graphics-history checks to make the broader script appear green.
 
+## Later log: empty repository and branch in the request URL
+
+On 2026-11-07, FabMode loaded successfully from `fab.cfg`, then the history warning showed this URL:
+
+```text
+https://api.github.com/repos//commits?path=graphics%2FFabMode.json&per_page=4&sha=
+```
+
+The profile refresh and sensitivity logs confirmed the configured `fabjoncela/Cs-script` repository and `main` branch were available to the launcher. The history button's click handler, however, is registered with `.GetNewClosure()`. That gives the handler a private script scope, so reading `$script:GithubRepo` and `$script:GithubBranch` inside the handler resolved to empty values. GitHub's 404 was a consequence of the malformed URL, not evidence that the graphics history file was missing.
+
+The fix captures the repository and branch into ordinary local variables before registering the click handler and passes them through `New-CafeGraphicsHistoryRequestUri`. The shared URL builder rejects an empty or malformed repository, an empty branch, and an invalid profile name. Both the synchronous history reader and the UI handler use it. `Test-GraphicsHistory.ps1` checks URL construction and rejects missing configuration; `Test-GraphicsHistoryUI.ps1` checks that the closed-over handler uses captured configuration rather than `$script:` references.
+
 ## Provmode history check
 
 The `main` branch currently has `graphics/Provmode.json`, and GitHub's commits API returned its creation commit, `5f782626d0b5f13d9bbdeb0acdd76f5d00f0d83a` (`Add Provmode profile`). The history reader omits the newest commit because it represents the current preset; with only that one commit, there are no older Provmode versions to restore. During this investigation the same public request returned HTTP 200 with that single commit. The 404 from the user's log therefore was not reproduced by the current request from this machine; the new failure log includes the actual URL so a future discrepancy can be identified.

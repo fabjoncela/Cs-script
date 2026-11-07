@@ -19,7 +19,7 @@ $functions=@{}
 foreach($node in $ast.FindAll({param($n)$n -is [Management.Automation.Language.FunctionDefinitionAst]},$true)){
     $functions[$node.Name]=$node.Extent.Text
 }
-foreach($name in @('ConvertTo-CafeGraphicsPreset','ConvertTo-CafeGraphicsHistoryEntry','Clear-ProfileGraphicsHistoryCache','Get-CachedProfileGraphicsHistory','Get-ProfileGraphicsHistory','Get-ProfileGraphicsVersion')){
+foreach($name in @('ConvertTo-CafeGraphicsPreset','ConvertTo-CafeGraphicsHistoryEntry','New-CafeGraphicsHistoryRequestUri','Clear-ProfileGraphicsHistoryCache','Get-CachedProfileGraphicsHistory','Get-ProfileGraphicsHistory','Get-ProfileGraphicsVersion')){
     if(-not $functions.ContainsKey($name)){throw ('Missing graphics history function '+$name)}
     Invoke-Expression $functions[$name]
 }
@@ -30,6 +30,15 @@ foreach($name in @('FabMode','OliMode','ArliMode')){
 }
 $script:GithubRepo='fabjoncela/Cs-script'
 $script:GithubBranch='main'
+$expectedHistoryUri='https://api.github.com/repos/fabjoncela/Cs-script/commits?path=graphics%2FFabMode.json&per_page=4&sha=main'
+if((New-CafeGraphicsHistoryRequestUri -Repo $script:GithubRepo -Branch $script:GithubBranch -ProfileName FabMode) -cne $expectedHistoryUri){
+    throw 'Graphics history request builder must include the configured repository, branch, and encoded profile path.'
+}
+foreach($invalidRequest in @(@{Repo='';Branch='main'},@{Repo='fabjoncela/Cs-script';Branch=''})){
+    $rejected=$false
+    try{[void](New-CafeGraphicsHistoryRequestUri -Repo $invalidRequest.Repo -Branch $invalidRequest.Branch -ProfileName FabMode)}catch{$rejected=$true}
+    if(-not $rejected){throw 'Graphics history request builder must reject an empty repository or branch instead of issuing a malformed URL.'}
+}
 $script:HistoryCommitCalls=0
 $script:HistoryContentCalls=0
 $script:HistoryWrongPath=$false
