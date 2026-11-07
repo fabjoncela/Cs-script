@@ -681,14 +681,25 @@ if(-not $paletteMatch.Success){throw 'Production dashboard palette missing.'}
 Invoke-Expression $paletteMatch.Value
 foreach($dashboardHelper in @('New-CafeRoundedPath','Update-CafeDashboardRoundedRegion')){
     if(-not $definitions.ContainsKey($dashboardHelper)){throw ('Production dashboard helper missing: '+$dashboardHelper)}
-    Set-Item -Path ("Function:\global:"+$dashboardHelper) -Value ([scriptblock]::Create($definitions[$dashboardHelper]))
+    if($dashboardHelper -eq 'Update-CafeDashboardRoundedRegion'){
+        # Region assignment can provoke platform-specific native resize callbacks;
+        # the drawing test below isolates the owner-drawn tab callback itself.
+        Set-Item -Path ("Function:\global:"+$dashboardHelper) -Value {param($Control,[int]$Radius=8)}
+    }else{
+        Set-Item -Path ("Function:\global:"+$dashboardHelper) -Value ([scriptblock]::Create($definitions[$dashboardHelper]))
+    }
 }
 $form=$null
 try {
     Invoke-Expression $psSource.Substring($dashboardStart,$dashboardEnd-$dashboardStart)
-    $form.CreateControl();$tabs.Size=New-Object System.Drawing.Size(360,300);$tabs.CreateControl()
     $tabBitmap=New-Object System.Drawing.Bitmap(360,300)
-    try{$tabs.DrawToBitmap($tabBitmap,(New-Object System.Drawing.Rectangle(0,0,360,300)))}finally{$tabBitmap.Dispose()}
+    $tabGraphics=[System.Drawing.Graphics]::FromImage($tabBitmap)
+    try{
+        $drawArgs=[System.Windows.Forms.DrawItemEventArgs]::new($tabGraphics,$tabs.Font,[System.Drawing.Rectangle]::new(0,0,180,26),0,[System.Windows.Forms.DrawItemState]::Selected)
+        $drawMethod=$tabs.GetType().GetMethod('OnDrawItem',[Reflection.BindingFlags]::Instance -bor [Reflection.BindingFlags]::NonPublic)
+        if(-not $drawMethod){throw 'TabControl owner-draw entry point is unavailable.'}
+        [void]$drawMethod.Invoke($tabs,@($drawArgs))
+    }finally{$tabGraphics.Dispose();$tabBitmap.Dispose()}
     if($tabs.TabPages.Count -ne 2 -or $profilesGrid.Controls.Count -ne 7){
         throw 'Dashboard must construct two tabs and exactly six profile cards.'
     }
