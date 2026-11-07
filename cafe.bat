@@ -9048,7 +9048,7 @@ $script:DashboardHelpersTimingId=Start-CafeTimingOperation -Type 'Local' -Name '
 function New-Tile {
     param([string]$Text,[int]$Index,[scriptblock]$Action,[switch]$Primary,[string]$EditProfile='')
     $button=New-Object System.Windows.Forms.Button
-    $button.Text=if($EditProfile){"Apply $Text"}else{$Text}
+    $button.Text=if($EditProfile){"1.Apply $Text"}else{$Text}
     Style-CafeButton -Button $button -Primary:$Primary
     $actionToRun=$Action
     if($EditProfile){
@@ -9072,7 +9072,7 @@ function New-Tile {
         }.GetNewClosure())
         $card.Controls.Add($button,0,0)
         $play=New-Object System.Windows.Forms.Button
-        $play.Text='Play + Exec'
+        $play.Text='3.Play + Settings'
         Style-CafeButton -Button $play
         $play.BackColor=[System.Drawing.Color]::FromArgb(38,132,102)
         $play.Dock='Fill'
@@ -9081,9 +9081,9 @@ function New-Tile {
             try { Start-CS2WithProfileCfg -ProfileName $selectedProfile }
             catch{Write-Log ('Play + Exec failed for '+$selectedProfile+': '+$_.Exception.Message) 'ERROR'}
         }.GetNewClosure())
-        $card.Controls.Add($play,1,0)
+        $card.Controls.Add($play,2,0)
         $graphics=New-Object System.Windows.Forms.Button
-        $graphics.Text='Graphics'
+        $graphics.Text='2.Game Graphics'
         Style-CafeButton -Button $graphics
         $graphics.BackColor=[System.Drawing.Color]::FromArgb(77,72,125)
         $graphics.Dock='Fill'
@@ -9092,7 +9092,7 @@ function New-Tile {
             try { [void](Refresh-SelectedProfileCard -Name $selectedProfile); Invoke-GraphicsOnly -ModeName $selectedProfile }
             catch{Write-Log ('Graphics failed for '+$selectedProfile+': '+$_.Exception.Message) 'ERROR'}
         }.GetNewClosure())
-        $card.Controls.Add($graphics,2,0)
+        $card.Controls.Add($graphics,1,0)
         $edit=New-Object System.Windows.Forms.Button
         $edit.Text=[string]([char]0x2699)+' Edit '+$selectedProfile
         Style-CafeButton -Button $edit
