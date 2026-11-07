@@ -9,6 +9,8 @@ This file gives Codex and maintainers the operational context needed to work saf
 
 ## Branch and shipping rules
 
+- Continue work on the currently checked-out branch by default. Do not create a new branch for each task or change; create a branch only when the user explicitly asks for one. A branch is a line of development, not a substitute for a commit: keep related edits together on the current branch and make commits only when requested.
+
 - `main` is the production source. A `codex/*`, `feature/*`, or other non-main branch is testing/development until merged. A feature present in a testing branch is **not** shipped just because it is documented here or pushed to GitHub.
 - Describe behavior from the current checkout. When discussing release status, compare the current branch with `origin/main`; do not infer production behavior from branch-local code.
 - The release marker reports the launcher file's version; it does not prove that the current branch's code has shipped to `main`.
