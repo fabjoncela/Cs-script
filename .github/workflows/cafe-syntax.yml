@@ -248,8 +248,28 @@ jobs:
           }
           git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' commit -m 'chore: update CafeLauncher release metadata'
           if ($LASTEXITCODE -ne 0) { throw 'Could not commit the automatic release update.' }
-          git push origin HEAD:main
-          if ($LASTEXITCODE -ne 0) { throw 'Could not push the automatic release update to main.' }
+          $maxPushAttempts = 5
+          $pushed = $false
+          for ($attempt = 1; $attempt -le $maxPushAttempts; $attempt++) {
+            git fetch origin main
+            if ($LASTEXITCODE -ne 0) { throw 'Could not fetch the latest main before pushing the release update.' }
+            git rebase origin/main
+            if ($LASTEXITCODE -ne 0) { throw 'Could not rebase the release update onto the latest main.' }
+            & "$env:GITHUB_WORKSPACE\tools\Test-CafeLauncher.ps1"
+            if ($LASTEXITCODE -ne 0) { throw 'Launcher validation failed after rebasing the release update.' }
+            & "$env:GITHUB_WORKSPACE\tools\Test-ContextFreshness.ps1"
+            if ($LASTEXITCODE -ne 0) { throw 'Generated release metadata validation failed after rebasing.' }
+            git push origin HEAD:main
+            if ($LASTEXITCODE -eq 0) {
+              $pushed = $true
+              break
+            }
+            if ($attempt -lt $maxPushAttempts) {
+              Write-Host "Release push raced with another main update; retrying ($attempt/$maxPushAttempts)."
+              Start-Sleep -Seconds ([Math]::Min($attempt, 3))
+            }
+          }
+          if (-not $pushed) { throw "Could not push the release update after $maxPushAttempts attempts." }
           "release_sha=$(git rev-parse HEAD)" >> $env:GITHUB_OUTPUT
   publish-drive:
     name: Publish cafe.bat to Google Drive
