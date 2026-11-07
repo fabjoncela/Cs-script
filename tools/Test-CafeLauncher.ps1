@@ -679,6 +679,10 @@ $script:GitHubRateLimitLabel=$null
 $paletteMatch=[regex]::Match($psSource,'(?ms)^\$script:DashboardPalette\s*=\s*@\{.*?^\}')
 if(-not $paletteMatch.Success){throw 'Production dashboard palette missing.'}
 Invoke-Expression $paletteMatch.Value
+foreach($dashboardHelper in @('New-CafeRoundedPath','Update-CafeDashboardRoundedRegion')){
+    if(-not $definitions.ContainsKey($dashboardHelper)){throw ('Production dashboard helper missing: '+$dashboardHelper)}
+    Invoke-Expression $definitions[$dashboardHelper]
+}
 $form=$null
 try {
     Invoke-Expression $psSource.Substring($dashboardStart,$dashboardEnd-$dashboardStart)
