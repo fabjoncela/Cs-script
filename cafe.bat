@@ -5473,7 +5473,7 @@ function Invoke-CafeCS2CaptureReview {
     $preset=$BasePreset
     if($graphicsRows.Count){
         $settings=[ordered]@{};foreach($field in $BasePreset.Settings.Keys){$settings[$field]=[int]$BasePreset.Settings[$field]}
-        foreach($row in $graphicsRows){if($row.Command -in $settings.Keys){$settings[[string]$row.Command]=[int]$row.Value}}
+        foreach($row in $graphicsRows){if([string]$row.Command -ceq 'RefreshHz' -or $row.Command -in $settings.Keys){$settings[[string]$row.Command]=[int]$row.Value}}
         $refreshPolicy=if($graphicsRows.Command -contains 'RefreshHz'){'Exact'}else{[string]$BasePreset.RefreshPolicy}
         $preset=ConvertTo-CafeGraphicsPreset -ProfileName $ProfileName -Preset ([pscustomobject]@{SchemaVersion=1;ProfileName=$ProfileName;DisplayPolicy='ApplyPreset';RefreshPolicy=$refreshPolicy;ScalingMode=[int]$BasePreset.ScalingMode;Settings=$settings})
     }

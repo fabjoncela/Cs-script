@@ -10,14 +10,14 @@ $source=[string]::Join([Environment]::NewLine,[string[]]$batLines[([int]$marker[
 $tokens=$null;$errors=$null
 $ast=[Management.Automation.Language.Parser]::ParseInput($source,[ref]$tokens,[ref]$errors)
 if(@($errors).Count){throw ('Launcher PowerShell failed to parse: '+$errors[0].Message)}
-$wanted=@('ConvertTo-CafeGraphicsPreset','Get-CafeActiveSteamVideoFile','ConvertFrom-CafeCS2VideoText','Get-CafeCS2GraphicsCapture','Get-CafeCS2ConvarGroup','ConvertFrom-CafeCS2ViewmodelCommands','Merge-CafeCS2ViewmodelCommands','Show-CafeCS2ViewmodelPasteDialog','ConvertFrom-CafeCS2UserConvarsText','Get-CafeCS2UserConvarsCapture','Get-CafeCS2BindGroup','Set-CafeCS2PendingVoiceBind','Remove-CafeCS2PendingVoiceBindActions','ConvertFrom-CafeCS2UserKeysText','Get-CafeCS2UserKeysCapture','Get-CafeCS2CaptureDisplayName','Format-CafeCS2CaptureValue','Get-CafeCS2CfgConvarValue','Get-CafeCS2CfgConvarMap','Get-CafeCS2CfgBindMap','Get-CafeCS2CaptureReviewRows','Show-CafeCS2CaptureOptionsDialog','Show-CafeCS2CaptureReviewDialog','Show-CafeCS2ExtrasDialog','Invoke-CafeCS2CaptureReview')
+$wanted=@('ConvertTo-CafeGraphicsPreset','ConvertTo-CafeCS2Sensitivity','Get-CafeActiveSteamVideoFile','ConvertFrom-CafeCS2VideoText','Get-CafeCS2GraphicsCapture','Get-CafeCS2ConvarGroup','ConvertFrom-CafeCS2ViewmodelCommands','Merge-CafeCS2ViewmodelCommands','Show-CafeCS2ViewmodelPasteDialog','ConvertFrom-CafeCS2UserConvarsText','Get-CafeCS2UserConvarsCapture','Get-CafeCS2BindGroup','Set-CafeCS2PendingVoiceBind','Remove-CafeCS2PendingVoiceBindActions','ConvertFrom-CafeCS2UserKeysText','Get-CafeCS2UserKeysCapture','Get-CafeCS2CaptureDisplayName','Format-CafeCS2CaptureValue','Get-CafeCS2CfgConvarValue','Get-CafeCS2CfgConvarMap','Get-CafeCS2CfgBindMap','Get-CafeCS2CaptureReviewRows','Show-CafeCS2CaptureOptionsDialog','Show-CafeCS2CaptureReviewDialog','Show-CafeCS2ExtrasDialog','Invoke-CafeCS2CaptureReview')
 $definitions=@{}
 foreach($function in $ast.FindAll({param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst]},$true)){
     if($function.Name -in $wanted){$definitions[$function.Name]=$function.Extent.Text}
 }
 foreach($name in $wanted){if(-not $definitions.ContainsKey($name)){throw ('Missing function under test: '+$name)};Invoke-Expression $definitions[$name]}
 
-$script:GamingProfiles=@{FabMode=@{ScalingMode=2};BrileMode=@{ScalingMode=5}}
+$script:GamingProfiles=@{FabMode=@{ScalingMode=2;VoicePushToTalkKey=''};BrileMode=@{ScalingMode=5;VoicePushToTalkKey=''}}
 $allViewmodel=ConvertFrom-CafeCS2ViewmodelCommands -Text 'viewmodel_fov 68; viewmodel_offset_x 2.5; viewmodel_offset_y 0; viewmodel_offset_z -1.5'
 if($allViewmodel.Count -ne 4 -or $allViewmodel['viewmodel_offset_x'] -cne '2.5' -or $allViewmodel['viewmodel_offset_z'] -cne '-1.5'){throw 'Semicolon-separated viewmodel commands were not parsed.'}
 $incremental=Merge-CafeCS2ViewmodelCommands -Text 'viewmodel_fov 68' -Existing @{viewmodel_fov='60';viewmodel_offset_y='0';volume='0.4'}
@@ -153,6 +153,28 @@ $script:CaptureTestActiveUser=54321
 try{[void](Get-CafeCS2UserKeysCapture -Source $source)}catch{$failed=$_.Exception.Message -match 'account changed'}
 if(-not $failed){throw 'Key capture was allowed to continue after the active Steam account changed.'}
 $script:CaptureTestActiveUser=12345
+
+# Exercise the complete checked-groups route using saved-file fixtures. The
+# review dialog selects every changed row; GitHub reads are stubbed and nothing
+# is written or synced.
+$script:GamingProfiles['FabMode'].ConfigFile='fab.cfg'
+$script:CaptureTestAccountChanges=$false
+$script:CaptureTestActiveUser=12345
+$script:CaptureTestRegistryRead=0
+$script:GithubRepo='fixture/repository'
+$script:GithubBranch='main'
+$script:CapturedCS2Convars=@{}
+$script:CapturedCS2Binds=@{}
+$script:PendingCfgSensitivity=@{}
+function Get-GitHubCfgFromContentsApi {param([string]$Repo,[string]$Branch,[string]$Path);return [pscustomobject]@{Content=''}}
+function Get-CS2ProfileBaselineCfgText {return ''}
+function Show-CafeCS2CaptureReviewDialog {param($Rows,$OwnerWindow);return @($Rows|Where-Object{$_.Import})}
+$allCaptureGroups=@('Graphics','Sensitivity','Crosshair','Viewmodel','HUD and Radar','Audio','Movement','Jump','Crouch','Walk','Use','Voice','Reload','Inspect','Scoreboard','Attack','Secondary attack','Drop','Weapon slots','Grenade keys','Scroll wheel')
+$allGroupsCapture=Invoke-CafeCS2CaptureReview -ProfileName FabMode -BasePreset $base -Groups $allCaptureGroups -OwnerWindow $null
+if($allGroupsCapture.Preset.RefreshPolicy -cne 'Exact' -or $allGroupsCapture.Preset.Settings.RefreshHz -ne 165){throw 'Reviewed RefreshHz was dropped when importing all groups over a Highest preset.'}
+if($allGroupsCapture.Graphics -lt 1 -or $allGroupsCapture.Convars -lt 1 -or $allGroupsCapture.Binds -lt 1){throw 'Selecting all capture groups did not stage graphics, convar, and bind values.'}
+if(-not $script:CapturedCS2Convars['FabMode'].ContainsKey('volume') -or -not $script:CapturedCS2Convars['FabMode'].ContainsKey('sensitivity')){throw 'All-groups capture did not stage both user and machine convars.'}
+if(-not $script:CapturedCS2Binds['FabMode'].Contains('SPACE') -or $allGroupsCapture.VoiceKey -cne 'V'){throw 'All-groups capture did not stage saved binds and push-to-talk.'}
 
 $editor=$null
 $editorAst=$ast.FindAll({param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Show-ProfileEditor'},$true)|Select-Object -First 1
