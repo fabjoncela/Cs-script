@@ -79,7 +79,7 @@ The **CS2 / Apps** editor's **Capture from CS2** action first asks which groups 
 - A review table compares the selected profile value with the saved CS2 value. Graphics options use readable choices (including the existing CS2-to-profile FSR mapping); console variables show their CS2 menu label and command name. Bind rows show the key, current profile action, captured action, and **Will replace** status for a key collision.
 - The user can uncheck individual rows and choose **Import selected** or **Cancel**. Cancel leaves staged data unchanged. Import stages only accepted rows in the selected profile's editor state. Capture does not save, sync, or modify game files.
 - Reviewed graphics values flow through the existing graphics preset controls. Reviewed console variables and binds stay pending for the selected profile CFG and use the existing Save Locally / Save & Sync flow, including the exact CFG diff confirmation before a remote write. Other CFG binds remain untouched; duplicate bindings for an imported key are rejected as ambiguous.
-- Supported console-variable groups include sensitivity, crosshair, viewmodel, HUD/radar, and the explicit numeric/boolean audio set. The current capture schema accepts every saved `cl_crosshair*` value that passes validation. Bind actions use an explicit allowlist for common movement, combat, interaction, weapon-slot, grenade-slot, voice, and reload groups; scroll-wheel keys can use a single supported action. Explicit saved unbinds are reviewed when they match a supported current profile or launcher-baseline action. If a captured action is also still bound to another key that CS2 did not list, Capture shows an optional **Possible leftover** row that can be checked to clear the old key; the user decides whether to remove that old bind. Missing saved binds are never cleared automatically.
+- Supported console-variable groups include sensitivity, crosshair, grenade-crosshair, scope-dot, viewmodel, HUD/radar, and the explicit numeric/boolean audio set. The capture schema accepts supported values only after validation. Bind actions use an explicit allowlist for common movement, combat, interaction, weapon-slot, grenade-slot, voice, and reload groups; scroll-wheel keys can use a single supported action. Explicit saved unbinds are reviewed when they match a supported current profile or launcher-baseline action. If a captured action is also still bound to another key that CS2 did not list, Capture shows an optional **Possible leftover** row that can be checked to clear the old key; the user decides whether to remove that old bind. Missing saved binds are never cleared automatically.
 - When sensitivity is imported, it appears on the **Mouse** tab. A captured push-to-talk key also updates the profile's existing voice-key field so Save & Sync does not overwrite it with an older value.
 - The implementation and parser/review fixtures are in `tools/Test-CS2GraphicsCapture.ps1` and `tools/Test-CfgSensitivitySync.ps1`; the graphics fixture retains FSR mapping checks.
 
@@ -95,7 +95,7 @@ The **CS2 / Apps** profile editor has an **Edit Extras** action that opens a sep
 - Regression fixtures for CFG reset sentinels, numeric zero, added bind groups, and editor wiring are in `tools/Test-CfgSensitivitySync.ps1` and `tools/Test-CS2GraphicsCapture.ps1`.
 
 The **Mouse** tab can also import a pasted crosshair share code offline. It supports legacy `CSGO-...` versions 1, 3, and 4 plus current `CS...` version 1, validates the base-57 code and checksum, and shows the decoded convars and conversion notes before staging. Share-code import merges decoded crosshair and scope-dot convars into the selected profile’s staged settings, preserving sensitivity and any other staged groups while incoming crosshair values replace matching staged crosshair keys. It changes no game files and waits for Save & Sync and the existing CFG diff confirmation before publishing. Legacy-v1 codes lack a source-resolution field and can only be approximated; weapon-dependent gap and retired outline thickness are called out when present.
-- The decoder is a local PowerShell implementation based on the documented layouts in `akiver/csgo-sharecode` (MIT); CafeLauncher does not require Node.js or network access to decode. Attribution and license text are in `THIRD_PARTY_NOTICES.md`. Current scope-dot convars are allowed through the selected profile CFG writer.
+- The decoder is a local PowerShell implementation based on the documented layouts in `akiver/csgo-sharecode` (MIT); CafeLauncher does not require Node.js or network access to decode. Attribution and license text are in `THIRD_PARTY_NOTICES.md`. Scope-dot and grenade-crosshair convars are supported by the selected profile CFG writer.
 
 ### CS2 crosshair visual preview
 
@@ -312,43 +312,25 @@ The checks cover:
 
 A real CS2/Steam account and monitor smoke test remains separate.
 
-## Plan: Add CS2 Extras to Edit Profile
-
-Add an **Edit Extras** button to each profile’s **Edit Profile → CS2 / Apps** tab. It opens a separate window for settings that don’t fit the existing graphics or sensitivity controls.
-
-| Section | What it would edit |
-|---|---|
-| Crosshair | Supported crosshair and grenade-crosshair settings |
-| Viewmodel | FOV, offsets, preset position, recoil, and preferred hand |
-| HUD and Radar | HUD scale, target ID, radar scale and behavior, safe zone, and loadout display |
-| Audio | Master and voice volume, music and round sounds, and supported audio options |
-| Binds | Separate groups for Jump, Voice / push-to-talk, Reload, Grenade keys, and Scroll wheel, plus additional common groups after their commands are verified |
-
-Use CS2-style setting names in the window, and show the underlying command where it helps identify exactly what will change. For binds, show the key and action, and warn when saving would replace another bind—including a different push-to-talk key.
-
-### Reset behavior
-
-Give each setting and group a **Reset to CS2 default** option. Reset should remove that profile’s override so the normal CS2 or launcher baseline value takes effect.
-
-A numeric value of `0` should be available only where zero is a valid setting. It shouldn’t be treated as a universal reset: for example, zero volume means mute. For binds, reset should restore the baseline binding; it shouldn’t blindly write `unbind`.
-
-### Save flow
-
-Edits should be staged for the selected profile. The user reviews them, then uses the existing **Save Locally** or **Save & Sync** flow. Opening or editing Extras should not itself write to CS2 files or sync anything.
-
-### Suggested implementation order
-
-1. Check how the existing profile CFG and Play + Exec baseline handle overrides and defaults.
-2. Add the Extras window for crosshair, viewmodel, HUD / radar, and audio.
-3. Add bind editing with a verified command allowlist and clear replacement warnings.
-4. Add per-setting and per-group reset behavior.
-5. Test staging, local save, sync, bind conflicts, and reset behavior.
-
-The Extras window is implemented in `cafe.bat`, with focused regression fixtures updated. The Windows PowerShell 5.1 tests still need to run in a Windows environment.
 ## Per-profile optional website (2026.10.30.3)
 
 Edit Profile > CS2 / Apps exposes a custom website URL and enable checkbox. Apply with Launch Apps opens FACEIT Matchmaking, then the validated per-profile URL only if enabled. The URL and enabled flag persist through the existing local/cloud profile JSON export/import. Old profiles default to Metastack with the second website enabled. Standalone Launch All retains Spotify. Invalid imported URLs are ignored, and launch-time validation falls back to Metastack. The release number is generated from cafe.bat.
 
-## Beta synchronization
+## CS2 update watch
 
-Beta includes the current main updates alongside reviewed capture and CS2 Extras. In CS2 / Apps, Extras occupies row 28 and optional website controls occupy rows 29–30, preventing overlap. This synchronization changes beta only.
+`.github/workflows/cs2-update-watch.yml` runs the standalone Python watch on a GitHub-hosted runner at 07:17, 15:17, and 23:17 Europe/Tirane. It checks Valve's release-note feed and Steam announcement RSS, matches their announcement IDs, and uses rules to identify changes that may affect the launcher. Each run logs the count from each source before deduplicating. The rules cover profile CFG execution and settings, graphics apply and capture, Steam launch and install discovery, and Workshop Cleanup dependencies. Only qualifying changes produce email. It does not run on café PCs or use GitHub REST/GraphQL or an AI API.
+
+Setup on the default branch:
+
+1. In **Settings > Secrets and variables > Actions**, set `SMTP_HOST`, `SMTP_PORT` (465 for TLS or 587 for STARTTLS), `SMTP_USERNAME`, `SMTP_PASSWORD`, `SMTP_FROM` and `SMTP_TO` as repository secrets. Use SMTP credentials supported by the email provider.
+2. In **Actions > CafeLauncher CS2 update watch**, run `dry-run` to preview findings, then `test-email` to verify delivery. Neither mode updates alert history.
+3. Set the Actions variable `CS2_WATCH_ENABLED` to `true`. Run `live` manually or wait for the next scheduled check. The workflow uses its built-in token to create and update the `cs2-watch-state` branch through Git. That branch contains only a timestamp and announcement fingerprints. If branch rules apply, permit the workflow to write to this branch.
+4. Run the live check again to verify that previously emailed changes stay quiet. If switching from the ChatGPT watch, pause it once GitHub delivery is verified.
+
+The initial alert window is 24 hours. Subsequent checks resume from the last successful check and revisit at least two weeks of notes for edits. A fetch or SMTP failure keeps the previous window available for retry. Runs are serialized. If SMTP accepts an email and Git then fails to persist its receipt, retrying can send that email again. Rules may miss changes that Valve describes without naming an affected setting or behavior.
+
+Run the focused tests with `python3 -B -m unittest discover -s scripts -p 'test_cs2_update_watch.py'`.
+
+## CS2 editor layout
+
+In CS2 / Apps, Extras occupies row 28 and optional website controls occupy rows 29–30, preventing overlap with the reviewed CS2 capture controls. The update-watch workflow and scripts are part of the launcher repository.

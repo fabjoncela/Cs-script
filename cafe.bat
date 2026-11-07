@@ -4819,7 +4819,7 @@ function ConvertFrom-CafeCS2UserKeysText {
     $section=[regex]::Match($Text,'(?ims)"bindings"\s*\{(?<body>.*?)^\s*\}')
     if(-not $section.Success){throw 'Saved CS2 binds file has no recognized bindings section.'}
     $values=[ordered]@{}
-    $rx='(?im)^[ \t]*"(?<key>[A-Z0-9_]{1,24})"[ \t]+"(?<command>(?:\\.|[^"\\]){0,180})"[ \t]*$'
+    $rx='(?im)^[ \t]*"(?<key>[A-Z0-9_]{1,24})"[ \t]+"(?<command>(?:\\.|[^"\\]){0,180})"[ \t]*\r?$'
     foreach($match in [regex]::Matches($section.Groups['body'].Value,$rx)){
         $key=[string]$match.Groups['key'].Value.ToUpperInvariant()
         $command=[string]$match.Groups['command'].Value
@@ -5270,7 +5270,7 @@ function Set-CafeCapturedConvarsInCfg {
         $value=[string]$Values[$name]
         # If CS2 saved both spellings, prefer its newer spelling and do not
         # reintroduce the legacy command after it has been removed.
-        if($legacyToModern.ContainsKey($name) -and $Values.ContainsKey($legacyToModern[$name])){
+        if($legacyToModern.ContainsKey($name) -and $Values.Contains($legacyToModern[$name])){
             $modernValue=[string]$Values[$legacyToModern[$name]]
             if($modernValue -cne $script:CafeCS2ResetToDefaultMarker -or $value -cne $script:CafeCS2ResetToDefaultMarker){continue}
         }
@@ -5308,7 +5308,7 @@ function Set-CafeCapturedConvarsInCfg {
     foreach($retiredName in $retiredWhenCaptured.Keys){
         $replacementNames=[string[]]$retiredWhenCaptured[$retiredName]
         $replacementCaptured=$true
-        foreach($replacementName in $replacementNames){if(-not $Values.ContainsKey($replacementName)){$replacementCaptured=$false;break}}
+        foreach($replacementName in $replacementNames){if(-not $Values.Contains($replacementName)){$replacementCaptured=$false;break}}
         if(-not $replacementCaptured){continue}
         $retiredRx='(?im)^[ \t]*'+[regex]::Escape($retiredName)+'[ \t]+(?:"[^"\r\n]*"|[^\s\r\n/;]+)[ \t]*(?://[^\r\n]*)?[ \t]*(?:\r\n|\n|$)'
         $text=[regex]::Replace($text,$retiredRx,'')

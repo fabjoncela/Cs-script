@@ -1,0 +1,56 @@
+name: CafeLauncher CS2 update watch
+
+on:
+  schedule:
+    - cron: '17 7,15,23 * * *'
+      timezone: Europe/Tirane
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'Preview findings, send a test email, or run the live watch'
+        type: choice
+        default: dry-run
+        options:
+          - dry-run
+          - test-email
+          - live
+
+concurrency:
+  group: cs2-update-watch
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  preview:
+    if: github.event_name == 'workflow_dispatch' && inputs.mode == 'dry-run'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - run: python3 scripts/cs2_update_watch.py dry-run
+
+  watch:
+    if: >-
+      github.ref_name == github.event.repository.default_branch &&
+      ((github.event_name == 'schedule' && vars.CS2_WATCH_ENABLED == 'true') ||
+       (github.event_name == 'workflow_dispatch' && inputs.mode == 'test-email') ||
+       (github.event_name == 'workflow_dispatch' && inputs.mode == 'live' &&
+        vars.CS2_WATCH_ENABLED == 'true'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+      - name: Check updates or test email
+        env:
+          WATCH_MODE: ${{ inputs.mode || 'live' }}
+          SMTP_HOST: ${{ secrets.SMTP_HOST }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT }}
+          SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          SMTP_FROM: ${{ secrets.SMTP_FROM }}
+          SMTP_TO: ${{ secrets.SMTP_TO }}
+        run: python3 scripts/cs2_update_watch.py "$WATCH_MODE"

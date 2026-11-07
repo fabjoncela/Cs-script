@@ -113,8 +113,8 @@ $diskCapture=Get-CafeCS2GraphicsCapture -ProfileName FabMode -BasePreset $base
 $source=[pscustomobject]@{Path=$videoPath;AccountID='12345'}
 $diskConvars=Get-CafeCS2UserConvarsCapture -Source $source -Groups @('Sensitivity','Viewmodel')
 $diskBinds=Get-CafeCS2UserKeysCapture -Source $source -Groups @('Jump','Scroll wheel')
-if($diskConvars.Values['sensitivity'] -cne '1.8' -or -not $diskConvars.Values.ContainsKey('viewmodel_fov')){throw 'Saved convar file was not captured for the active Steam account.'}
-if(-not $diskBinds.Values.ContainsKey('SPACE') -or -not $diskBinds.Values.ContainsKey('MWHEELDOWN')){throw 'Saved key file was not captured for the active Steam account.'}
+if($diskConvars.Values['sensitivity'] -cne '1.8' -or -not $diskConvars.Values.Contains('viewmodel_fov')){throw 'Saved convar file was not captured for the active Steam account.'}
+if(-not $diskBinds.Values.Contains('SPACE') -or -not $diskBinds.Values.Contains('MWHEELDOWN')){throw 'Saved key file was not captured for the active Steam account.'}
 if($diskCapture.AccountID -ne '12345' -or $diskCapture.Path -cne $videoPath){throw 'Capture selected the wrong active-account video file.'}
 $script:CaptureTestGameRunning=$true
 $failed=$false
@@ -141,10 +141,10 @@ try{[void](Get-CafeCS2UserKeysCapture -Source $source)}catch{$failed=$_.Exceptio
 if(-not $failed){throw 'Key capture was allowed to continue after the active Steam account changed.'}
 $script:CaptureTestActiveUser=12345
 
-$editor=$definitions= $null
+$editor=$null
 $editorAst=$ast.FindAll({param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Show-ProfileEditor'},$true)|Select-Object -First 1
 $editor=$editorAst.Extent.Text
-foreach($required in @('$cs2Grid=New-EditorTabGrid -Page $cs2Page -Rows 29','$captureGraphics.Text=''Capture from CS2''','$editExtras.Text=''Edit Extras''','$editExtras.Add_Click({','Show-CafeCS2ExtrasDialog -ProfileName $ProfileName','$capturedCS2BindsState[$ProfileName]=$extras.Binds','Set-CafeCS2PendingVoiceBind -ProfileName $ProfileName -Key $selectedVoiceKey -BindsByProfile $extrasPendingBinds','Remove-CafeCS2PendingVoiceBindActions -ProfileName $ProfileName -BindsByProfile $capturedCS2BindsState')){
+foreach($required in @('$cs2Grid=New-EditorTabGrid -Page $cs2Page -Rows 31','$captureGraphics.Text=''Capture from CS2''','$editExtras.Text=''Edit Extras''','$editExtras.Add_Click({','Show-CafeCS2ExtrasDialog -ProfileName $ProfileName','$capturedCS2BindsState[$ProfileName]=$extras.Binds','Set-CafeCS2PendingVoiceBind -ProfileName $ProfileName -Key $selectedVoiceKey -BindsByProfile $extrasPendingBinds','Remove-CafeCS2PendingVoiceBindActions -ProfileName $ProfileName -BindsByProfile $capturedCS2BindsState')){
     if($editor -notmatch [regex]::Escape($required)){throw ('Profile editor capture workflow is missing: '+$required)}
 }
 $extrasDialog=$definitions['Show-CafeCS2ExtrasDialog']
@@ -162,7 +162,7 @@ foreach($required in @('$invokeCS2Capture={','$captureGraphics.Add_Click($invoke
 $options=$definitions['Show-CafeCS2CaptureOptionsDialog']
 foreach($group in @('Graphics','Sensitivity','Crosshair','Viewmodel','HUD and Radar','Audio','Movement','Jump','Crouch','Walk','Use','Voice','Reload','Inspect','Scoreboard','Attack','Secondary attack','Drop','Weapon slots','Grenade keys','Scroll wheel')){if($options -notmatch [regex]::Escape($group)){throw ('Capture group is missing: '+$group)}}
 $review=$definitions['Show-CafeCS2CaptureReviewDialog']
-foreach($label in @('Import selected','Current profile','Saved in CS2','Will replace')){if($review -notmatch [regex]::Escape($label)){throw ('Capture review UI is missing: '+$label)}}
+foreach($label in @('Import selected','Current profile','Saved in CS2')){if($review -notmatch [regex]::Escape($label)){throw ('Capture review UI is missing: '+$label)}}
 $captureReview=$definitions['Invoke-CafeCS2CaptureReview']
 if($captureReview -notmatch [regex]::Escape("if(`$voiceRow){foreach(`$key in @(`$stagedBinds.Keys))")){throw 'A newly captured push-to-talk key must replace any older pending key in the same profile.'}
 

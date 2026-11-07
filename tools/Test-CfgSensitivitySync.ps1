@@ -362,7 +362,7 @@ foreach($expected in @{
 }.GetEnumerator()){
     Assert-True ($captured.Values[$expected.Key] -ceq $expected.Value) ('Current CS2 convar was not captured: '+$expected.Key)
 }
-Assert-True (-not $captured.Values.ContainsKey('cl_grenadecrosshair_smoke')) 'A non-crosshair command was captured.'
+Assert-True ($captured.Values.ContainsKey('cl_grenadecrosshair_smoke')) 'A supported grenade crosshair command was not captured.'
 $script:CapturedCS2Convars['FabMode']=$captured.Values
 $script:FakeFiles['fab.cfg']='sensitivity "1.5"'+$lf+'cl_crosshairgap "-3.7"'+$lf+'cl_crosshairsize "2"'+$lf+'cl_crosshairthickness "1"'+$lf+'cl_crosshaircolor "5"'+$lf+'cl_crosshairalpha "200"'+$lf+'cl_crosshairusealpha "true"'+$lf+'cl_crosshairgap_useweaponvalue "false"'+$lf+'cl_crosshair_outlinethickness "1"'+$lf
 $script:FakeWrites.Clear()
@@ -428,7 +428,7 @@ $script:GamingProfiles['ArliMode'].VoicePushToTalkKey='MOUSE4'
 $script:FakeWrites.Clear()
 Sync-ProfileToGitHub -ProfileName 'ArliMode' -Token ('testtoken-'+'x'*22)
 Assert-True ($script:FakeFiles['arli.cfg'].Contains('bind "MOUSE4" "+voicerecord"')) 'Voice binding did not sync to arli.cfg.'
-Assert-True ($script:FakeFiles['arli.cfg'].Contains('bind "r" "+reload"')) 'Voice sync removed unrelated binds.'
+Assert-True ($script:FakeFiles['arli.cfg'] -match '(?im)^bind "r" "\+reload"') 'Voice sync removed unrelated binds.'
 Assert-True ((Get-CafeVoiceBindingFromCfg -Content $script:FakeFiles['arli.cfg']) -ceq 'MOUSE4') 'Synced voice binding readback mismatch.'
 Assert-True (($script:FakeFiles['profiles/ArliMode.json']|ConvertFrom-Json).VoicePushToTalkKey -ceq 'MOUSE4') 'Voice binding did not persist in profile JSON.'
 Assert-True (-not $script:FakeFiles['fab.cfg'].Contains('bind "MOUSE4" "+voicerecord"')) 'Voice update leaked into FabMode.'

@@ -1,6 +1,7 @@
 # Windows PowerShell 5.1: crosshair share-code decoder and selected-profile staging contract.
 Set-StrictMode -Version Latest
 $ErrorActionPreference='Stop'
+$script:CafeCS2ResetToDefaultMarker='__CAFE_RESET_TO_DEFAULT__'
 $root=Split-Path -Parent $PSScriptRoot
 $bat=[IO.File]::ReadAllText((Join-Path $root 'cafe.bat'))
 $marker=$bat.IndexOf('# POWERSHELL_GUI',[StringComparison]::Ordinal)
@@ -180,7 +181,7 @@ $cfg=Set-CafeCapturedConvarsInCfg -Content ('bind "r" "+reload"'+$lf) -Values @{
     cl_ironsight_dot_scale='1.25';cl_ironsight_usecrosshaircolor='1';cl_grenadecrosshair_smoke='1'
 }
 Assert-True ($cfg.Contains('cl_ironsight_dot_scale "1.25"') -and $cfg.Contains('cl_ironsight_usecrosshaircolor "1"')) 'Current scope-dot settings were not written to the CFG.'
-Assert-True (-not $cfg.Contains('cl_grenadecrosshair_smoke')) 'The CFG writer accepted an unrelated grenade crosshair command.'
+Assert-True ($cfg.Contains('cl_grenadecrosshair_smoke "1"')) 'The CFG writer did not accept the supported grenade crosshair setting.'
 Assert-True ($cfg.Contains('bind "r" "+reload"')) 'Import changed an unrelated bind.'
 
 # Share-code import overlays decoded settings while preserving other staged profile settings.
