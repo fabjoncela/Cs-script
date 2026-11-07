@@ -4889,6 +4889,48 @@ function Get-CafeCS2ConvarGroup {
     if($Name -match '^(?:volume|voice_scale|voice_modenable|snd_(?:headphone_eq|mapobjective_volume|menumap_volume|menumusic_volume|musicvolume|othermusic_volume|mvp_volume|roundend_volume|roundstart_volume|roundaction_volume|tensecondwarning_volume|deathcamera_volume|mute_losefocus|mixahead|spatialize_lerp|steamaudio_enable_perspective_correction))$'){return 'Audio'}
     return ''
 }
+function ConvertFrom-CafeCS2ViewmodelCommands {
+    param([Parameter(Mandatory=$true)][string]$Text)
+    if($Text.Length -gt 4096){throw 'Viewmodel command text is too long.'}
+    $values=[ordered]@{}
+    foreach($command in @($Text -split '[;\r\n]+'|Where-Object{$_.Trim()})){
+        if($command -notmatch '^\s*(?<name>viewmodel_(?:fov|offset_[xyz]))\s+(?<value>-?[0-9]+(?:\.[0-9]+)?)\s*$'){
+            throw ('Unsupported or malformed viewmodel command: '+$command.Trim())
+        }
+        $name=[string]$Matches.name.ToLowerInvariant();$value=[string]$Matches.value
+        $number=0.0
+        if(-not [double]::TryParse($value,[Globalization.NumberStyles]::Float,[Globalization.CultureInfo]::InvariantCulture,[ref]$number) -or
+           [double]::IsNaN($number) -or [double]::IsInfinity($number) -or [Math]::Abs($number) -gt 100000){
+            throw ('Out-of-range value for '+$name+'.')
+        }
+        $values[$name]=$value
+    }
+    if(-not $values.Count){throw 'Paste at least one supported viewmodel command.'}
+    return $values
+}
+function Merge-CafeCS2ViewmodelCommands {
+    param([Parameter(Mandatory=$true)][string]$Text,$Existing)
+    $values=ConvertFrom-CafeCS2ViewmodelCommands -Text $Text
+    $merged=@{}
+    if($Existing -is [System.Collections.IDictionary]){foreach($name in $Existing.Keys){$merged[[string]$name]=[string]$Existing[$name]}}
+    foreach($name in $values.Keys){$merged[[string]$name]=[string]$values[$name]}
+    Write-Output -NoEnumerate $merged
+}
+function Show-CafeCS2ViewmodelPasteDialog {
+    param([string]$ProfileName,$OwnerWindow)
+    $form=New-Object System.Windows.Forms.Form
+    $form.Text='Paste Viewmodel - '+$ProfileName;$form.ClientSize=New-Object System.Drawing.Size(560,330);$form.MinimumSize=New-Object System.Drawing.Size(480,300)
+    $form.StartPosition='CenterParent';$form.BackColor=$PANEL;$form.ForeColor=$WHITE;$form.Font=New-Object System.Drawing.Font('Segoe UI',9)
+    $intro=New-Object System.Windows.Forms.Label;$intro.Text='Paste one command or several. Separate commands with semicolons or new lines.';$intro.Location=[System.Drawing.Point]::new(16,14);$intro.Size=[System.Drawing.Size]::new(520,24);$intro.Anchor='Top,Left,Right';$form.Controls.Add($intro)
+    $examples=New-Object System.Windows.Forms.Label;$examples.Text='Supported: viewmodel_fov, viewmodel_offset_x, viewmodel_offset_y, viewmodel_offset_z';$examples.Location=[System.Drawing.Point]::new(16,42);$examples.Size=[System.Drawing.Size]::new(520,38);$examples.Anchor='Top,Left,Right';$examples.ForeColor=$MUTED;$form.Controls.Add($examples)
+    $input=New-Object System.Windows.Forms.TextBox;$input.Multiline=$true;$input.AcceptsReturn=$true;$input.AcceptsTab=$false;$input.ScrollBars='Vertical';$input.Location=[System.Drawing.Point]::new(16,84);$input.Size=[System.Drawing.Size]::new(520,150);$input.Anchor='Top,Bottom,Left,Right';$input.BackColor=$CARD;$input.ForeColor=$BLACK;$form.Controls.Add($input)
+    $hint=New-Object System.Windows.Forms.Label;$hint.Text='Only pasted commands are updated; other saved or staged profile settings are preserved. Nothing is saved or synced until you use the profile editor buttons.';$hint.Location=[System.Drawing.Point]::new(16,242);$hint.Size=[System.Drawing.Size]::new(520,42);$hint.Anchor='Bottom,Left,Right';$hint.ForeColor=$MUTED;$form.Controls.Add($hint)
+    $stage=New-Object System.Windows.Forms.Button;$stage.Text='Stage commands';$stage.Location=[System.Drawing.Point]::new(322,286);$stage.Size=[System.Drawing.Size]::new(118,30);$stage.Anchor='Bottom,Right';$stage.BackColor=$BLUE;$stage.ForeColor=$WHITE
+    $cancel=New-Object System.Windows.Forms.Button;$cancel.Text='Cancel';$cancel.Location=[System.Drawing.Point]::new(450,286);$cancel.Size=[System.Drawing.Size]::new(86,30);$cancel.Anchor='Bottom,Right';$cancel.DialogResult=[System.Windows.Forms.DialogResult]::Cancel
+    $form.Controls.Add($stage);$form.Controls.Add($cancel);$form.AcceptButton=$stage;$form.CancelButton=$cancel;$state=[pscustomobject]@{Commands=$null}
+    $stage.Add_Click({try{[void](ConvertFrom-CafeCS2ViewmodelCommands -Text $input.Text);$state.Commands=[string]$input.Text;$form.DialogResult=[System.Windows.Forms.DialogResult]::OK;$form.Close()}catch{[void][System.Windows.Forms.MessageBox]::Show($_.Exception.Message,'Viewmodel commands','OK','Warning')}}.GetNewClosure())
+    try{if($form.ShowDialog($OwnerWindow) -eq [System.Windows.Forms.DialogResult]::OK){return $state.Commands};return $null}finally{$form.Dispose()}
+}
 function ConvertFrom-CafeCS2UserConvarsText {
     param([Parameter(Mandatory=$true)][string]$Text,[string[]]$Groups=@('Sensitivity','Crosshair'))
     if($Text.Length -gt 1048576 -or $Text -notmatch '(?m)^\s*\{\s*$' -or $Text -notmatch '(?m)^\s*\}\s*$'){
@@ -7579,6 +7621,12 @@ function Show-ProfileEditor {
     $editExtras.ForeColor=$WHITE
     $editExtras.FlatStyle='Flat'
     [void](Add-EditorTabField -Grid $cs2Grid -Title 'Crosshair, viewmodel, HUD / radar, audio and binds' -Control $editExtras -Column 0 -Row 28)
+    $pasteViewmodel=New-Object System.Windows.Forms.Button
+    $pasteViewmodel.Text='Paste Viewmodel'
+    $pasteViewmodel.BackColor=[System.Drawing.Color]::FromArgb(58,67,83)
+    $pasteViewmodel.ForeColor=$WHITE
+    $pasteViewmodel.FlatStyle='Flat'
+    [void](Add-EditorTabField -Grid $cs2Grid -Title 'Paste one or more viewmodel commands into this profile' -Control $pasteViewmodel -Column 1 -Row 28)
     $editorFooter=New-Object System.Windows.Forms.TableLayoutPanel
     $editorFooter.Dock='Fill'
     $editorFooter.Padding=New-Object System.Windows.Forms.Padding(20,4,20,10)
@@ -7867,6 +7915,23 @@ function Show-ProfileEditor {
             Write-Log ('Could not edit Extras for '+$ProfileName+': '+$_.Exception.Message) 'WARN'
             [void][System.Windows.Forms.MessageBox]::Show(('Could not open or stage Extras:`n'+$_.Exception.Message),'CS2 Extras','OK','Warning')
         }finally{if(-not $dialog.IsDisposed){$dialog.Cursor=[System.Windows.Forms.Cursors]::Default}}
+    }.GetNewClosure())
+    $pasteViewmodel.Add_Click({
+        try{
+            $pastedCommands=Show-CafeCS2ViewmodelPasteDialog -ProfileName $ProfileName -OwnerWindow $dialog
+            if($null -eq $pastedCommands){return}
+            $existingConvars=@{}
+            if($capturedCS2ConvarsState.ContainsKey($ProfileName)){
+                foreach($name in $capturedCS2ConvarsState[$ProfileName].Keys){$existingConvars[[string]$name]=[string]$capturedCS2ConvarsState[$ProfileName][$name]}
+            }
+            $capturedCS2ConvarsState[$ProfileName]=Merge-CafeCS2ViewmodelCommands -Text ([string]$pastedCommands) -Existing $existingConvars
+            $pendingSyncState[$ProfileName]=$true
+            $status.Text='Viewmodel commands staged for this profile. Choose Save Locally or Save & Sync to keep them.';$status.ForeColor=[System.Drawing.Color]::FromArgb(255,190,105)
+            Write-Log ('Staged pasted viewmodel commands for '+$ProfileName+'. No game files were changed or synced.')
+        }catch{
+            Write-Log ('Could not stage pasted viewmodel commands for '+$ProfileName+': '+$_.Exception.Message) 'WARN'
+            [void][System.Windows.Forms.MessageBox]::Show(('Could not stage viewmodel commands:`n'+$_.Exception.Message),'Viewmodel commands','OK','Warning')
+        }
     }.GetNewClosure())
     if($CaptureOnOpen){
         $editorTabs.SelectedTab=$cs2Page

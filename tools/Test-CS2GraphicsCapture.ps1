@@ -11,7 +11,7 @@ $source=$bat.Substring($start)
 $tokens=$null;$errors=$null
 $ast=[Management.Automation.Language.Parser]::ParseInput($source,[ref]$tokens,[ref]$errors)
 if(@($errors).Count){throw ('Launcher PowerShell failed to parse: '+$errors[0].Message)}
-$wanted=@('ConvertTo-CafeGraphicsPreset','Get-CafeActiveSteamVideoFile','ConvertFrom-CafeCS2VideoText','Get-CafeCS2GraphicsCapture','Get-CafeCS2ConvarGroup','ConvertFrom-CafeCS2UserConvarsText','Get-CafeCS2UserConvarsCapture','Get-CafeCS2BindGroup','Set-CafeCS2PendingVoiceBind','Remove-CafeCS2PendingVoiceBindActions','ConvertFrom-CafeCS2UserKeysText','Get-CafeCS2UserKeysCapture','Get-CafeCS2CaptureDisplayName','Format-CafeCS2CaptureValue','Get-CafeCS2CfgConvarValue','Get-CafeCS2CfgConvarMap','Get-CafeCS2CfgBindMap','Get-CafeCS2CaptureReviewRows','Show-CafeCS2CaptureOptionsDialog','Show-CafeCS2CaptureReviewDialog','Show-CafeCS2ExtrasDialog','Invoke-CafeCS2CaptureReview')
+$wanted=@('ConvertTo-CafeGraphicsPreset','Get-CafeActiveSteamVideoFile','ConvertFrom-CafeCS2VideoText','Get-CafeCS2GraphicsCapture','Get-CafeCS2ConvarGroup','ConvertFrom-CafeCS2ViewmodelCommands','Merge-CafeCS2ViewmodelCommands','Show-CafeCS2ViewmodelPasteDialog','ConvertFrom-CafeCS2UserConvarsText','Get-CafeCS2UserConvarsCapture','Get-CafeCS2BindGroup','Set-CafeCS2PendingVoiceBind','Remove-CafeCS2PendingVoiceBindActions','ConvertFrom-CafeCS2UserKeysText','Get-CafeCS2UserKeysCapture','Get-CafeCS2CaptureDisplayName','Format-CafeCS2CaptureValue','Get-CafeCS2CfgConvarValue','Get-CafeCS2CfgConvarMap','Get-CafeCS2CfgBindMap','Get-CafeCS2CaptureReviewRows','Show-CafeCS2CaptureOptionsDialog','Show-CafeCS2CaptureReviewDialog','Show-CafeCS2ExtrasDialog','Invoke-CafeCS2CaptureReview')
 $definitions=@{}
 foreach($function in $ast.FindAll({param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst]},$true)){
     if($function.Name -in $wanted){$definitions[$function.Name]=$function.Extent.Text}
@@ -19,6 +19,16 @@ foreach($function in $ast.FindAll({param($node) $node -is [Management.Automation
 foreach($name in $wanted){if(-not $definitions.ContainsKey($name)){throw ('Missing function under test: '+$name)};Invoke-Expression $definitions[$name]}
 
 $script:GamingProfiles=@{FabMode=@{ScalingMode=2};BrileMode=@{ScalingMode=5}}
+$allViewmodel=ConvertFrom-CafeCS2ViewmodelCommands -Text 'viewmodel_fov 68; viewmodel_offset_x 2.5; viewmodel_offset_y 0; viewmodel_offset_z -1.5'
+if($allViewmodel.Count -ne 4 -or $allViewmodel['viewmodel_offset_x'] -cne '2.5' -or $allViewmodel['viewmodel_offset_z'] -cne '-1.5'){throw 'Semicolon-separated viewmodel commands were not parsed.'}
+$incremental=Merge-CafeCS2ViewmodelCommands -Text 'viewmodel_fov 68' -Existing @{viewmodel_fov='60';viewmodel_offset_y='0';volume='0.4'}
+$incremental=Merge-CafeCS2ViewmodelCommands -Text "viewmodel_offset_x 2.5`nviewmodel_offset_z -1.5" -Existing $incremental
+if($incremental['viewmodel_fov'] -cne '68' -or $incremental['viewmodel_offset_x'] -cne '2.5' -or $incremental['viewmodel_offset_y'] -cne '0' -or $incremental['viewmodel_offset_z'] -cne '-1.5' -or $incremental['volume'] -cne '0.4'){throw 'Incremental viewmodel pastes did not preserve prior and unrelated profile values.'}
+$expectBadViewmodel={param([string]$Text,[string]$Label)$rejected=$false;try{[void](ConvertFrom-CafeCS2ViewmodelCommands -Text $Text)}catch{$rejected=$true};if(-not $rejected){throw ('Invalid viewmodel paste was accepted: '+$Label)}}
+& $expectBadViewmodel 'sensitivity 1.8' 'unrelated command'
+& $expectBadViewmodel 'viewmodel_offset_x 2.5 exec autoexec' 'extra command text'
+& $expectBadViewmodel 'viewmodel_offset_x 100001' 'out-of-range value'
+& $expectBadViewmodel '' 'empty input'
 $base=Get-Content -LiteralPath (Join-Path $repo 'graphics\FabMode.json') -Raw|ConvertFrom-Json
 $base=ConvertTo-CafeGraphicsPreset -ProfileName FabMode -Preset $base
 $base.RefreshPolicy='Highest'
@@ -144,7 +154,7 @@ $script:CaptureTestActiveUser=12345
 $editor=$null
 $editorAst=$ast.FindAll({param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Show-ProfileEditor'},$true)|Select-Object -First 1
 $editor=$editorAst.Extent.Text
-foreach($required in @('$cs2Grid=New-EditorTabGrid -Page $cs2Page -Rows 31','$captureGraphics.Text=''Capture from CS2''','$editExtras.Text=''Edit Extras''','$editExtras.Add_Click({','Show-CafeCS2ExtrasDialog -ProfileName $ProfileName','$capturedCS2BindsState[$ProfileName]=$extras.Binds','Set-CafeCS2PendingVoiceBind -ProfileName $ProfileName -Key $selectedVoiceKey -BindsByProfile $extrasPendingBinds','Remove-CafeCS2PendingVoiceBindActions -ProfileName $ProfileName -BindsByProfile $capturedCS2BindsState')){
+foreach($required in @('$cs2Grid=New-EditorTabGrid -Page $cs2Page -Rows 31','$captureGraphics.Text=''Capture from CS2''','$editExtras.Text=''Edit Extras''','$pasteViewmodel.Text=''Paste Viewmodel''','$pasteViewmodel.Add_Click({','Show-CafeCS2ViewmodelPasteDialog -ProfileName $ProfileName','$capturedCS2ConvarsState[$ProfileName]=Merge-CafeCS2ViewmodelCommands','$pendingSyncState[$ProfileName]=$true','$editExtras.Add_Click({','Show-CafeCS2ExtrasDialog -ProfileName $ProfileName','$capturedCS2BindsState[$ProfileName]=$extras.Binds','Set-CafeCS2PendingVoiceBind -ProfileName $ProfileName -Key $selectedVoiceKey -BindsByProfile $extrasPendingBinds','Remove-CafeCS2PendingVoiceBindActions -ProfileName $ProfileName -BindsByProfile $capturedCS2BindsState')){
     if($editor -notmatch [regex]::Escape($required)){throw ('Profile editor capture workflow is missing: '+$required)}
 }
 $extrasDialog=$definitions['Show-CafeCS2ExtrasDialog']
