@@ -14,7 +14,7 @@
                      "ShadowQuality":  2,
                      "DynamicShadows":  1,
                      "TextureDetail":  1,
-                     "ShaderQuality":  1,
+                     "ShaderQuality":  0,
                      "ParticleDetail":  1,
                      "AmbientOcclusion":  0,
                      "HDRDetail":  3,
