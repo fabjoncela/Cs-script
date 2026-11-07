@@ -9055,14 +9055,16 @@ function New-Tile {
         $selectedProfile=$EditProfile
         $card=New-Object System.Windows.Forms.TableLayoutPanel
         $card.Dock='Fill'
-        $card.ColumnCount=5
+        $card.ColumnCount=6
         $card.RowCount=1
         $profileColor=if($script:ProfileAccentColors.Contains($selectedProfile)){$script:ProfileAccentColors[$selectedProfile]}else{[System.Drawing.Color]::FromArgb(56,137,240)}
         $card.BackColor=$profileColor
         $card.Padding=New-Object System.Windows.Forms.Padding(2)
         $card.Tag=$selectedProfile
         $card.Margin=New-Object System.Windows.Forms.Padding(3)
-        foreach($pct in @(24,20,20,14,22)){[void]$card.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle('Percent',$pct)))}
+        foreach($pct in @(24,20,20)){[void]$card.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle('Percent',$pct)))}
+        [void]$card.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle('Absolute',12)))
+        foreach($pct in @(14,22)){[void]$card.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle('Percent',$pct)))}
         $button.Dock='Fill'
         $button.Add_Click({
             Update-SelectedProfileCard -Name $selectedProfile
@@ -9105,7 +9107,7 @@ function New-Tile {
                 Update-SelectedProfileCard -Name $selectedProfile
             }catch{Write-Log ('Editor failed: '+$_.Exception.Message) 'ERROR'}
         }.GetNewClosure())
-        $card.Controls.Add($edit,3,0)
+        $card.Controls.Add($edit,4,0)
         $capture=New-Object System.Windows.Forms.Button
         $capture.Text='Capture CS2'
         Style-CafeButton -Button $capture
@@ -9117,7 +9119,7 @@ function New-Tile {
                 Update-SelectedProfileCard -Name $selectedProfile
             }catch{Write-Log ('Capture shortcut failed for '+$selectedProfile+': '+$_.Exception.Message) 'ERROR'}
         }.GetNewClosure())
-        $card.Controls.Add($capture,4,0)
+        $card.Controls.Add($capture,5,0)
         # Track pointer position over the entire row, including its child buttons.
         # Avoid a white hover border against the dark dashboard.
         $rowHover=New-Object System.Windows.Forms.Timer
