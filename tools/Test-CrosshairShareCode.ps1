@@ -3,10 +3,10 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference='Stop'
 $script:CafeCS2ResetToDefaultMarker='__CAFE_RESET_TO_DEFAULT__'
 $root=Split-Path -Parent $PSScriptRoot
-$bat=[IO.File]::ReadAllText((Join-Path $root 'cafe.bat'))
-$marker=$bat.IndexOf('# POWERSHELL_GUI',[StringComparison]::Ordinal)
-if($marker -lt 0){throw 'Missing CafeLauncher PowerShell marker.'}
-$source=$bat.Substring($bat.IndexOf("`n",$marker)+1)
+$batLines=[IO.File]::ReadAllLines((Join-Path $root 'cafe.bat'))
+$marker=@(for($i=0;$i -lt $batLines.Length;$i++){if($batLines[$i] -ceq '# POWERSHELL_GUI'){$i}})
+if($marker.Count -ne 1){throw ('Expected one CafeLauncher PowerShell marker; found '+$marker.Count+'.')}
+$source=[string]::Join([Environment]::NewLine,[string[]]$batLines[([int]$marker[0]+1)..($batLines.Length-1)])
 $tokens=$null;$errors=$null
 $ast=[Management.Automation.Language.Parser]::ParseInput($source,[ref]$tokens,[ref]$errors)
 if(@($errors).Count){throw ('Launcher PowerShell syntax failed: '+$errors[0].Message)}

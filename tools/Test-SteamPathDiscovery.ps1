@@ -2,11 +2,10 @@
 Set-StrictMode -Version Latest
 $ErrorActionPreference='Stop'
 $repo=Split-Path -Parent $PSScriptRoot
-$bat=[IO.File]::ReadAllText((Join-Path $repo 'cafe.bat'))
-$marker=$bat.IndexOf('# POWERSHELL_GUI',[StringComparison]::Ordinal)
-if($marker -lt 0){throw 'Missing launcher PowerShell marker.'}
-$start=$bat.IndexOf("`n",$marker)+1
-$source=$bat.Substring($start)
+$batLines=[IO.File]::ReadAllLines((Join-Path $repo 'cafe.bat'))
+$marker=@(for($i=0;$i -lt $batLines.Length;$i++){if($batLines[$i] -ceq '# POWERSHELL_GUI'){$i}})
+if($marker.Count -ne 1){throw ('Expected one launcher PowerShell marker; found '+$marker.Count+'.')}
+$source=[string]::Join([Environment]::NewLine,[string[]]$batLines[([int]$marker[0]+1)..($batLines.Length-1)])
 $tokens=$null;$errors=$null
 $ast=[Management.Automation.Language.Parser]::ParseInput($source,[ref]$tokens,[ref]$errors)
 if(@($errors).Count){throw 'Launcher PowerShell failed to parse.'}
