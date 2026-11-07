@@ -11,6 +11,9 @@
     "Vibrance":  75,
     "Hue":  -1,
     "ScalingMode":  2,
+    "VoicePushToTalkKey":  "",
     "CfgDownloadUrl":  "https://raw.githubusercontent.com/fabjoncela/Cs-script/main/prov.cfg",
-    "LaunchApps":  true
+    "LaunchApps":  true,
+    "LaunchWebsiteEnabled":  true,
+    "LaunchWebsiteUrl":  "https://metastack.gg/"
 }
