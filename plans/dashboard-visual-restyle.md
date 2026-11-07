@@ -75,6 +75,6 @@ The generated dashboard concept is in the Codex conversation that established th
 ## Implementation record
 
 - The dashboard uses a unified graphite/navy palette, restrained cyan primary actions, neutral profile rows, rounded buttons and summary/log surfaces, and owner-drawn dark tabs. The existing grids and action handlers remain in place.
-- `CAFE_RELEASE` is `2026.11.07.16`; this local version is ahead of GitHub `main` (`2026.11.07.15`) so the updater skips replacing this styling with the older remote build. The commit is local only; it has not been pushed.
-- `Test-CafeLauncher.ps1` exercises the owner-drawn tab rendering path with `DrawToBitmap`. `Test-StartupApiTimings.ps1` and `Test-ContextFreshness.ps1` also pass.
+- `CAFE_RELEASE` is `2026.11.07.16`; the restyle is committed and pushed to `origin/main`.
+- `Test-CafeLauncher.ps1` checks that the owner-drawn tab handler uses `RectangleF` bounds with `DrawString`, covering the overload regression without relying on platform-specific WinForms painting. `Test-StartupApiTimings.ps1` and `Test-ContextFreshness.ps1` also pass.
 - The desktop capture tool could not target the launcher window, so compare a live screenshot at the reference size and DPI before calling the visual match pixel perfect.

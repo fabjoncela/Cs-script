@@ -692,14 +692,27 @@ foreach($dashboardHelper in @('New-CafeRoundedPath','Update-CafeDashboardRounded
 $form=$null
 try {
     Invoke-Expression $psSource.Substring($dashboardStart,$dashboardEnd-$dashboardStart)
-    $tabBitmap=New-Object System.Drawing.Bitmap(360,300)
-    $tabGraphics=[System.Drawing.Graphics]::FromImage($tabBitmap)
+    $drawHandlerStart=$psSource.IndexOf('$tabs.Add_DrawItem({',[StringComparison]::Ordinal)
+    $drawHandlerEnd=$psSource.IndexOf('}.GetNewClosure())',$drawHandlerStart,[StringComparison]::Ordinal)
+    if($drawHandlerStart -lt 0 -or $drawHandlerEnd -le $drawHandlerStart){throw 'Owner-drawn dashboard tab handler was not found.'}
+    $drawHandlerSource=$psSource.Substring($drawHandlerStart,$drawHandlerEnd-$drawHandlerStart)
+    if(-not $psSource.Contains('$tabs.DrawMode=[System.Windows.Forms.TabDrawMode]::OwnerDrawFixed')){
+        throw 'Dashboard tabs must keep owner-draw mode enabled.'
+    }
+    foreach($requiredDrawFeature in @('$path=New-CafeRoundedPath','$e.Graphics.FillPath','$e.Graphics.DrawString')){
+        if(-not $drawHandlerSource.Contains($requiredDrawFeature)){throw ('Owner-drawn dashboard tab handler is missing: '+$requiredDrawFeature)}
+    }
+    if($drawHandlerSource -notmatch '\$textBounds\s*=\s*\[System\.Drawing\.RectangleF\]::new' -or
+       $drawHandlerSource -notmatch '\.DrawString\([^\r\n]*\$textBounds,\$format\)'){
+        throw 'Owner-drawn tabs must use RectangleF bounds when rendering their labels.'
+    }
+    $roundingBounds=[System.Drawing.Rectangle]::new(0,0,80,24)
+    $roundingPath=New-CafeRoundedPath -Bounds $roundingBounds -Radius 6
     try{
-        $drawArgs=[System.Windows.Forms.DrawItemEventArgs]::new($tabGraphics,$tabs.Font,[System.Drawing.Rectangle]::new(0,0,180,26),0,[System.Windows.Forms.DrawItemState]::Selected)
-        $drawMethod=[System.Windows.Forms.TabControl].GetMethod('OnDrawItem',[Reflection.BindingFlags]::Instance -bor [Reflection.BindingFlags]::NonPublic -bor [Reflection.BindingFlags]::DeclaredOnly)
-        if(-not $drawMethod){throw 'TabControl owner-draw entry point is unavailable.'}
-        [void]$drawMethod.Invoke($tabs,@($drawArgs))
-    }finally{$tabGraphics.Dispose();$tabBitmap.Dispose()}
+        if($roundingPath -isnot [System.Drawing.Drawing2D.GraphicsPath] -or $roundingPath.PointCount -lt 4){
+            throw 'Rounded dashboard geometry must produce a nonempty GraphicsPath.'
+        }
+    }finally{$roundingPath.Dispose()}
     if($tabs.TabPages.Count -ne 2 -or $profilesGrid.Controls.Count -ne 7){
         throw 'Dashboard must construct two tabs and exactly six profile cards.'
     }
