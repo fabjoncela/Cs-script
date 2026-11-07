@@ -19,6 +19,7 @@ on:
       - 'tools/Test-Graphics.ps1'
       - 'tools/Test-GraphicsHistory.ps1'
       - 'tools/Test-GraphicsHistoryAsync.ps1'
+      - 'tools/Test-GraphicsHistoryUI.ps1'
       - 'tools/Test-SteamPathDiscovery.ps1'
       - 'tools/Test-WorkshopCleanup.ps1'
       - 'tools/fixtures/**'
@@ -59,6 +60,7 @@ on:
       - 'tools/Test-Graphics.ps1'
       - 'tools/Test-GraphicsHistory.ps1'
       - 'tools/Test-GraphicsHistoryAsync.ps1'
+      - 'tools/Test-GraphicsHistoryUI.ps1'
       - 'tools/Test-SteamPathDiscovery.ps1'
       - 'tools/Test-WorkshopCleanup.ps1'
       - 'tools/fixtures/**'
@@ -163,6 +165,10 @@ jobs:
         shell: powershell
         run: |
           & "$env:GITHUB_WORKSPACE\tools\Test-GraphicsHistoryAsync.ps1"
+      - name: Test graphics history UI recovery
+        shell: powershell
+        run: |
+          & "$env:GITHUB_WORKSPACE\tools\Test-GraphicsHistoryUI.ps1"
       - name: Test Steam and CS2 path discovery
         shell: powershell
         run: |
