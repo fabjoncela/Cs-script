@@ -241,6 +241,8 @@ try{
 
 $BG = [System.Drawing.Color]::FromArgb(20,23,30)
 $PANEL = [System.Drawing.Color]::FromArgb(31,36,46)
+$CARD = [System.Drawing.Color]::FromArgb(39,45,57)
+$BLACK = [System.Drawing.Color]::FromArgb(12,15,20)
 $BLUE = [System.Drawing.Color]::FromArgb(35,125,245)
 $WHITE = [System.Drawing.Color]::FromArgb(240,243,248)
 $MUTED = [System.Drawing.Color]::FromArgb(160,170,185)
