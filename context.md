@@ -111,7 +111,7 @@ The **CS2 / Apps** editor can load the three previous versions of `graphics/<Pro
 - The commit list is cached per profile for 24 hours; manual refresh bypasses the cache.
 - Restore fetches and validates the chosen version, then fills the editor without saving or applying it. Saving or syncing remains a separate user action.
 - History works offline only when the version is already listed in the fresh cache. Fetching an older preset requires internet.
-- A failed background history request is logged and reported in the editor; completion cleanup attempts to restore the Load/Refresh button and cursor while containing UI update errors.
+- A failed background history request is logged and reported in the editor; completion cleanup restores the Load/Refresh button and cursor using the controls captured by the UI handler.
 
 ### Planned: Profile graphics, settings, and crosshair history (not implemented)
 
