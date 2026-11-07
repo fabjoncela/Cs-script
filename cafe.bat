@@ -4894,19 +4894,59 @@ function ConvertFrom-CafeCS2ViewmodelCommands {
     if($Text.Length -gt 4096){throw 'Viewmodel command text is too long.'}
     $values=[ordered]@{}
     foreach($command in @($Text -split '[;\r\n]+'|Where-Object{$_.Trim()})){
-        if($command -notmatch '^\s*(?<name>viewmodel_(?:fov|offset_[xyz]))\s+(?<value>-?[0-9]+(?:\.[0-9]+)?)\s*$'){
+        if($command -match '^\s*(?<name>viewmodel_(?:fov|offset_[xyz]))\s+(?<value>-?[0-9]+(?:\.[0-9]+)?)\s*$'){
+            $name=[string]$Matches.name.ToLowerInvariant();$value=[string]$Matches.value
+            $number=0.0
+            if(-not [double]::TryParse($value,[Globalization.NumberStyles]::Float,[Globalization.CultureInfo]::InvariantCulture,[ref]$number) -or
+               [double]::IsNaN($number) -or [double]::IsInfinity($number)){
+                throw ('Invalid value for '+$name+'.')
+            }
+            $range=switch($name){
+                'viewmodel_fov' {@{Min=60.0;Max=68.0}}
+                'viewmodel_offset_x' {@{Min=-2.0;Max=2.5}}
+                default {@{Min=-2.0;Max=2.0}}
+            }
+            if($number -lt $range.Min -or $number -gt $range.Max){throw ('Out-of-range value for '+$name+' ('+$range.Min+' to '+$range.Max+').')}
+        }elseif($command -match '^\s*viewmodel_presetpos\s+(?<value>[012])\s*$'){
+            $name='viewmodel_presetpos';$value=[string]$Matches.value
+        }elseif($command -match '^\s*cl_prefer_lefthanded\s+(?<value>true|false|0|1)\s*$'){
+            $name='cl_prefer_lefthanded'
+            $value=if($Matches.value -in @('1','true')){'true'}else{'false'}
+        }else{
             throw ('Unsupported or malformed viewmodel command: '+$command.Trim())
-        }
-        $name=[string]$Matches.name.ToLowerInvariant();$value=[string]$Matches.value
-        $number=0.0
-        if(-not [double]::TryParse($value,[Globalization.NumberStyles]::Float,[Globalization.CultureInfo]::InvariantCulture,[ref]$number) -or
-           [double]::IsNaN($number) -or [double]::IsInfinity($number) -or [Math]::Abs($number) -gt 100000){
-            throw ('Out-of-range value for '+$name+'.')
         }
         $values[$name]=$value
     }
     if(-not $values.Count){throw 'Paste at least one supported viewmodel command.'}
     return $values
+}
+function ConvertFrom-CafeCS2ViewmodelPaste {
+    param([Parameter(Mandatory=$true)][string]$Text)
+    if($Text.Length -gt 4096){throw 'Viewmodel command text is too long.'}
+    $convars=[ordered]@{}
+    $binds=[ordered]@{}
+    foreach($command in @($Text -split '[;\r\n]+'|Where-Object{$_.Trim()})){
+        if($command -match '(?i)^\s*bind\s+(?:"(?<quotedKey>[a-z0-9_]{1,24})"|(?<bareKey>[a-z0-9_]{1,24}))\s+(?:"(?<quotedAction>switchhands)"|(?<bareAction>switchhands))\s*$'){
+            $key=[string]$Matches.quotedKey;if(-not $key){$key=[string]$Matches.bareKey};$key=$key.ToUpperInvariant()
+            $action=[string]$Matches.quotedAction;if(-not $action){$action=[string]$Matches.bareAction};$action=$action.ToLowerInvariant()
+            if($binds.Contains($key)){throw ('Paste contains more than one hand-switch bind for '+$key+'.')}
+            $binds[$key]=$action
+            continue
+        }
+        $parsed=ConvertFrom-CafeCS2ViewmodelCommands -Text $command
+        foreach($name in $parsed.Keys){$convars[[string]$name]=[string]$parsed[$name]}
+    }
+    if(-not $convars.Count -and -not $binds.Count){throw 'Paste at least one supported viewmodel setting or hand-switch bind.'}
+    $hasCustomValues=$false
+    foreach($name in @('viewmodel_fov','viewmodel_offset_x','viewmodel_offset_y','viewmodel_offset_z')){if($convars.Contains($name)){$hasCustomValues=$true;break}}
+    $preset=if($convars.Contains('viewmodel_presetpos')){[string]$convars['viewmodel_presetpos']}else{''}
+    if($preset -in @('1','2') -and $hasCustomValues){throw 'A built-in preset cannot be combined with custom FOV or offsets. Paste presetpos 1 or 2 alone, or use presetpos 0 for custom values.'}
+    if($preset -in @('1','2')){
+        foreach($name in @('viewmodel_fov','viewmodel_offset_x','viewmodel_offset_y','viewmodel_offset_z')){$convars[$name]=$script:CafeCS2ResetToDefaultMarker}
+    }elseif($hasCustomValues -and -not $convars.Contains('viewmodel_presetpos')){
+        $convars['viewmodel_presetpos']='0'
+    }
+    return [pscustomobject]@{Convars=$convars;Binds=$binds}
 }
 function Merge-CafeCS2ViewmodelCommands {
     param([Parameter(Mandatory=$true)][string]$Text,$Existing)
@@ -4922,13 +4962,13 @@ function Show-CafeCS2ViewmodelPasteDialog {
     $form.Text='Paste Viewmodel - '+$ProfileName;$form.ClientSize=New-Object System.Drawing.Size(560,330);$form.MinimumSize=New-Object System.Drawing.Size(480,300)
     $form.StartPosition='CenterParent';$form.BackColor=$PANEL;$form.ForeColor=$WHITE;$form.Font=New-Object System.Drawing.Font('Segoe UI',9)
     $intro=New-Object System.Windows.Forms.Label;$intro.Text='Paste one command or several. Separate commands with semicolons or new lines.';$intro.Location=[System.Drawing.Point]::new(16,14);$intro.Size=[System.Drawing.Size]::new(520,24);$intro.Anchor='Top,Left,Right';$form.Controls.Add($intro)
-    $examples=New-Object System.Windows.Forms.Label;$examples.Text='Supported: viewmodel_fov, viewmodel_offset_x, viewmodel_offset_y, viewmodel_offset_z';$examples.Location=[System.Drawing.Point]::new(16,42);$examples.Size=[System.Drawing.Size]::new(520,38);$examples.Anchor='Top,Left,Right';$examples.ForeColor=$MUTED;$form.Controls.Add($examples)
+    $examples=New-Object System.Windows.Forms.Label;$examples.Text='Settings: viewmodel_fov, offsets, presetpos (0-2), cl_prefer_lefthanded. Binds: bind KEY switchhands';$examples.Location=[System.Drawing.Point]::new(16,42);$examples.Size=[System.Drawing.Size]::new(520,38);$examples.Anchor='Top,Left,Right';$examples.ForeColor=$MUTED;$form.Controls.Add($examples)
     $commandInput=New-Object System.Windows.Forms.TextBox;$commandInput.Multiline=$true;$commandInput.AcceptsReturn=$true;$commandInput.AcceptsTab=$false;$commandInput.ScrollBars='Vertical';$commandInput.Location=[System.Drawing.Point]::new(16,84);$commandInput.Size=[System.Drawing.Size]::new(520,150);$commandInput.Anchor='Top,Bottom,Left,Right';$commandInput.BackColor=$CARD;$commandInput.ForeColor=$BLACK;$form.Controls.Add($commandInput)
     $hint=New-Object System.Windows.Forms.Label;$hint.Text='Only pasted commands are updated; other saved or staged profile settings are preserved. Nothing is saved or synced until you use the profile editor buttons.';$hint.Location=[System.Drawing.Point]::new(16,242);$hint.Size=[System.Drawing.Size]::new(520,42);$hint.Anchor='Bottom,Left,Right';$hint.ForeColor=$MUTED;$form.Controls.Add($hint)
     $stage=New-Object System.Windows.Forms.Button;$stage.Text='Stage commands';$stage.Location=[System.Drawing.Point]::new(322,286);$stage.Size=[System.Drawing.Size]::new(118,30);$stage.Anchor='Bottom,Right';$stage.BackColor=$BLUE;$stage.ForeColor=$WHITE
     $cancel=New-Object System.Windows.Forms.Button;$cancel.Text='Cancel';$cancel.Location=[System.Drawing.Point]::new(450,286);$cancel.Size=[System.Drawing.Size]::new(86,30);$cancel.Anchor='Bottom,Right';$cancel.DialogResult=[System.Windows.Forms.DialogResult]::Cancel
     $form.Controls.Add($stage);$form.Controls.Add($cancel);$form.AcceptButton=$stage;$form.CancelButton=$cancel;$state=[pscustomobject]@{Commands=$null}
-    $stage.Add_Click({try{$commandText=[string]$commandInput.Text;[void](ConvertFrom-CafeCS2ViewmodelCommands -Text $commandText);$state.Commands=$commandText;$form.DialogResult=[System.Windows.Forms.DialogResult]::OK;$form.Close()}catch{[void][System.Windows.Forms.MessageBox]::Show($_.Exception.Message,'Viewmodel commands','OK','Warning')}}.GetNewClosure())
+    $stage.Add_Click({try{$commandText=[string]$commandInput.Text;[void](ConvertFrom-CafeCS2ViewmodelPaste -Text $commandText);$state.Commands=$commandText;$form.DialogResult=[System.Windows.Forms.DialogResult]::OK;$form.Close()}catch{[void][System.Windows.Forms.MessageBox]::Show($_.Exception.Message,'Viewmodel commands','OK','Warning')}}.GetNewClosure())
     try{if($form.ShowDialog($OwnerWindow) -eq [System.Windows.Forms.DialogResult]::OK){return $state.Commands};return $null}finally{$form.Dispose()}
 }
 function ConvertFrom-CafeCS2UserConvarsText {
@@ -4980,6 +5020,7 @@ function Get-CafeCS2BindGroup {
         '+jump'='Jump';'+duck'='Crouch';'+sprint'='Walk';'+use'='Use';'+reload'='Reload'
         '+voicerecord'='Voice';'+lookatweapon'='Inspect';'+showscores'='Scoreboard'
         '+attack'='Attack';'+attack2'='Secondary attack';'drop'='Drop'
+        'switchhands'='Viewmodel'
     }
     if($groups.ContainsKey($Command)){return [string]$groups[$Command]}
     if($Command -match '^slot([1-5])$'){return 'Weapon slots'}
@@ -5012,7 +5053,7 @@ function Remove-CafeCS2PendingVoiceBindActions {
     return ,$next
 }
 function ConvertFrom-CafeCS2UserKeysText {
-    param([Parameter(Mandatory=$true)][string]$Text,[string[]]$Groups=@('Movement','Jump','Crouch','Walk','Use','Voice','Reload','Inspect','Scoreboard','Attack','Secondary attack','Drop','Weapon slots','Grenade keys','Scroll wheel'),[switch]$IncludeUnbound)
+    param([Parameter(Mandatory=$true)][string]$Text,[string[]]$Groups=@('Movement','Jump','Crouch','Walk','Use','Voice','Reload','Inspect','Scoreboard','Attack','Secondary attack','Drop','Weapon slots','Grenade keys','Scroll wheel','Viewmodel'),[switch]$IncludeUnbound)
     if($Text.Length -gt 1048576){throw 'Saved CS2 binds file exceeds the 1 MB safety limit.'}
     $section=[regex]::Match($Text,'(?ims)"bindings"\s*\{(?<body>.*?)^\s*\}')
     if(-not $section.Success){throw 'Saved CS2 binds file has no recognized bindings section.'}
@@ -5033,7 +5074,7 @@ function ConvertFrom-CafeCS2UserKeysText {
     return $values
 }
 function Get-CafeCS2UserKeysCapture {
-    param($Source,[string[]]$Groups=@('Movement','Jump','Crouch','Walk','Use','Voice','Reload','Inspect','Scoreboard','Attack','Secondary attack','Drop','Weapon slots','Grenade keys','Scroll wheel'))
+    param($Source,[string[]]$Groups=@('Movement','Jump','Crouch','Walk','Use','Voice','Reload','Inspect','Scoreboard','Attack','Secondary attack','Drop','Weapon slots','Grenade keys','Scroll wheel','Viewmodel'))
     if(@(Get-Process -Name 'cs2' -ErrorAction SilentlyContinue).Count){throw 'Close CS2 before capture.'}
     $path=Join-Path (Split-Path -Parent $Source.Path) 'cs2_user_keys_0_slot0.vcfg'
     if(-not (Test-Path -LiteralPath $path -PathType Leaf)){throw ('No saved CS2 key bindings for Steam account '+$Source.AccountID)}
@@ -5215,7 +5256,7 @@ function Show-CafeCS2ExtrasDialog {
     $actionLabel=New-Object System.Windows.Forms.Label;$actionLabel.Text='CS2 action';$actionLabel.Location=[System.Drawing.Point]::new(150,464);$actionLabel.Size=[System.Drawing.Size]::new(360,22);$actionLabel.Anchor='Bottom,Left';$bindPage.Controls.Add($actionLabel)
     $keyInput=New-Object System.Windows.Forms.TextBox;$keyInput.Location=[System.Drawing.Point]::new(12,490);$keyInput.Size=[System.Drawing.Size]::new(130,28);$keyInput.Anchor='Bottom,Left'
     $actionChoice=New-Object System.Windows.Forms.ComboBox;$actionChoice.DropDownStyle='DropDownList';$actionChoice.Location=[System.Drawing.Point]::new(150,490);$actionChoice.Size=[System.Drawing.Size]::new(360,28);$actionChoice.Anchor='Bottom,Left';$actionChoice.BackColor=$CARD;$actionChoice.ForeColor=$BLACK
-    $actionOptions=@('+forward','+back','+moveleft','+moveright','+jump','+duck','+sprint','+use','+reload','+voicerecord','+lookatweapon','+showscores','+attack','+attack2','drop','slot1','slot2','slot3','slot4','slot5','slot6','slot7','slot8','slot9','slot10','invprev','invnext')
+    $actionOptions=@('+forward','+back','+moveleft','+moveright','+jump','+duck','+sprint','+use','+reload','+voicerecord','+lookatweapon','+showscores','+attack','+attack2','drop','slot1','slot2','slot3','slot4','slot5','slot6','slot7','slot8','slot9','slot10','switchhands','invprev','invnext')
     $wheelActions=@('invprev','invnext')
     foreach($wheelKey in @('MWHEELUP','MWHEELDOWN')){foreach($bindMap in @($effectiveBinds,$baselineBinds)){if($bindMap.Contains($wheelKey)){$wheelAction=[string]$bindMap[$wheelKey];if($wheelAction -and $wheelAction -notin $actionOptions -and $wheelAction -notmatch '[";\r\n]' -and $wheelAction.Length -le 180){$actionOptions+= $wheelAction;$wheelActions+=$wheelAction}}}}
     foreach($action in $actionOptions){$actionGroup=Get-CafeCS2BindGroup -Key 'KEY' -Command $action;if(-not $actionGroup -and $action -in $wheelActions){$actionGroup='Scroll wheel'};[void]$actionChoice.Items.Add(($actionGroup+' — '+$action))};if($actionChoice.Items.Count){$actionChoice.SelectedIndex=0}
@@ -5399,7 +5440,7 @@ function Invoke-CafeCS2CaptureReview {
     if($videoCapture){$source=[pscustomobject]@{Path=$videoCapture.Path;AccountID=$videoCapture.AccountID}}
     $convarGroups=@($Groups|Where-Object{$_ -in @('Sensitivity','Crosshair','Viewmodel','HUD and Radar','Audio')})
     if($convarGroups.Count){$convarCapture=Get-CafeCS2UserConvarsCapture -Source $source -Groups $convarGroups}
-    $bindGroups=@($Groups|Where-Object{$_ -in @('Movement','Jump','Crouch','Walk','Use','Voice','Reload','Inspect','Scoreboard','Attack','Secondary attack','Drop','Weapon slots','Grenade keys','Scroll wheel')})
+    $bindGroups=@($Groups|Where-Object{$_ -in @('Movement','Jump','Crouch','Walk','Use','Voice','Reload','Inspect','Scoreboard','Attack','Secondary attack','Drop','Weapon slots','Grenade keys','Scroll wheel','Viewmodel')})
     if($bindGroups.Count){$bindCapture=Get-CafeCS2UserKeysCapture -Source $source -Groups $bindGroups}
     $baselineCfg=if($bindCapture){Get-CS2ProfileBaselineCfgText}else{''}
     $needsCfg=($convarCapture -and $convarCapture.Values.Count) -or ($bindCapture -and $bindCapture.Values.Count)
@@ -7919,14 +7960,26 @@ function Show-ProfileEditor {
         try{
             $pastedCommands=Show-CafeCS2ViewmodelPasteDialog -ProfileName $ProfileName -OwnerWindow $dialog
             if($null -eq $pastedCommands){return}
+            $parsedPaste=ConvertFrom-CafeCS2ViewmodelPaste -Text ([string]$pastedCommands)
             $existingConvars=@{}
             if($capturedCS2ConvarsState.ContainsKey($ProfileName)){
                 foreach($name in $capturedCS2ConvarsState[$ProfileName].Keys){$existingConvars[[string]$name]=[string]$capturedCS2ConvarsState[$ProfileName][$name]}
             }
-            $capturedCS2ConvarsState[$ProfileName]=Merge-CafeCS2ViewmodelCommands -Text ([string]$pastedCommands) -Existing $existingConvars
+            foreach($name in $parsedPaste.Convars.Keys){$existingConvars[[string]$name]=[string]$parsedPaste.Convars[$name]}
+            $existingBinds=[ordered]@{}
+            if($parsedPaste.Binds.Count){
+                $selectedVoiceKey=[string]$voiceBox.Tag[$voiceBox.SelectedIndex]
+                if($capturedCS2BindsState.ContainsKey($ProfileName)){foreach($key in $capturedCS2BindsState[$ProfileName].Keys){$existingBinds[[string]$key.ToUpperInvariant()]=[string]$capturedCS2BindsState[$ProfileName][$key]}}
+                foreach($key in $parsedPaste.Binds.Keys){
+                    if($selectedVoiceKey -and [string]$key -ceq $selectedVoiceKey.ToUpperInvariant()){throw ('The '+$key+' key is currently selected for push-to-talk. Choose another key or change push-to-talk first.')}
+                    $existingBinds[[string]$key]=[string]$parsedPaste.Binds[$key]
+                }
+            }
+            if($existingConvars.Count){$capturedCS2ConvarsState[$ProfileName]=$existingConvars}
+            if($parsedPaste.Binds.Count){$capturedCS2BindsState[$ProfileName]=$existingBinds}
             $pendingSyncState[$ProfileName]=$true
-            $status.Text='Viewmodel commands staged for this profile. Choose Save Locally or Save & Sync to keep them.';$status.ForeColor=[System.Drawing.Color]::FromArgb(255,190,105)
-            Write-Log ('Staged pasted viewmodel commands for '+$ProfileName+'. No game files were changed or synced.')
+            $status.Text='Viewmodel settings and binds staged for this profile. Choose Save Locally or Save & Sync to keep them.';$status.ForeColor=[System.Drawing.Color]::FromArgb(255,190,105)
+            Write-Log ('Staged pasted viewmodel commands for '+$ProfileName+'; convars='+$parsedPaste.Convars.Count+'; binds='+$parsedPaste.Binds.Count+'. No game files were changed or synced.')
         }catch{
             Write-Log ('Could not stage pasted viewmodel commands for '+$ProfileName+': '+$_.Exception.Message) 'WARN'
             [void][System.Windows.Forms.MessageBox]::Show(('Could not stage viewmodel commands:`n'+$_.Exception.Message),'Viewmodel commands','OK','Warning')
