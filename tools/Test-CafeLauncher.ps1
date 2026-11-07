@@ -692,14 +692,9 @@ foreach($dashboardHelper in @('New-CafeRoundedPath','Update-CafeDashboardRounded
 $form=$null
 try {
     Invoke-Expression $psSource.Substring($dashboardStart,$dashboardEnd-$dashboardStart)
+    $form.CreateControl();$tabs.Size=New-Object System.Drawing.Size(360,300);$tabs.CreateControl()
     $tabBitmap=New-Object System.Drawing.Bitmap(360,300)
-    $tabGraphics=[System.Drawing.Graphics]::FromImage($tabBitmap)
-    try{
-        $drawArgs=[System.Windows.Forms.DrawItemEventArgs]::new($tabGraphics,$tabs.Font,[System.Drawing.Rectangle]::new(0,0,180,26),0,[System.Windows.Forms.DrawItemState]::Selected)
-        $drawMethod=$tabs.GetType().GetMethod('OnDrawItem',[Reflection.BindingFlags]::Instance -bor [Reflection.BindingFlags]::NonPublic)
-        if(-not $drawMethod){throw 'TabControl owner-draw entry point is unavailable.'}
-        [void]$drawMethod.Invoke($tabs,@($drawArgs))
-    }finally{$tabGraphics.Dispose();$tabBitmap.Dispose()}
+    try{$tabs.DrawToBitmap($tabBitmap,(New-Object System.Drawing.Rectangle(0,0,360,300)))}finally{$tabBitmap.Dispose()}
     if($tabs.TabPages.Count -ne 2 -or $profilesGrid.Controls.Count -ne 7){
         throw 'Dashboard must construct two tabs and exactly six profile cards.'
     }
