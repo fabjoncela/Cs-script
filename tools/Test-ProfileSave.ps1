@@ -38,6 +38,8 @@ function Write-Log {param([string]$Message,[string]$Level='INFO');Write-Host $Me
 $p=@{PointerSpeed=10;LogitechDPI=800;DisableAcceleration=$true;ApplyNvidia=$true;Width=1920;Height=1080;RefreshHz=360;Vibrance=75;Hue=-1;ScalingMode=2;CfgDownloadUrl='';LaunchApps=$true}
 $script:GamingProfiles=[ordered]@{FabMode=$p.Clone();OliMode=$p.Clone()}
 $script:PendingSync=@{FabMode=$false;OliMode=$false}
+$script:CapturedCS2Convars=@{}
+$script:CapturedCS2Binds=@{}
 $script:PendingCfgSensitivity=@{OliMode='1.35'}
 $script:VerifiedProfileState=@{OliMode=@{BlobSha=('a'*40);CommitSha=('b'*40)}}
 $script:GraphicsPresets=[ordered]@{OliMode=[pscustomobject]@{SchemaVersion=1;ProfileName='OliMode';RefreshPolicy='Highest';ScalingMode=2;Settings=[ordered]@{Width=1280;Height=960;MSAASamples=8}}}
