@@ -22,6 +22,8 @@ if(-not $workerFunction){throw 'Compiled graphics history worker factory not fou
 Invoke-Expression $workerFunction.Extent.Text
 $uiThread=[Threading.Thread]::CurrentThread.ManagedThreadId
 $worker=New-CafeGraphicsHistoryWorker
+$request=@{ProfileName='TestProfile';StatusLabel='test-control-context'}
+$worker.RequestContext=$request
 $worker.RunWorkerAsync('http://127.0.0.1:1/graphics-history-test')
 $deadline=[DateTime]::UtcNow.AddSeconds(8)
 while($worker.IsBusy -and [DateTime]::UtcNow -lt $deadline){
@@ -30,6 +32,8 @@ while($worker.IsBusy -and [DateTime]::UtcNow -lt $deadline){
 }
 if($worker.IsBusy){throw 'Background HTTP worker did not complete within eight seconds.'}
 if(-not $worker.ErrorText){throw 'Expected the local test endpoint to refuse the HTTP connection.'}
+if(-not [object]::ReferenceEquals($worker.RequestContext,$request)){throw 'The HTTP worker did not retain its UI request context.'}
+if($worker.RequestUri -cne 'http://127.0.0.1:1/graphics-history-test'){throw 'The HTTP worker did not record the request URI.'}
 if($worker.WorkerThreadId -eq $uiThread){throw 'HTTP request ran on the UI thread instead of a worker thread.'}
 $timingEntries=@([CafeTimingTrace]::Snapshot())
 $timedRequest=$timingEntries|Where-Object {$_.Name -eq 'GitHub graphics history'}|Select-Object -Last 1

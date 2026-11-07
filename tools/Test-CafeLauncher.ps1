@@ -98,7 +98,7 @@ foreach($requiredEditorFeature in @(
     'Stretch / scaling',
     'Earlier GitHub file revisions (commit ID shown)',
     'Restore selected version',
-    'Get-ProfileGraphicsHistory -ProfileName $ProfileName -ForceRefresh -ResponseJson ([string]$sender.ResultText)',
+    'Get-ProfileGraphicsHistory -ProfileName $profileForHistory -ForceRefresh -ResponseJson ([string]$sender.ResultText)',
     'Get-ProfileGraphicsVersion -ProfileName $ProfileName -Version $version',
     '$graphicsPresetState[$ProfileName]=$graphicsPreset',
     'GraphicsSettings',
@@ -403,7 +403,7 @@ if($script:TestWebsiteUrls.Count -ne 7 -or $script:TestSpotifyCalls -ne 1){throw
 # Preview UI: fixed-coordinate label overlays have been replaced by isolated
 # table cells on distinct tabs, so labels cannot cover neighboring inputs.
 $editorSource=$definitions['Show-ProfileEditor']
-foreach($historyFunction in @('ConvertTo-CafeGraphicsHistoryEntry','Get-CachedProfileGraphicsHistory','Get-ProfileGraphicsHistory','Get-ProfileGraphicsVersion','New-CafeGraphicsHistoryWorker')){
+foreach($historyFunction in @('ConvertTo-CafeGraphicsHistoryEntry','Get-CachedProfileGraphicsHistory','Get-ProfileGraphicsHistory','Set-CafeGraphicsHistoryUi','Get-ProfileGraphicsVersion','New-CafeGraphicsHistoryWorker')){
     if(-not $definitions.ContainsKey($historyFunction)){
         throw ('GitHub graphics history helper missing: '+$historyFunction)
     }
@@ -414,13 +414,17 @@ if($historyLoadStart -lt 0 -or $historyLoadEnd -le $historyLoadStart){throw 'Can
 $historyLoadBody=$editorSource.Substring($historyLoadStart,$historyLoadEnd-$historyLoadStart)
 if(-not $editorSource.Contains('$worker.Add_RunWorkerCompleted({') -or
    $editorSource -notmatch '\$worker\.RunWorkerAsync\(\$historyUri\)' -or
+   $editorSource -notmatch '\$worker\.RequestContext=\$historyUiContext' -or
+   $editorSource -notmatch '\$request=\$sender\.RequestContext' -or
+   $editorSource -notmatch 'Set-CafeGraphicsHistoryUi -Context \$request -ErrorMessage \$message' -or
    $editorSource -notmatch '\$historyState\.Worker\.IsBusy' -or
    $editorSource -match 'PollTimer' -or
-   $definitions['New-CafeGraphicsHistoryWorker'] -notmatch 'class CafeGraphicsHistoryBackgroundWorker : BackgroundWorker'){
+   $definitions['New-CafeGraphicsHistoryWorker'] -notmatch 'class CafeGraphicsHistoryBackgroundWorker : BackgroundWorker' -or
+   $definitions['New-CafeGraphicsHistoryWorker'] -notmatch 'public object RequestContext \{ get; set; \}'){
     throw 'Graphics history must load in the background without blocking its button handler.'
 }
 if($editorSource -notmatch 'You can continue using the editor' -or
-   $editorSource -notmatch '\$dialog\.IsDisposed -or \$dialog\.Disposing'){
+   $editorSource -notmatch '\$historyDialog -or \$historyDialog\.IsDisposed -or \$historyDialog\.Disposing'){
     throw 'Background history loading must keep the editor responsive and ignore completion after close.'
 }
 $restoreStart=$editorSource.IndexOf('$restoreHistory.Add_Click({',[StringComparison]::Ordinal)
@@ -462,6 +466,35 @@ foreach($fn in @('New-EditorTabGrid','Add-EditorTabField','New-EditorTabNumber',
 }
 # Construct the field layout without opening CafeLauncher or touching devices.
 Add-Type -AssemblyName System.Windows.Forms
+Invoke-Expression $definitions['Set-CafeGraphicsHistoryUi']
+$historyUiTestContext=@{
+    HistoryChoice=(New-Object System.Windows.Forms.ComboBox)
+    LoadButton=(New-Object System.Windows.Forms.Button)
+    RestoreButton=(New-Object System.Windows.Forms.Button)
+    StatusLabel=(New-Object System.Windows.Forms.Label)
+    HistoryState=[pscustomobject]@{Loaded=$false}
+}
+try{
+    $historyUiTestContext.HistoryChoice.Tag=[object[]]@()
+    $historyUiTestContext.LoadButton.Enabled=$false
+    Set-CafeGraphicsHistoryUi -Context $historyUiTestContext -ErrorMessage 'HTTP 503 test failure'
+    if($historyUiTestContext.StatusLabel.Text -notmatch 'History load failed: HTTP 503' -or
+       -not $historyUiTestContext.LoadButton.Enabled -or $historyUiTestContext.RestoreButton.Enabled){
+        throw 'Graphics history error handling must report failures, restore the Load button, and keep unavailable history disabled.'
+    }
+    $historyUiTestContext.LoadButton.Enabled=$false
+    Set-CafeGraphicsHistoryUi -Context $historyUiTestContext -NoHistory
+    if($historyUiTestContext.HistoryChoice.Items.Count -ne 1 -or
+       $historyUiTestContext.HistoryChoice.Enabled -or
+       $historyUiTestContext.RestoreButton.Enabled -or
+       -not $historyUiTestContext.LoadButton.Enabled -or
+       -not $historyUiTestContext.HistoryState.Loaded){
+        throw 'A missing or empty GitHub history path must show an empty-history state and permit retry.'
+    }
+}finally{
+    $historyUiTestContext.HistoryChoice.Dispose();$historyUiTestContext.LoadButton.Dispose()
+    $historyUiTestContext.RestoreButton.Dispose();$historyUiTestContext.StatusLabel.Dispose()
+}
 if($psSource -notmatch '(?s)Add-Type -ReferencedAssemblies @\(''System.Windows.Forms'',''System.Drawing''\) -TypeDefinition @''\r?\n(?<editorControls>.*?)\r?\n''@'){
     throw 'Profile editor wheel-aware controls were not found.'
 }

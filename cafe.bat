@@ -5682,6 +5682,48 @@ function Get-ProfileGraphicsHistory {
     }catch{Write-Log ('Graphics history cache warning for '+$ProfileName+': '+$_.Exception.Message) 'WARN'}
     return @($versions.ToArray())
 }
+function Set-CafeGraphicsHistoryUi {
+    param([Parameter(Mandatory=$true)][System.Collections.IDictionary]$Context,[object[]]$Versions=@(),[string]$ErrorMessage='',[switch]$NoHistory)
+    $historyChoice=$Context['HistoryChoice'];$loadButton=$Context['LoadButton'];$restoreButton=$Context['RestoreButton'];$statusLabel=$Context['StatusLabel']
+    if($historyChoice -isnot [System.Windows.Forms.ComboBox] -or
+       $loadButton -isnot [System.Windows.Forms.Button] -or
+       $restoreButton -isnot [System.Windows.Forms.Button] -or
+       $statusLabel -isnot [System.Windows.Forms.Label]){
+        throw 'Graphics history UI context does not contain the expected WinForms controls.'
+    }
+    if($ErrorMessage){
+        $statusLabel.Text=('History load failed: '+$ErrorMessage)
+        $statusLabel.ForeColor=[System.Drawing.Color]::FromArgb(255,190,105)
+        $available=@($historyChoice.Tag)
+        $historyChoice.Enabled=($available.Count -gt 0)
+        $restoreButton.Enabled=($available.Count -gt 0)
+    }else{
+        $historyChoice.Items.Clear()
+        $historyChoice.Tag=[object[]]$Versions
+        if($NoHistory -or $Versions.Count -eq 0){
+            [void]$historyChoice.Items.Add('No earlier GitHub versions found')
+            $historyChoice.Enabled=$false
+            $restoreButton.Enabled=$false
+            $historyChoice.SelectedIndex=0
+            if($NoHistory){$statusLabel.Text='No earlier GitHub versions were found for this profile (GitHub returned 404 for its history path).'}
+            else{$statusLabel.Text='No earlier synced graphics versions were found for this profile.'}
+        }else{
+            foreach($version in $Versions){
+                $dateLabel=[string]$version.DateUtc
+                try{$dateLabel=([DateTimeOffset]::Parse([string]$version.DateUtc)).ToLocalTime().ToString('yyyy-MM-dd HH:mm')}catch{}
+                [void]$historyChoice.Items.Add(($dateLabel+' — '+[string]$version.Message+' ['+$version.Sha.Substring(0,7)+']'))
+            }
+            $historyChoice.Enabled=$true
+            $historyChoice.SelectedIndex=0
+            $restoreButton.Enabled=$true
+            $statusLabel.Text=('Loaded '+$Versions.Count+' earlier version(s). Select one and restore it into the editor.')
+        }
+        if($Context.Contains('HistoryState')){$Context['HistoryState'].Loaded=$true}
+        $statusLabel.ForeColor=[System.Drawing.Color]::FromArgb(255,190,105)
+    }
+    $loadButton.Text='Refresh history'
+    $loadButton.Enabled=$true
+}
 function New-CafeGraphicsHistoryWorker {
     if(-not ('CafeGraphicsHistoryBackgroundWorker' -as [type])){
         Add-Type -Language CSharp -TypeDefinition @'
@@ -5695,6 +5737,9 @@ public sealed class CafeGraphicsHistoryBackgroundWorker : BackgroundWorker {
     public string WorkerName { get { return "GraphicsHistory"; } }
     public string ResultText { get; private set; }
     public string ErrorText { get; private set; }
+    public string RequestUri { get; private set; }
+    public int HttpStatusCode { get; private set; }
+    public object RequestContext { get; set; }
     public string RateLimitRemaining { get; private set; }
     public string RateLimitLimit { get; private set; }
     public int WorkerThreadId { get; private set; }
@@ -5709,10 +5754,12 @@ public sealed class CafeGraphicsHistoryBackgroundWorker : BackgroundWorker {
         this.timingComplete = timingComplete;
         DoWork += delegate(object sender, DoWorkEventArgs e) {
             WorkerThreadId = System.Threading.Thread.CurrentThread.ManagedThreadId;
-            long timingId = timingStart("HTTP", "GitHub graphics history", (string)e.Argument);
+            RequestUri = e.Argument as string;
+            if (String.IsNullOrWhiteSpace(RequestUri)) throw new ArgumentException("Graphics history request URL is missing.");
+            long timingId = timingStart("HTTP", "GitHub graphics history", RequestUri);
             int httpStatus = 0;
             try {
-                var request = (HttpWebRequest)WebRequest.Create((string)e.Argument);
+                var request = (HttpWebRequest)WebRequest.Create(RequestUri);
                 request.Method = "GET";
                 request.UserAgent = "CafeLauncher-Graphics-History";
                 request.Accept = "application/vnd.github+json";
@@ -5722,6 +5769,7 @@ public sealed class CafeGraphicsHistoryBackgroundWorker : BackgroundWorker {
                 using (var response = (HttpWebResponse)request.GetResponse())
                 using (var reader = new StreamReader(response.GetResponseStream(), Encoding.UTF8)) {
                     httpStatus = (int)response.StatusCode;
+                    HttpStatusCode = httpStatus;
                     CaptureRateLimit(response);
                     ResultText = reader.ReadToEnd();
                 }
@@ -5730,7 +5778,7 @@ public sealed class CafeGraphicsHistoryBackgroundWorker : BackgroundWorker {
                 var webError = error as WebException;
                 var response = webError == null ? null : webError.Response as HttpWebResponse;
                 if (response != null) {
-                    using (response) { httpStatus = (int)response.StatusCode; CaptureRateLimit(response); }
+                    using (response) { httpStatus = (int)response.StatusCode; HttpStatusCode = httpStatus; CaptureRateLimit(response); }
                 }
                 timingComplete(timingId, "Failed", httpStatus);
                 ErrorText = error.Message;
@@ -7780,37 +7828,17 @@ function Show-ProfileEditor {
     }.GetNewClosure())
 
     $historyState=[pscustomobject]@{Loaded=$false;Worker=$null}
-    $showGraphicsHistory={
-        param($versions)
-        $historyChoice.Items.Clear()
-        $historyChoice.Tag=[object[]]$versions
-        if($versions.Count -eq 0){
-            [void]$historyChoice.Items.Add('No earlier GitHub versions found')
-            $historyChoice.Enabled=$false
-            $restoreHistory.Enabled=$false
-            $historyChoice.SelectedIndex=0
-            $status.Text='No earlier synced graphics versions were found for this profile.'
-        }else{
-            foreach($version in $versions){
-                $dateLabel=[string]$version.DateUtc
-                try{$dateLabel=([DateTimeOffset]::Parse([string]$version.DateUtc)).ToLocalTime().ToString('yyyy-MM-dd HH:mm')}catch{}
-                [void]$historyChoice.Items.Add(($dateLabel+' — '+[string]$version.Message+' ['+$version.Sha.Substring(0,7)+']'))
-            }
-            $historyChoice.Enabled=$true
-            $historyChoice.SelectedIndex=0
-            $restoreHistory.Enabled=$true
-            $status.Text=('Loaded '+$versions.Count+' earlier version(s). Select one and restore it into the editor.')
-        }
-        $historyState.Loaded=$true
-        $loadHistory.Text='Refresh history'
-        $status.ForeColor=[System.Drawing.Color]::FromArgb(255,190,105)
-    }.GetNewClosure()
+    $historyUiContext=@{
+        ProfileName=$ProfileName;Dialog=$dialog;LoadButton=$loadHistory
+        HistoryChoice=$historyChoice;RestoreButton=$restoreHistory;StatusLabel=$status
+        HistoryState=$historyState
+    }
     $loadHistory.Add_Click({
         if($historyState.Worker -and $historyState.Worker.IsBusy){return}
         if(-not $historyState.Loaded){
             try{
                 $cachedHistory=Get-CachedProfileGraphicsHistory -ProfileName $ProfileName
-                if($cachedHistory.Found){[void](& $showGraphicsHistory @($cachedHistory.Versions));return}
+                if($cachedHistory.Found){Set-CafeGraphicsHistoryUi -Context $historyUiContext -Versions ([object[]]$cachedHistory.Versions);return}
             }catch{Write-Log ('Could not read cached graphics history for '+$ProfileName+': '+$_.Exception.Message) 'WARN'}
         }
         $encodedPath=[Uri]::EscapeDataString('graphics/'+$ProfileName+'.json')
@@ -7824,37 +7852,49 @@ function Show-ProfileEditor {
         try{
             $worker=New-CafeGraphicsHistoryWorker
             $historyState.Worker=$worker
+            $worker.RequestContext=$historyUiContext
             $worker.Add_RunWorkerCompleted({
                 param($sender,$eventArgs)
-                if($dialog.IsDisposed -or $dialog.Disposing){return}
+                $request=$sender.RequestContext
+                if($request -isnot [System.Collections.IDictionary]){
+                    Write-Log 'Graphics history completion is missing its UI request context.' 'ERROR'
+                    return
+                }
+                $historyDialog=$request['Dialog']
+                $profileForHistory=[string]$request['ProfileName']
                 try{
+                    if($null -eq $historyDialog -or $historyDialog.IsDisposed -or $historyDialog.Disposing){return}
                     if($eventArgs.Error){throw $eventArgs.Error}
                     if($sender.RateLimitRemaining){
                         Set-CafeGitHubRateLimitDisplay -Remaining ([string]$sender.RateLimitRemaining) `
                             -Limit ([string]$sender.RateLimitLimit)
                     }
-                    if($sender.ErrorText){throw ([System.Exception]::new([string]$sender.ErrorText))}
-                    $versions=@(Get-ProfileGraphicsHistory -ProfileName $ProfileName -ForceRefresh -ResponseJson ([string]$sender.ResultText))
-                    [void](& $showGraphicsHistory $versions)
+                    if([int]$sender.HttpStatusCode -eq 404){
+                        Write-Log ('GitHub returned 404 for graphics history for '+$profileForHistory+'; no prior versions are available from this path. uri='+[string]$sender.RequestUri) 'WARN'
+                        Set-CafeGraphicsHistoryUi -Context $request -NoHistory
+                    }elseif($sender.ErrorText){
+                        throw ([System.Exception]::new([string]$sender.ErrorText))
+                    }else{
+                        $versions=@(Get-ProfileGraphicsHistory -ProfileName $profileForHistory -ForceRefresh -ResponseJson ([string]$sender.ResultText))
+                        Set-CafeGraphicsHistoryUi -Context $request -Versions $versions
+                    }
                 }catch{
                     $message=$_.Exception.Message
-                    Write-Log ('Could not load GitHub graphics history for '+$ProfileName+': '+$message) 'WARN'
+                    Write-Log ('Could not load GitHub graphics history for '+$profileForHistory+': '+$message+'; httpStatus='+[string]$sender.HttpStatusCode+'; uri='+[string]$sender.RequestUri) 'WARN'
                     try{
-                        $status.Text=('History load failed: '+$message)
-                        $status.ForeColor=[System.Drawing.Color]::FromArgb(255,190,105)
-                        $available=@($historyChoice.Tag)
-                        $historyChoice.Enabled=($available.Count -gt 0)
-                        $restoreHistory.Enabled=($available.Count -gt 0)
-                    }catch{Write-Log ('Could not update graphics history error state for '+$ProfileName+': '+$_.Exception.Message) 'WARN'}
+                        Set-CafeGraphicsHistoryUi -Context $request -ErrorMessage $message
+                    }catch{Write-Log ('Could not update graphics history error state for '+$profileForHistory+': '+$_.Exception.Message) 'WARN'}
                 }finally{
-                    if(-not $dialog.IsDisposed -and -not $dialog.Disposing){
+                    if($historyDialog -and -not $historyDialog.IsDisposed -and -not $historyDialog.Disposing){
                         try{
-                            $loadHistory.Enabled=$true
-                            $dialog.Cursor=[System.Windows.Forms.Cursors]::Default
-                        }catch{Write-Log ('Could not restore graphics history UI for '+$ProfileName+': '+$_.Exception.Message) 'WARN'}
+                            $request['LoadButton'].Enabled=$true
+                            $historyDialog.Cursor=[System.Windows.Forms.Cursors]::Default
+                        }catch{Write-Log ('Could not restore graphics history UI for '+$profileForHistory+': '+$_.Exception.Message) 'WARN'}
                     }
+                    $request['HistoryState'].Worker=$null
+                    $sender.Dispose()
                 }
-            }.GetNewClosure())
+            })
             $worker.RunWorkerAsync($historyUri)
         }catch{
             $historyState.Worker=$null
