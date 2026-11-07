@@ -4,7 +4,7 @@ start "" powershell.exe -NoProfile -ExecutionPolicy Bypass -STA -WindowStyle Hid
 exit /b
 
 # POWERSHELL_GUI
-# CAFE_RELEASE=2026.11.07.1
+# CAFE_RELEASE=2026.11.07.2
 
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
@@ -3271,7 +3271,31 @@ function Restart-CafeLauncherAfterUpdate {
     param([Parameter(Mandatory=$true)][string]$Path)
     try{
         if(-not (Test-Path -LiteralPath $Path -PathType Leaf)){throw 'Updated launcher file was not found.'}
-        Start-Process -FilePath $Path -ErrorAction Stop | Out-Null
+        $powerShellPath=Join-Path $PSHOME 'powershell.exe'
+        if(-not (Test-Path -LiteralPath $powerShellPath -PathType Leaf)){throw 'Windows PowerShell could not be found for restart.'}
+        $pathBase64=[Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($Path))
+        $bootstrap=@'
+$sourcePath=[Text.Encoding]::Unicode.GetString([Convert]::FromBase64String('__CAFE_PATH_BASE64__'))
+$env:CAFE_SCRIPT=$sourcePath
+try {
+    $lines=[IO.File]::ReadAllLines($env:CAFE_SCRIPT)
+    $marker=[Array]::IndexOf($lines,'# POWERSHELL_GUI')
+    if($marker -lt 0 -or $marker -ge ($lines.Length-1)){throw 'PowerShell script marker not found'}
+    $code=($lines[($marker+1)..($lines.Length-1)] -join [Environment]::NewLine)
+    $tokens=$null;$errors=$null
+    [void][System.Management.Automation.Language.Parser]::ParseInput($code,[ref]$tokens,[ref]$errors)
+    if($errors.Count -gt 0){throw ('PowerShell syntax: '+$errors[0].ToString())}
+    Invoke-Expression $code
+} catch {
+    $message=$_.ToString()+' '+$_.ScriptStackTrace
+    try{[IO.File]::WriteAllText((Join-Path $env:TEMP 'CafeLauncher-startup-error.log'),$message)}catch{}
+    try{Add-Content -LiteralPath (Join-Path $env:TEMP 'CafeLauncher.log') -Value ((Get-Date -Format 'HH:mm:ss')+' [ERROR] Launcher startup failed: '+$message) -Encoding UTF8}catch{}
+    try{Add-Type -AssemblyName System.Windows.Forms;[void][System.Windows.Forms.MessageBox]::Show($message,'CafeLauncher Startup Error')}catch{}
+}
+'@
+        $bootstrap=$bootstrap.Replace('__CAFE_PATH_BASE64__',$pathBase64)
+        $encodedBootstrap=[Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($bootstrap))
+        Start-Process -FilePath $powerShellPath -ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass','-STA','-WindowStyle','Hidden','-EncodedCommand',$encodedBootstrap) -ErrorAction Stop | Out-Null
         Write-Log ('Relaunching updated CafeLauncher from '+$Path+'.')
         [System.Windows.Forms.Application]::Exit()
     }catch{

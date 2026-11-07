@@ -573,7 +573,10 @@ if($definitions['Check-CafeLauncherUpdates'] -notmatch '\$runningReleaseText=Get
    $definitions['Check-CafeLauncherUpdates'] -notmatch 'Newer Build Already Installed' -or
    $definitions['Check-CafeLauncherUpdates'] -notmatch 'Click OK to restart' -or
    $definitions['Check-CafeLauncherUpdates'] -notmatch 'Restart-CafeLauncherAfterUpdate -Path \$source' -or
-   $definitions['Restart-CafeLauncherAfterUpdate'] -notmatch 'Start-Process -FilePath \$Path' -or
+   $definitions['Restart-CafeLauncherAfterUpdate'] -notmatch "Join-Path \`$PSHOME 'powershell\.exe'" -or
+   $definitions['Restart-CafeLauncherAfterUpdate'] -notmatch '\-EncodedCommand' -or
+   $definitions['Restart-CafeLauncherAfterUpdate'] -notmatch '\$env:CAFE_SCRIPT=\$sourcePath' -or
+   $definitions['Restart-CafeLauncherAfterUpdate'] -match 'Start-Process -FilePath \$Path' -or
    $definitions['Restart-CafeLauncherAfterUpdate'] -notmatch '\[System\.Windows\.Forms\.Application\]::Exit\(\)'){
     throw 'Update confirmation must relaunch the installed BAT and close the old launcher.'
 }
