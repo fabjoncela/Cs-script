@@ -7732,31 +7732,34 @@ function Show-ProfileEditor {
         }finally{$dialog.Cursor=[System.Windows.Forms.Cursors]::Default}
     }.GetNewClosure())
 
-    $historyState=[pscustomobject]@{Loaded=$false;Worker=$null}
+    $historyState=[pscustomobject]@{
+        Loaded=$false;Worker=$null;LoadButton=$loadHistory;HistoryChoice=$historyChoice
+        RestoreButton=$restoreHistory;StatusLabel=$status
+    }
     $showGraphicsHistory={
         param($versions)
-        $historyChoice.Items.Clear()
-        $historyChoice.Tag=[object[]]$versions
+        $historyState.HistoryChoice.Items.Clear()
+        $historyState.HistoryChoice.Tag=[object[]]$versions
         if($versions.Count -eq 0){
-            [void]$historyChoice.Items.Add('No earlier GitHub versions found')
-            $historyChoice.Enabled=$false
-            $restoreHistory.Enabled=$false
-            $historyChoice.SelectedIndex=0
-            $status.Text='No earlier synced graphics versions were found for this profile.'
+            [void]$historyState.HistoryChoice.Items.Add('No earlier GitHub versions found')
+            $historyState.HistoryChoice.Enabled=$false
+            $historyState.RestoreButton.Enabled=$false
+            $historyState.HistoryChoice.SelectedIndex=0
+            $historyState.StatusLabel.Text='No earlier synced graphics versions were found for this profile.'
         }else{
             foreach($version in $versions){
                 $dateLabel=[string]$version.DateUtc
                 try{$dateLabel=([DateTimeOffset]::Parse([string]$version.DateUtc)).ToLocalTime().ToString('yyyy-MM-dd HH:mm')}catch{}
-                [void]$historyChoice.Items.Add(($dateLabel+' — '+[string]$version.Message+' ['+$version.Sha.Substring(0,7)+']'))
+                [void]$historyState.HistoryChoice.Items.Add(($dateLabel+' — '+[string]$version.Message+' ['+$version.Sha.Substring(0,7)+']'))
             }
-            $historyChoice.Enabled=$true
-            $historyChoice.SelectedIndex=0
-            $restoreHistory.Enabled=$true
-            $status.Text=('Loaded '+$versions.Count+' earlier version(s). Select one and restore it into the editor.')
+            $historyState.HistoryChoice.Enabled=$true
+            $historyState.HistoryChoice.SelectedIndex=0
+            $historyState.RestoreButton.Enabled=$true
+            $historyState.StatusLabel.Text=('Loaded '+$versions.Count+' earlier version(s). Select one and restore it into the editor.')
         }
         $historyState.Loaded=$true
-        $loadHistory.Text='Refresh history'
-        $status.ForeColor=[System.Drawing.Color]::FromArgb(255,190,105)
+        $historyState.LoadButton.Text='Refresh history'
+        $historyState.StatusLabel.ForeColor=[System.Drawing.Color]::FromArgb(255,190,105)
     }.GetNewClosure()
     $loadHistory.Add_Click({
         if($historyState.Worker -and $historyState.Worker.IsBusy){return}
@@ -7769,11 +7772,11 @@ function Show-ProfileEditor {
         $encodedPath=[Uri]::EscapeDataString('graphics/'+$ProfileName+'.json')
         $encodedBranch=[Uri]::EscapeDataString([string]$script:GithubBranch)
         $historyUri='https://api.github.com/repos/'+$script:GithubRepo+'/commits?path='+$encodedPath+'&per_page=4&sha='+$encodedBranch
-        $loadHistory.Enabled=$false
-        $historyChoice.Enabled=$false
-        $restoreHistory.Enabled=$false
-        $status.Text='Loading GitHub graphics history in the background. You can continue using the editor.'
-        $status.ForeColor=$MUTED
+        $historyState.LoadButton.Enabled=$false
+        $historyState.HistoryChoice.Enabled=$false
+        $historyState.RestoreButton.Enabled=$false
+        $historyState.StatusLabel.Text='Loading GitHub graphics history in the background. You can continue using the editor.'
+        $historyState.StatusLabel.ForeColor=$MUTED
         try{
             $worker=New-CafeGraphicsHistoryWorker
             $historyState.Worker=$worker
@@ -7792,27 +7795,31 @@ function Show-ProfileEditor {
                 }catch{
                     $message=$_.Exception.Message
                     Write-Log ('Could not load GitHub graphics history for '+$ProfileName+': '+$message) 'WARN'
-                    $status.Text=('History load failed: '+$message)
-                    $status.ForeColor=[System.Drawing.Color]::FromArgb(255,190,105)
-                    $available=@($historyChoice.Tag)
-                    $historyChoice.Enabled=($available.Count -gt 0)
-                    $restoreHistory.Enabled=($available.Count -gt 0)
+                    try{
+                        $historyState.StatusLabel.Text=('History load failed: '+$message)
+                        $historyState.StatusLabel.ForeColor=[System.Drawing.Color]::FromArgb(255,190,105)
+                        $available=@($historyState.HistoryChoice.Tag)
+                        $historyState.HistoryChoice.Enabled=($available.Count -gt 0)
+                        $historyState.RestoreButton.Enabled=($available.Count -gt 0)
+                    }catch{Write-Log ('Could not update graphics history error state for '+$ProfileName+': '+$_.Exception.Message) 'WARN'}
                 }finally{
                     if(-not $dialog.IsDisposed -and -not $dialog.Disposing){
-                        $loadHistory.Enabled=$true
-                        $dialog.Cursor=[System.Windows.Forms.Cursors]::Default
+                        try{
+                            $historyState.LoadButton.Enabled=$true
+                            $dialog.Cursor=[System.Windows.Forms.Cursors]::Default
+                        }catch{Write-Log ('Could not restore graphics history UI for '+$ProfileName+': '+$_.Exception.Message) 'WARN'}
                     }
                 }
             }.GetNewClosure())
             $worker.RunWorkerAsync($historyUri)
         }catch{
             $historyState.Worker=$null
-            $loadHistory.Enabled=$true
-            $available=@($historyChoice.Tag)
-            $historyChoice.Enabled=($available.Count -gt 0)
-            $restoreHistory.Enabled=($available.Count -gt 0)
-            $status.Text=('Could not start history load: '+$_.Exception.Message)
-            $status.ForeColor=[System.Drawing.Color]::FromArgb(255,190,105)
+            $historyState.LoadButton.Enabled=$true
+            $available=@($historyState.HistoryChoice.Tag)
+            $historyState.HistoryChoice.Enabled=($available.Count -gt 0)
+            $historyState.RestoreButton.Enabled=($available.Count -gt 0)
+            $historyState.StatusLabel.Text=('Could not start history load: '+$_.Exception.Message)
+            $historyState.StatusLabel.ForeColor=[System.Drawing.Color]::FromArgb(255,190,105)
         }
     }.GetNewClosure())
     $restoreHistory.Add_Click({
