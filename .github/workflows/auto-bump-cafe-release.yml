@@ -1,0 +1,53 @@
+name: Auto-bump CafeLauncher release
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'cafe.bat'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: cafe-release-bump-main
+  cancel-in-progress: false
+
+jobs:
+  bump-release:
+    name: Bump release when launcher changes
+    runs-on: windows-latest
+    steps:
+      - name: Check out the latest main
+        uses: actions/checkout@v7
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Bump release if the launcher change forgot
+        shell: powershell
+        env:
+          PREVIOUS_COMMIT: ${{ github.event.before }}
+        run: |
+          & "$env:GITHUB_WORKSPACE\tools\Auto-Bump-CafeRelease.ps1" -PreviousCommit $env:PREVIOUS_COMMIT
+
+      - name: Validate launcher and generated release metadata
+        shell: powershell
+        run: |
+          & "$env:GITHUB_WORKSPACE\tools\Test-CafeLauncher.ps1"
+          & "$env:GITHUB_WORKSPACE\tools\Test-ContextFreshness.ps1"
+
+      - name: Commit and push an automatic release bump
+        shell: powershell
+        run: |
+          git add -- cafe.bat README.md context.md
+          git diff --cached --quiet
+          if ($LASTEXITCODE -eq 0) {
+            Write-Host 'Release marker and generated documentation are already current.'
+            exit 0
+          }
+          $release = [regex]::Match((Get-Content -LiteralPath cafe.bat -Raw), '(?m)^# CAFE_RELEASE=(\d{4}\.\d{2}\.\d{2}\.\d+)').Groups[1].Value
+          git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' commit -m "chore: bump CafeLauncher release to $release"
+          if ($LASTEXITCODE -ne 0) { throw 'Could not commit the automatic release update.' }
+          git push origin HEAD:main
+          if ($LASTEXITCODE -ne 0) { throw 'Could not push the automatic release update to main.' }

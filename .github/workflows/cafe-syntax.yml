@@ -37,8 +37,10 @@ on:
       - 'AGENTS.md'
       - '.githooks/**'
       - 'tools/Install-GitHooks.ps1'
+      - 'tools/Auto-Bump-CafeRelease.ps1'
       - 'graphics/**'
       - '.github/workflows/cafe-syntax.yml'
+      - '.github/workflows/auto-bump-cafe-release.yml'
   push:
     branches: [main]
     paths:
@@ -76,8 +78,10 @@ on:
       - 'AGENTS.md'
       - '.githooks/**'
       - 'tools/Install-GitHooks.ps1'
+      - 'tools/Auto-Bump-CafeRelease.ps1'
       - 'graphics/**'
       - '.github/workflows/cafe-syntax.yml'
+      - '.github/workflows/auto-bump-cafe-release.yml'
   workflow_dispatch:
 
 permissions:

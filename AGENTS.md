@@ -4,6 +4,6 @@ Before making repository changes, read [`context.md`](./context.md) and inspect 
 
 Preserve unrelated user files and edits. Do not use destructive Git cleanup/reset commands. Keep `cafe.bat` in Windows CRLF format. When changing `graphics/ApplyGraphics.ps1`, update its pinned Git blob SHA in `cafe.bat` and bump `CAFE_RELEASE`.
 
-Before commits, merges, or pushes, the configured `.githooks` refreshes/checks the generated release metadata in `context.md`. If a hook refreshes it, review and commit the context change, then retry. New clones should run `tools/Install-GitHooks.ps1`. CI also checks context freshness.
+Before commits, merges, or pushes, the configured `.githooks` refreshes/checks the generated release metadata in `context.md`. If a hook refreshes it, review and commit the context change, then retry. New clones should run `tools/Install-GitHooks.ps1`. CI also checks context freshness. On `main`, GitHub Actions automatically bumps `CAFE_RELEASE` when a `cafe.bat` change arrives without a version bump, then validates and commits the generated release metadata. When changing `graphics/ApplyGraphics.ps1`, update its pinned Git blob SHA in `cafe.bat`; the same release workflow handles the version bump if needed.
 
 Do not push, merge, or change remote profile data unless the user requested it. Update `context.md` when implementation architecture, UI behavior, persistence, safety boundaries, or verification workflows change. Keep repository workflow rules here and current implementation details in `context.md`.
