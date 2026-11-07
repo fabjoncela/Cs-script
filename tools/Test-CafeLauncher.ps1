@@ -490,7 +490,9 @@ if($dashboardSource -notmatch 'New-Object System.Windows.Forms.TabControl' -or
 $liveLogHistory=@($psAst.FindAll({param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Initialize-LiveLogHistory'},$true))
 if($liveLogHistory.Count -ne 1 -or
    $liveLogHistory[0].Extent.Text -notmatch "Name 'Retained log load' -Group Later" -or
-   $liveLogHistory[0].Extent.Text -notmatch '-Tail 2000' -or
+   $liveLogHistory[0].Extent.Text -notmatch '\[CafeLiveLogHistoryBackgroundWorker\]::new' -or
+   $psSource -notmatch '\$script:LiveLogHydrationTimer\.Interval=15' -or
+   $psSource -notmatch '\$processed -lt 15' -or
    $liveLogHistory[0].Extent.Text -notmatch '\$script:LiveLogHydrated' -or
    $dashboardSource -notmatch '\$logToggle\.Add_Click\(\{(?s:.*?)Initialize-LiveLogHistory' -or
    $psSource -notmatch '\$liveSequence -gt \$script:LiveLogHydrationCutoff'){
