@@ -5223,7 +5223,7 @@ function Show-CafeCS2ExtrasDialog {
             if($stagedVoiceKeys.Count -eq 1){
                 $chosenVoice=[string]$stagedVoiceKeys[0]
                 foreach($key in @($baseBinds.Keys)+@($nextBinds.Keys)){
-                    if([string]$key -cne $chosenVoice -and ($baseBinds.ContainsKey($key) -and [string]$baseBinds[$key] -ceq '+voicerecord' -or $nextBinds.ContainsKey($key) -and [string]$nextBinds[$key] -ceq '+voicerecord')){
+                    if([string]$key -cne $chosenVoice -and ($baseBinds.ContainsKey($key) -and [string]$baseBinds[$key] -ceq '+voicerecord' -or $nextBinds.Contains($key) -and [string]$nextBinds[$key] -ceq '+voicerecord')){
                         if($baseBinds.ContainsKey($key)){$nextBinds[[string]$key]=$resetMarker}else{[void]$nextBinds.Remove([string]$key)}
                     }
                 }
@@ -9179,33 +9179,33 @@ Complete-CafeTimingOperation -Id $script:DashboardToolsTilesTimingId -Outcome 'S
 # Editable DPI input replaces the fixed-800 live button in tile 18.
 $script:DashboardDpiControlsTimingId=Start-CafeTimingOperation -Type 'Local' -Name 'Manual DPI controls' -Group Startup
 $manualDpiPanel=New-Object System.Windows.Forms.Panel
-$manualDpiPanel.Size=New-Object System.Drawing.Size(300,84)
-$manualDpiPanel.Margin=New-Object System.Windows.Forms.Padding(5,8,5,8)
+$manualDpiPanel.Size=New-Object System.Drawing.Size(198,58)
+$manualDpiPanel.Margin=New-Object System.Windows.Forms.Padding(3)
 $manualDpiPanel.BackColor=$PANEL
 
 $manualDpiLabel=New-Object System.Windows.Forms.Label
 $manualDpiLabel.Text='DPI (100 - 25600)'
-$manualDpiLabel.Location=New-Object System.Drawing.Point(12,8)
-$manualDpiLabel.Size=New-Object System.Drawing.Size(220,20)
+$manualDpiLabel.Location=New-Object System.Drawing.Point(10,3)
+$manualDpiLabel.Size=New-Object System.Drawing.Size(178,16)
 $manualDpiLabel.Font=New-Object System.Drawing.Font('Segoe UI',8)
 $manualDpiLabel.ForeColor=$WHITE
 $manualDpiPanel.Controls.Add($manualDpiLabel)
 
 $script:ManualDpiInput=New-Object System.Windows.Forms.TextBox
 $script:ManualDpiInput.Text=''
-$script:ManualDpiInput.Location=New-Object System.Drawing.Point(12,38)
-$script:ManualDpiInput.Size=New-Object System.Drawing.Size(110,30)
+$script:ManualDpiInput.Location=New-Object System.Drawing.Point(10,26)
+$script:ManualDpiInput.Size=New-Object System.Drawing.Size(54,24)
 $script:ManualDpiInput.MaxLength=5
-$script:ManualDpiInput.Font=New-Object System.Drawing.Font('Segoe UI',11)
+$script:ManualDpiInput.Font=New-Object System.Drawing.Font('Segoe UI',9)
 $script:ManualDpiInput.ForeColor=$WHITE
 $script:ManualDpiInput.BackColor=$BG
 $manualDpiPanel.Controls.Add($script:ManualDpiInput)
 
 $script:ManualDpiChangeButton=New-Object System.Windows.Forms.Button
 $script:ManualDpiChangeButton.Text='Change DPI'
-$script:ManualDpiChangeButton.Location=New-Object System.Drawing.Point(130,32)
-$script:ManualDpiChangeButton.Size=New-Object System.Drawing.Size(142,40)
-$script:ManualDpiChangeButton.Font=New-Object System.Drawing.Font('Segoe UI',9,[System.Drawing.FontStyle]::Bold)
+$script:ManualDpiChangeButton.Location=New-Object System.Drawing.Point(72,22)
+$script:ManualDpiChangeButton.Size=New-Object System.Drawing.Size(116,30)
+$script:ManualDpiChangeButton.Font=New-Object System.Drawing.Font('Segoe UI',8,[System.Drawing.FontStyle]::Bold)
 $script:ManualDpiChangeButton.FlatStyle='Flat'
 $script:ManualDpiChangeButton.FlatAppearance.BorderSize=0
 $script:ManualDpiChangeButton.BackColor=$BLUE
