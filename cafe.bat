@@ -81,14 +81,12 @@ public sealed class CafeLauncherUpdateBackgroundWorker : BackgroundWorker {
 public sealed class CafeLiveLogHistoryBackgroundWorker : BackgroundWorker {
     private readonly string path;
     private readonly long snapshotLength;
-    private readonly object syncRoot;
     public string[] Entries { get; private set; }
     public string ErrorText { get; private set; }
 
-    public CafeLiveLogHistoryBackgroundWorker(string path, long snapshotLength, object syncRoot) {
+    public CafeLiveLogHistoryBackgroundWorker(string path, long snapshotLength) {
         this.path = path;
         this.snapshotLength = snapshotLength;
-        this.syncRoot = syncRoot;
         Entries = new string[0];
         DoWork += delegate(object sender, DoWorkEventArgs e) {
             try { Entries = ReadEntries(); }
@@ -98,20 +96,46 @@ public sealed class CafeLiveLogHistoryBackgroundWorker : BackgroundWorker {
 
     private string[] ReadEntries() {
         byte[] bytes;
-        lock (syncRoot) {
-            if (!File.Exists(path)) return new string[0];
-            using (var file = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite)) {
-                long length = Math.Min(snapshotLength, file.Length);
-                if (length > Int32.MaxValue) throw new IOException("The log snapshot is too large to read.");
-                bytes = new byte[(int)length];
-                int offset = 0;
-                while (offset < bytes.Length) {
-                    int read = file.Read(bytes, offset, bytes.Length - offset);
+        if (!File.Exists(path)) return new string[0];
+        using (var file = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite)) {
+            long end = Math.Min(snapshotLength, file.Length);
+            long start = 0;
+            long position = end;
+            int newlineCount = 0;
+            byte[] buffer = new byte[8192];
+            bool foundStart = false;
+            while (position > 0 && newlineCount <= 2000) {
+                int chunkLength = (int)Math.Min(buffer.Length, position);
+                position -= chunkLength;
+                file.Seek(position, SeekOrigin.Begin);
+                int chunkRead = 0;
+                while (chunkRead < chunkLength) {
+                    int read = file.Read(buffer, chunkRead, chunkLength - chunkRead);
                     if (read <= 0) break;
-                    offset += read;
+                    chunkRead += read;
                 }
-                if (offset != bytes.Length) Array.Resize(ref bytes, offset);
+                for (int i = chunkRead - 1; i >= 0; i--) {
+                    if (buffer[i] != (byte)'\n') continue;
+                    newlineCount++;
+                    if (newlineCount > 2000) {
+                        start = position + i + 1;
+                        foundStart = true;
+                        break;
+                    }
+                }
+                if (foundStart) break;
             }
+            long length = end - start;
+            if (length > Int32.MaxValue) throw new IOException("The log snapshot is too large to read.");
+            file.Seek(start, SeekOrigin.Begin);
+            bytes = new byte[(int)length];
+            int offset = 0;
+            while (offset < bytes.Length) {
+                int read = file.Read(bytes, offset, bytes.Length - offset);
+                if (read <= 0) break;
+                offset += read;
+            }
+            if (offset != bytes.Length) Array.Resize(ref bytes, offset);
         }
 
         string text = Encoding.UTF8.GetString(bytes).TrimStart('\uFEFF');
@@ -432,7 +456,7 @@ function Initialize-LiveLogHistory {
         $script:LogBox.Clear()
         if($script:StatusLine -and -not $script:StatusLine.IsDisposed){$script:StatusLine.Text='Loading recent logs...'}
         if($script:ClearLogsButton -and -not $script:ClearLogsButton.IsDisposed){$script:ClearLogsButton.Enabled=$false}
-        $worker=[CafeLiveLogHistoryBackgroundWorker]::new([string]$script:LogPath,[long]$snapshotLength,$script:LogFileSyncRoot)
+        $worker=[CafeLiveLogHistoryBackgroundWorker]::new([string]$script:LogPath,[long]$snapshotLength)
         $script:LiveLogHydrationWorker=$worker
         $worker.Add_RunWorkerCompleted({
             $completed=$script:LiveLogHydrationWorker
