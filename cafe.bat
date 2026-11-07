@@ -7334,8 +7334,8 @@ function Show-ProfileEditor {
     $mouseGrid=New-EditorTabGrid -Page $mousePage -Rows 5
     $pointerSpeedValues=@(1,2,4,6,8,10,12,14,16,18,20)
     $pointerSpeedLabels=@(
-        '1/11 - Slowest (1)';'2/11 (2)';'3/11 (4)';'4/11 (6)';'5/11 (8)';
-        '6/11 - Default (10)';'7/11 (12)';'8/11 (14)';'9/11 (16)';'10/11 (18)';'11/11 - Fastest (20)'
+        '1/11';'2/11';'3/11';'4/11';'5/11';
+        '6/11';'7/11';'8/11';'9/11';'10/11';'11/11'
     )
     $pointerSpeedOriginalValue=[int]$p.PointerSpeed
     $pointerSpeedSelectedIndex=[Array]::IndexOf([int[]]$pointerSpeedValues,$pointerSpeedOriginalValue)

@@ -43,7 +43,7 @@ Use this map to locate the implementation and focused test. The full verificatio
 
 ## Profile editor and CS2 graphics UI
 
-`Show-ProfileEditor` contains one tab control. The **Mouse** tab contains Windows mouse controls and the per-profile **CS2 sensitivity** field, labeled separately from Windows pointer speed. The selected profile's CFG is the only saved source of truth: Edit reads its `sensitivity` command from the validated GitHub Contents API, and Apply installs that CFG without a JSON override. Legacy `CS2Sensitivity` values in older profile JSON are ignored; exports omit the field. Every profile CFG must contain exactly one valid sensitivity command, checked on read, before Apply, and in CI.
+`Show-ProfileEditor` contains one tab control. The **Mouse** tab contains Windows mouse controls and the per-profile **CS2 sensitivity** field, labeled separately from Windows pointer speed. Windows pointer speed choices display only their position from `1/11` through `11/11`; the underlying Windows speed values and apply behavior are unchanged. The selected profile's CFG is the only saved source of truth: Edit reads its `sensitivity` command from the validated GitHub Contents API, and Apply installs that CFG without a JSON override. Legacy `CS2Sensitivity` values in older profile JSON are ignored; exports omit the field. Every profile CFG must contain exactly one valid sensitivity command, checked on read, before Apply, and in CI.
 
 Profile Apply and **Play + Exec** install the selected named CFG through `Install-ProfileCfg`. It validates the CFG sensitivity and installs a matching local or downloaded profile file with backup and hash verification; the retired standalone `at.cfg` workflow and embedded fallback are removed.
 
