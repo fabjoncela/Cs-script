@@ -3239,7 +3239,19 @@ function Check-CafeLauncherUpdates {
             } | Out-Null
             $bytes=[IO.File]::ReadAllBytes($temp)
             if ($bytes.Length -ne [int64]$remote.size -or
-                (Get-GitBlobSha -Bytes $bytes) -ne $remote.sha) { throw 'Downloaded BAT failed GitHub blob hash and size verification.' }
+                (Get-GitBlobSha -Bytes $bytes) -ne $remote.sha) {
+                # The raw-content CDN can briefly lag behind the Contents API after a push.
+                # Fall back only to the base64 payload from that same metadata response,
+                # and enforce the exact same size and Git blob SHA before using it.
+                $apiBytes=[Convert]::FromBase64String(($remote.content -replace '\s',''))
+                if ($apiBytes.Length -ne [int64]$remote.size -or
+                    (Get-GitBlobSha -Bytes $apiBytes) -ne $remote.sha) {
+                    throw 'Downloaded BAT failed GitHub blob hash and size verification.'
+                }
+                [IO.File]::WriteAllBytes($temp,$apiBytes)
+                $bytes=$apiBytes
+                Write-Log 'Raw GitHub download did not match Contents API metadata; using the verified Contents API payload.' 'WARN'
+            }
             $text=[Text.Encoding]::UTF8.GetString($bytes)
             if (-not $text.StartsWith('@echo off') -or -not $text.Contains('# POWERSHELL_GUI')) { throw 'Downloaded launcher structure check failed.' }
             # Verify that the embedded PowerShell can be PARSED before installing it.
