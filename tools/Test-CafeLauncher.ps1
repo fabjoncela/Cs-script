@@ -772,6 +772,11 @@ try {
        -not $script:GitHubRateLimitLabel -or $script:GitHubRateLimitLabel.Visible){
         throw 'Dashboard must identify local read fallback and hide GitHub API quota unless the mirror is active.'
     }
+    # The form is intentionally never shown in this test, so a child label's
+    # Visible getter includes the hidden parent's state. Detach it to assert
+    # the visibility state that the source-display helper sets directly.
+    $quotaLabelParent=$script:GitHubRateLimitLabel.Parent
+    if($quotaLabelParent){$quotaLabelParent.Controls.Remove($script:GitHubRateLimitLabel)}
     Update-CafeGitHubRateLimitFromHeaders -Headers @{
         'X-RateLimit-Remaining'='42';'X-RateLimit-Limit'='60';'X-RateLimit-Reset'='1792000000';'X-RateLimit-Resource'='core'
     }
