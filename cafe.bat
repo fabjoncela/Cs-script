@@ -5618,7 +5618,7 @@ function Set-CafeCapturedConvarsInCfg {
     return $text
 }
 function Get-ProfileGraphicsPreset {
-    param([Parameter(Mandatory=$true)][string]$ProfileName,[switch]$Canonical,[switch]$RequireVerifiedCloud)
+    param([Parameter(Mandatory=$true)][string]$ProfileName,[switch]$Canonical,[switch]$RequireVerifiedCloud,[switch]$LocalOnly,$CloudSnapshot)
     if(-not $script:GamingProfiles.Contains($ProfileName)){throw ('Unknown graphics profile: '+$ProfileName)}
     if($RequireVerifiedCloud -and $script:PendingSync[$ProfileName]){
         throw ('This profile has unsynced local edits. Resolve them before refreshing its cloud graphics preset.')
@@ -5628,18 +5628,29 @@ function Get-ProfileGraphicsPreset {
     }
     $cache=Join-Path $env:LOCALAPPDATA ("CafeLauncher\graphics-cache\"+$ProfileName+'.json')
     $local=Join-Path (Split-Path -Parent $env:CAFE_SCRIPT) ("graphics\"+$ProfileName+'.json')
-    try{
-        $snapshot=Get-CafeCloudSnapshot -ProfileName $ProfileName
-        $preset=$snapshot.Graphics
+    if($CloudSnapshot){
+        $preset=ConvertTo-CafeGraphicsPreset -ProfileName $ProfileName -Preset $CloudSnapshot.Graphics
         if(-not $Canonical){
             $script:GraphicsPresets[$ProfileName]=$preset
             $script:GamingProfiles[$ProfileName].ScalingMode=[int]$preset.ScalingMode
         }
         try{$dir=Split-Path -Parent $cache;if(-not(Test-Path -LiteralPath $dir)){[void](New-Item -ItemType Directory -Path $dir -Force)};[IO.File]::WriteAllText($cache,($preset|ConvertTo-Json -Depth 6),(New-Object Text.UTF8Encoding($false)))}catch{Write-Log ('Graphics preset cache warning: '+$_.Exception.Message) 'WARN'}
         return $preset
-    }catch{
-        Write-Log ('Graphics preset download unavailable: '+$_.Exception.Message) 'WARN'
-        if($RequireVerifiedCloud){throw ('Could not verify the latest backend or mirrored graphics preset for '+$ProfileName+': '+$_.Exception.Message)}
+    }
+    if(-not $LocalOnly){
+        try{
+            $snapshot=Get-CafeCloudSnapshot -ProfileName $ProfileName
+            $preset=$snapshot.Graphics
+            if(-not $Canonical){
+                $script:GraphicsPresets[$ProfileName]=$preset
+                $script:GamingProfiles[$ProfileName].ScalingMode=[int]$preset.ScalingMode
+            }
+            try{$dir=Split-Path -Parent $cache;if(-not(Test-Path -LiteralPath $dir)){[void](New-Item -ItemType Directory -Path $dir -Force)};[IO.File]::WriteAllText($cache,($preset|ConvertTo-Json -Depth 6),(New-Object Text.UTF8Encoding($false)))}catch{Write-Log ('Graphics preset cache warning: '+$_.Exception.Message) 'WARN'}
+            return $preset
+        }catch{
+            Write-Log ('Graphics preset download unavailable: '+$_.Exception.Message) 'WARN'
+            if($RequireVerifiedCloud){throw ('Could not verify the latest backend or mirrored graphics preset for '+$ProfileName+': '+$_.Exception.Message)}
+        }
     }
     foreach($file in @($cache,$local)){
         if(-not(Test-Path -LiteralPath $file -PathType Leaf)){continue}
@@ -6320,7 +6331,7 @@ function Get-CafeCloudSnapshot {
     return $snapshot
 }
 function Get-ProfileCfgSensitivity {
-    param([Parameter(Mandatory=$true)][string]$ProfileName,[switch]$LocalProfileConfirmed)
+    param([Parameter(Mandatory=$true)][string]$ProfileName,[switch]$LocalProfileConfirmed,[switch]$LocalOnly,$CloudSnapshot)
     if(-not $script:GamingProfiles.Contains($ProfileName)){throw "Unknown CS2 profile: $ProfileName"}
     $profile=$script:GamingProfiles[$ProfileName]
     $cfgName=[string]$profile.ConfigFile
@@ -6332,9 +6343,16 @@ function Get-ProfileCfgSensitivity {
         $draft=ConvertTo-CafeCS2Sensitivity -Value ([string]$script:PendingCfgSensitivity[$ProfileName])
         return [pscustomobject]@{Sensitivity=$draft;Source='LocalPending'}
     }
-    try{
-        $snapshot=Get-CafeCloudSnapshot -ProfileName $ProfileName
-        $remote=[pscustomobject]@{Content=$snapshot.Cfg;Sensitivity=$snapshot.CfgSensitivity;Source=$snapshot.Source}
+    $remote=$null
+    if($CloudSnapshot){
+        $remote=[pscustomobject]@{Content=$CloudSnapshot.Cfg;Sensitivity=$CloudSnapshot.CfgSensitivity;Source=$CloudSnapshot.Source}
+    }elseif(-not $LocalOnly){
+        try{
+            $snapshot=Get-CafeCloudSnapshot -ProfileName $ProfileName
+            $remote=[pscustomobject]@{Content=$snapshot.Cfg;Sensitivity=$snapshot.CfgSensitivity;Source=$snapshot.Source}
+        }catch{$remoteError=$_.Exception.Message}
+    }
+    if($remote){
         try{
             $cacheDir=Join-Path $env:LOCALAPPDATA 'CafeLauncher\cfg-cache'
             if(-not (Test-Path -LiteralPath $cacheDir)){[void](New-Item -ItemType Directory -Path $cacheDir -Force -ErrorAction Stop)}
@@ -6342,24 +6360,23 @@ function Get-ProfileCfgSensitivity {
         }catch{Write-Log ('Could not cache verified '+$cfgName+' for offline sensitivity display: '+$_.Exception.Message) 'WARN'}
         Write-Log ($ProfileName+' sensitivity loaded from '+$remote.Source+' '+$cfgName+'.')
         return [pscustomobject]@{Sensitivity=$remote.Sensitivity;Source=$remote.Source}
-    }catch{
-        $remoteError=$_.Exception.Message
-        $cfgDirectory=$null
-        try{$cfgDirectory=Find-CS2ConfigFolder -NoPrompt}catch{}
-        $fallbackPath=$null
-        try{$fallbackPath=Get-FriendConfigFallback -CfgName $cfgName -CfgDirectory $cfgDirectory}catch{}
-        if(-not $fallbackPath){throw ('Could not verify '+$cfgName+' from the backend or its GitHub mirror, and no local CFG fallback is available. '+$remoteError)}
-        if(-not $LocalProfileConfirmed){
-            $answer=[System.Windows.Forms.MessageBox]::Show(
-                ("Could not verify the latest backend or GitHub mirror copy of $cfgName for $ProfileName.`r`n`r`nUse the available cached/local CFG sensitivity instead? It may be older than the cloud copy.`r`n`r`nYes = use the local CFG; No = cancel editing."),
-                'Confirm local CS2 sensitivity','YesNo','Warning','Button2')
-            if($answer -ne [System.Windows.Forms.DialogResult]::Yes){throw 'Profile editing canceled because the latest CFG sensitivity could not be verified.'}
-        }
-        $localContent=[IO.File]::ReadAllText($fallbackPath)
-        $localSensitivity=Get-CafeCS2CfgSensitivity -Content $localContent
-        Write-Log ($ProfileName+' sensitivity loaded from explicitly confirmed local CFG '+$fallbackPath+'. Backend/mirror error: '+$remoteError) 'WARN'
-        return [pscustomobject]@{Sensitivity=$localSensitivity;Source='LocalFallback'}
     }
+    if(-not $remoteError){$remoteError='The backend and GitHub mirror bundle were not available.'}
+    $cfgDirectory=$null
+    try{$cfgDirectory=Find-CS2ConfigFolder -NoPrompt}catch{}
+    $fallbackPath=$null
+    try{$fallbackPath=Get-FriendConfigFallback -CfgName $cfgName -CfgDirectory $cfgDirectory}catch{}
+    if(-not $fallbackPath){throw ('Could not verify '+$cfgName+' from the backend or its GitHub mirror, and no local CFG fallback is available. '+$remoteError)}
+    if(-not $LocalProfileConfirmed){
+        $answer=[System.Windows.Forms.MessageBox]::Show(
+            ("Could not verify the latest backend or GitHub mirror copy of $cfgName for $ProfileName.`r`n`r`nUse the available cached/local CFG sensitivity instead? It may be older than the cloud copy.`r`n`r`nYes = use the local CFG; No = cancel editing."),
+            'Confirm local CS2 sensitivity','YesNo','Warning','Button2')
+        if($answer -ne [System.Windows.Forms.DialogResult]::Yes){throw 'Profile editing canceled because the latest CFG sensitivity could not be verified.'}
+    }
+    $localContent=[IO.File]::ReadAllText($fallbackPath)
+    $localSensitivity=Get-CafeCS2CfgSensitivity -Content $localContent
+    Write-Log ($ProfileName+' sensitivity loaded from explicitly confirmed local CFG '+$fallbackPath+'. Backend/mirror error: '+$remoteError) 'WARN'
+    return [pscustomobject]@{Sensitivity=$localSensitivity;Source='LocalFallback'}
 }
 
 function Get-LatestGitHubFileCommit {
@@ -6452,7 +6469,7 @@ function Refresh-ProfileFromGitHub {
 
 function Refresh-ProfileFromBackend {
     param([Parameter(Mandatory=$true)][string]$ProfileName,[switch]$NoSave,[switch]$ForceLoad,
-        [ValidateSet('Startup','Later')][string]$TimingGroup='Later')
+        [ValidateSet('Startup','Later')][string]$TimingGroup='Later',[switch]$PassThruSnapshot)
     if(-not $script:GamingProfiles.Contains($ProfileName)){throw 'Unknown backend profile.'}
     if($script:PendingSync[$ProfileName]){
         $script:ProfileRefreshStatus[$ProfileName]='LocalPending'
@@ -6471,6 +6488,7 @@ function Refresh-ProfileFromBackend {
         $script:ProfileRefreshStatus[$ProfileName]=[string]$snapshot.Source
         if(-not $NoSave){try{Save-ProfileSettings}catch{Write-Log ('Could not cache backend profile: '+$_.Exception.Message) 'WARN'}}
         Write-Log ($ProfileName+' loaded from '+$snapshot.Source+' revision '+$snapshot.Revision+'.')
+        if($PassThruSnapshot){return $snapshot}
         return [string]$snapshot.Source
     }catch{
         Write-Log ($ProfileName+' backend and mirror reads failed; local values retained: '+$_.Exception.Message) 'WARN'
@@ -7875,25 +7893,32 @@ function Show-ProfileEditor {
     param([Parameter(Mandatory=$true)][string]$ProfileName,[switch]$CaptureOnOpen)
     if(-not $script:GamingProfiles.Contains($ProfileName)){throw "Unknown profile: $ProfileName"}
     if(-not (Resolve-PendingProfileChanges -ProfileName $ProfileName)){return}
-    $profileSource=Refresh-ProfileFromBackend -ProfileName $ProfileName
+    $refreshResult=Refresh-ProfileFromBackend -ProfileName $ProfileName -PassThruSnapshot
+    $editorSnapshot=$null
+    if($refreshResult -and $refreshResult.PSObject.Properties['Profile'] -and $refreshResult.PSObject.Properties['Graphics'] -and $refreshResult.PSObject.Properties['Cfg']){
+        $editorSnapshot=$refreshResult
+        $profileSource=[string]$editorSnapshot.Source
+    }else{$profileSource=[string]$refreshResult}
     if(-not (Confirm-LocalProfileApply -ProfileName $ProfileName -Source $profileSource -Action edit)){return}
-    try{
-        $graphicsPreset=Get-ProfileGraphicsPreset -ProfileName $ProfileName -RequireVerifiedCloud
-    }catch{
-        try{$localGraphics=Get-ProfileGraphicsPreset -ProfileName $ProfileName}catch{
+    if($editorSnapshot){
+        $graphicsPreset=Get-ProfileGraphicsPreset -ProfileName $ProfileName -CloudSnapshot $editorSnapshot
+    }else{
+        try{
+            $graphicsPreset=Get-ProfileGraphicsPreset -ProfileName $ProfileName -LocalOnly
+        }catch{
             [void][System.Windows.Forms.MessageBox]::Show(
-                ("GitHub graphics could not be refreshed and no valid local preset is available:`n"+$_.Exception.Message),
+                ("No valid local graphics preset is available:`n"+$_.Exception.Message),
                 'CS2 Graphics Unavailable','OK','Warning')
             return
         }
         $message="CafeLauncher could not verify the latest backend or GitHub mirror CS2 graphics preset for $ProfileName.`r`n`r`nUse the available local graphics copy anyway? It may be older than the cloud copy.`r`n`r`nYes = open using local graphics; No = cancel."
         $answer=[System.Windows.Forms.MessageBox]::Show($message,'Confirm local CS2 graphics','YesNo','Warning','Button2')
         if($answer -ne [System.Windows.Forms.DialogResult]::Yes){return}
-        $graphicsPreset=$localGraphics
-        Write-Log "$ProfileName editor using explicitly confirmed local CS2 graphics after GitHub refresh failed." 'WARN'
+        Write-Log "$ProfileName editor using explicitly confirmed local CS2 graphics after backend and mirror refresh failed." 'WARN'
     }
     try{
-        $cfgSensitivity=Get-ProfileCfgSensitivity -ProfileName $ProfileName -LocalProfileConfirmed:($profileSource -eq 'LocalFallback')
+        if($editorSnapshot){$cfgSensitivity=Get-ProfileCfgSensitivity -ProfileName $ProfileName -CloudSnapshot $editorSnapshot}
+        else{$cfgSensitivity=Get-ProfileCfgSensitivity -ProfileName $ProfileName -LocalProfileConfirmed:($profileSource -in @('LocalFallback','LocalPending')) -LocalOnly}
     }catch{
         [void][System.Windows.Forms.MessageBox]::Show(
             ("The selected profile's CS2 CFG sensitivity could not be verified:`n"+$_.Exception.Message),
@@ -8050,7 +8075,20 @@ function Show-ProfileEditor {
     # CFG remains authoritative unless this profile has unsynced local edits.
     $voiceSelected=[string]$p.VoicePushToTalkKey
     if(-not $pendingSyncState[$ProfileName]){
-        try{$voiceSelected=Get-CafeVoiceBindingFromCfg -Content ([string](Get-CafeCloudSnapshot -ProfileName $ProfileName -ForceRefresh).Cfg)}catch{Write-Log ('Voice key lookup unavailable: '+$_.Exception.Message) 'WARN'}
+        try{
+            $voiceCfg=$null
+            if($editorSnapshot){$voiceCfg=[string]$editorSnapshot.Cfg}
+            else{
+                $cfgCachePath=Join-Path (Join-Path $env:LOCALAPPDATA 'CafeLauncher\cfg-cache') ([string]$p.ConfigFile)
+                if(Test-Path -LiteralPath $cfgCachePath -PathType Leaf){$voiceCfg=[IO.File]::ReadAllText($cfgCachePath)}
+                else{
+                    $cfgDirectory=$null;try{$cfgDirectory=Find-CS2ConfigFolder -NoPrompt}catch{}
+                    $cfgFallback=$null;try{$cfgFallback=Get-FriendConfigFallback -CfgName ([string]$p.ConfigFile) -CfgDirectory $cfgDirectory}catch{}
+                    if($cfgFallback){$voiceCfg=[IO.File]::ReadAllText($cfgFallback)}
+                }
+            }
+            if($voiceCfg){$voiceSelected=Get-CafeVoiceBindingFromCfg -Content $voiceCfg}
+        }catch{Write-Log ('Voice key lookup unavailable: '+$_.Exception.Message) 'WARN'}
     }
     $voiceOptions=@('','V','MOUSE4','MOUSE5','CAPSLOCK','ALT','K','SPACE','SHIFT','CTRL','TAB')+
         @('A','B','C','D','E','F','G','H','I','J','L','M','N','O','P','Q','R','S','T','U','W','X','Y','Z')+

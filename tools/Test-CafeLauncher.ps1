@@ -99,7 +99,6 @@ foreach($requiredEditorFeature in @(
     'New-EditorTabChoice -Grid $mouseGrid -Title ''Windows pointer speed (11 levels)''',
     '$pointer.add_SelectionChangeCommitted',
     '$pointerSpeedSelectionState.UserChanged',
-    '$p.PointerSpeed=$pointerSpeedOriginalValue',
     '$cs2Page.Text=''CS2 / Apps''',
     '$cs2Grid=New-EditorTabGrid -Page $cs2Page -Rows 31',
     'function Add-EditorTabFullRowField',
@@ -121,6 +120,10 @@ foreach($requiredEditorFeature in @(
     if($psSource -notmatch [regex]::Escape($requiredEditorFeature)){
         throw ('CS2 Graphics editor/local/cloud persistence feature missing: '+$requiredEditorFeature)
     }
+}
+if($psSource -notmatch '\$p\.PointerSpeed=\$pointerSpeedOriginalValue' -and
+   $psSource -notmatch '\$p\.PointerSpeed=\[int\]\$pointerSpeedSelectionState\.OriginalValue'){
+    throw 'Profile editor must preserve the original pointer-speed value when its dropdown selection is unchanged.'
 }
 $framePacingIndex=$psSource.IndexOf("-Title 'Frame Pacing'",[StringComparison]::Ordinal)
 $presetsIndex=$psSource.IndexOf("-Title 'Presets'",[StringComparison]::Ordinal)
@@ -555,8 +558,12 @@ if($liveLogHistory.Count -ne 1 -or
 if(([regex]::Matches($psSource,'Initialize-LiveLogHistory')).Count -ne 2){
     throw 'Retained LIVE LOGS history must only be initialized by its helper and the Show Logs action.'
 }
-if($editorSource -notmatch 'Refresh-ProfileFromBackend -ProfileName \$ProfileName' -or
-   $editorSource -notmatch 'Get-ProfileGraphicsPreset -ProfileName \$ProfileName -RequireVerifiedCloud' -or
+if($editorSource -notmatch 'Refresh-ProfileFromBackend -ProfileName \$ProfileName -PassThruSnapshot' -or
+   $editorSource -notmatch 'Get-ProfileGraphicsPreset -ProfileName \$ProfileName -CloudSnapshot \$editorSnapshot' -or
+   $editorSource -notmatch 'Get-ProfileCfgSensitivity -ProfileName \$ProfileName -CloudSnapshot \$editorSnapshot' -or
+   $editorSource -notmatch 'Get-ProfileGraphicsPreset -ProfileName \$ProfileName -LocalOnly' -or
+   $editorSource -notmatch 'Get-ProfileCfgSensitivity -ProfileName \$ProfileName .* -LocalOnly' -or
+   $editorSource -notmatch '\$voiceCfg=\[string\]\$editorSnapshot\.Cfg' -or
    $editorSource -notmatch 'Resolve-PendingProfileChanges -ProfileName \$ProfileName' -or
    $editorSource -notmatch 'Confirm-LocalProfileApply -ProfileName \$ProfileName -Source \$profileSource -Action edit' -or
    $editorSource -notmatch '\[void\]\$dialog\.ShowDialog\(\$form\)'){
