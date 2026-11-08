@@ -4,6 +4,11 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
+$workflowPath = Join-Path $repoRoot '.github\workflows\cafe-syntax.yml'
+$workflowSource = [System.IO.File]::ReadAllText($workflowPath)
+if ($workflowSource -notmatch '(?m)^\s+PREVIOUS_COMMIT:\s+\$\{\{\s*github\.event\.before\s*\|\|\s*github\.sha\s*\}\}\s*$') {
+    throw 'Manual workflow dispatch must pass a non-empty previous commit to the release-bump step.'
+}
 $batPath = Join-Path $repoRoot 'cafe.bat'
 if (-not (Test-Path -LiteralPath $batPath -PathType Leaf)) {
     throw ('CafeLauncher not found: {0}' -f $batPath)
