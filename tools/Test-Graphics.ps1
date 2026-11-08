@@ -194,6 +194,24 @@ $legacyBrile=[pscustomobject]@{ProfileName='BrileMode';Settings=[pscustomobject]
 if((Assert-CS2GraphicsDisplayPolicy -Preset $legacyBrile) -cne 'PreserveCurrent'){
     throw 'Previously cached BrileMode presets with null display values must remain safe.'
 }
+$backendPreset=[pscustomobject]@{
+    SchemaVersion=1;ProfileName='FabMode';DisplayPolicy='ApplyPreset';RefreshPolicy='Exact';ScalingMode=2
+    Settings=[ordered]@{Width=1280;Height=960;RefreshHz=360;AspectRatioMode=0;Fullscreen=1}
+}
+if((Assert-CS2GraphicsDisplayPolicy -Preset $backendPreset) -cne 'ApplyPreset'){
+    throw 'Backend graphics presets with dictionary Settings must accept their exact refresh rate.'
+}
+$backendSettings=ConvertTo-VideoGraphicsSettings -Preset $backendPreset
+if([int]$backendSettings['RefreshHz'] -ne 360 -or [int]$backendSettings['Width'] -ne 1280){
+    throw 'Backend dictionary graphics settings were not converted with their exact refresh rate.'
+}
+$missingRefresh=[pscustomobject]@{
+    SchemaVersion=1;ProfileName='FabMode';DisplayPolicy='ApplyPreset';RefreshPolicy='Exact';ScalingMode=2
+    Settings=[ordered]@{Width=1280;Height=960;AspectRatioMode=0;Fullscreen=1}
+}
+$rejectedMissingRefresh=$false
+try{[void](Assert-CS2GraphicsDisplayPolicy -Preset $missingRefresh)}catch{$rejectedMissingRefresh=$_.Exception.Message -like '*requires a RefreshHz value*'}
+if(-not $rejectedMissingRefresh){throw 'Exact refresh policy must still reject dictionary Settings without RefreshHz.'}
 $brileEdit=Update-CS2VideoGraphicsText -Text $fixture -Settings $brileSettings
 foreach($displayValue in @('"setting.defaultres" "1920"','"setting.defaultresheight" "1080"',
     '"setting.aspectratiomode" "1"','"setting.fullscreen" "1"',

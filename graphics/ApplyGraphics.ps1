@@ -25,11 +25,17 @@ function Get-VideoGraphicsRules {
 function ConvertTo-VideoGraphicsSettings {
     param($Preset)
     $rules=Get-VideoGraphicsRules
-    if ($null -eq $Preset -or $null -eq $Preset.Settings -or $Preset.Settings -isnot [pscustomobject]) {
+    if ($null -eq $Preset -or $null -eq $Preset.Settings -or
+        ($Preset.Settings -isnot [System.Collections.IDictionary] -and $Preset.Settings -isnot [pscustomobject])) {
         throw 'Graphics preset must contain a JSON Settings object.'
     }
     $settings=[ordered]@{}
-    foreach($property in $Preset.Settings.PSObject.Properties){
+    if($Preset.Settings -is [System.Collections.IDictionary]){
+        $settingEntries=@(foreach($name in $Preset.Settings.Keys){[pscustomobject]@{Name=[string]$name;Value=$Preset.Settings[$name]}})
+    }else{
+        $settingEntries=@($Preset.Settings.PSObject.Properties)
+    }
+    foreach($property in $settingEntries){
         if(-not $rules.Contains($property.Name)){
             Write-Log ("Unknown graphics field ignored: "+$property.Name) 'WARN'
             continue
@@ -70,8 +76,15 @@ function Assert-CS2GraphicsDisplayPolicy {
     }
     $refreshPolicy=if($Preset.PSObject.Properties['RefreshPolicy'] -and $Preset.RefreshPolicy){[string]$Preset.RefreshPolicy}else{'Highest'}
     if($refreshPolicy -notin @('Highest','Exact')){throw ('Unknown graphics refresh policy: '+$refreshPolicy)}
-    if($refreshPolicy -eq 'Exact' -and (-not $Preset.Settings.PSObject.Properties['RefreshHz'] -or $null -eq $Preset.Settings.RefreshHz)){
-        throw 'Exact refresh policy requires a RefreshHz value.'
+    if($refreshPolicy -eq 'Exact'){
+        $refreshProperty=$null;$refreshValue=$null
+        if($Preset.Settings -is [System.Collections.IDictionary]){
+            if($Preset.Settings.Contains('RefreshHz')){$refreshValue=$Preset.Settings['RefreshHz']}
+        }else{
+            $refreshProperty=$Preset.Settings.PSObject.Properties['RefreshHz']
+            if($refreshProperty){$refreshValue=$refreshProperty.Value}
+        }
+        if($null -eq $refreshValue){throw 'Exact refresh policy requires a RefreshHz value.'}
     }
     $scalingMode=if($Preset.PSObject.Properties['ScalingMode'] -and $null -ne $Preset.ScalingMode){[int]$Preset.ScalingMode}else{2}
     if($scalingMode -notin @(2,3,5)){throw ('Unsupported NVIDIA scaling mode: '+$scalingMode)}
