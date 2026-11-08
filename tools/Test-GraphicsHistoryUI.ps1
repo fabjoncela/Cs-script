@@ -14,19 +14,12 @@ $uiFunction=$ast.Find({param($n)$n -is [Management.Automation.Language.FunctionD
 $editorFunction=$ast.Find({param($n)$n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Show-ProfileEditor'},$true)
 $workerFunction=$ast.Find({param($n)$n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'New-CafeGraphicsHistoryWorker'},$true)
 $uriFunction=$ast.Find({param($n)$n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'New-CafeGraphicsHistoryRequestUri'},$true)
-if(-not $uiFunction -or -not $editorFunction -or -not $workerFunction -or -not $uriFunction){throw 'Graphics history UI, editor, request builder, or background worker source was not found.'}
+if(-not $uiFunction -or -not $editorFunction -or -not $workerFunction){throw 'Graphics history UI, editor, or background worker source was not found.'}
 Invoke-Expression $uiFunction.Extent.Text
-Invoke-Expression $uriFunction.Extent.Text
-$expectedUri='https://api.github.com/repos/fabjoncela/Cs-script/commits?path=graphics%2FFabMode.json&per_page=4&sha=main'
-if((New-CafeGraphicsHistoryRequestUri -Repo 'fabjoncela/Cs-script' -Branch 'main' -ProfileName FabMode) -cne $expectedUri){
-    throw 'The graphics history request URL must include its configured repository and branch.'
-}
 $editorSource=$editorFunction.Extent.Text
 foreach($required in @(
     '$worker.RequestContext=$historyUiContext',
-    '$historyRepo=[string]$script:GithubRepo',
-    '$historyBranch=[string]$script:GithubBranch',
-    '$historyUri=New-CafeGraphicsHistoryRequestUri -Repo $historyRepo -Branch $historyBranch -ProfileName $ProfileName',
+    '$historyUri=$script:BackendBaseUrl+''/v1/graphics/''+$ProfileName+''/history?limit=4''',
     '$request=$sender.RequestContext',
     'Set-CafeGraphicsHistoryUi -Context $request -ErrorMessage $message',
     'Set-CafeGraphicsHistoryUi -Context $request -NoHistory'
@@ -75,12 +68,12 @@ try{
     Set-CafeGraphicsHistoryUi -Context $context -NoHistory
     if($context.HistoryChoice.Items.Count -ne 1 -or $context.HistoryChoice.Enabled -or
        $context.RestoreButton.Enabled -or -not $context.LoadButton.Enabled -or
-       -not $context.HistoryState.Loaded -or $context.StatusLabel.Text -notmatch 'GitHub returned 404'){
-        throw 'HTTP 404 must show no earlier versions and restore a retryable Load/Refresh button.'
+       -not $context.HistoryState.Loaded -or $context.StatusLabel.Text -notmatch 'No earlier graphics versions'){
+        throw 'An empty history must show no earlier versions and restore a retryable Load/Refresh button.'
     }
 
     $context.HistoryState.Loaded=$false
-    $version=[pscustomobject]@{DateUtc='2026-11-01T12:00:00Z';Message='test revision';Sha=('a'*40)}
+    $version=[pscustomobject]@{DateUtc='2026-11-01T12:00:00Z';Message='Backend revision 2';Revision=2}
     Set-CafeGraphicsHistoryUi -Context $context -Versions @($version)
     if($context.HistoryChoice.Items.Count -ne 1 -or -not $context.HistoryChoice.Enabled -or
        -not $context.RestoreButton.Enabled -or -not $context.HistoryState.Loaded){

@@ -8133,7 +8133,7 @@ function Show-ProfileEditor {
     [void]$historyChoice.Items.Add('Load history first')
     $historyChoice.SelectedIndex=0
     $historyChoice.Enabled=$false
-    [void](Add-EditorTabField -Grid $cs2Grid -Title 'Earlier GitHub file revisions (commit ID shown)' -Control $historyChoice -Column 0 -Row 25)
+    [void](Add-EditorTabField -Grid $cs2Grid -Title 'Earlier backend graphics revisions (revision number shown)' -Control $historyChoice -Column 0 -Row 25)
     $loadHistory=New-Object System.Windows.Forms.Button
     $loadHistory.Text='Load history'
     $loadHistory.BackColor=[System.Drawing.Color]::FromArgb(58,67,83)

@@ -96,10 +96,10 @@ foreach($requiredEditorFeature in @(
     'New-EditorTabNumber -Grid $cs2Grid -Title ''CS2 resolution width'' -Column 0 -Row 21',
     'New-EditorTabChoice -Grid $cs2Grid -Title ''Stretch / scaling''',
     'Stretch / scaling',
-    'Earlier GitHub file revisions (commit ID shown)',
+    'Earlier backend graphics revisions (revision number shown)',
     'Restore selected version',
-    'Get-ProfileGraphicsHistory -ProfileName $profileForHistory -ForceRefresh -ResponseJson ([string]$sender.ResultText)',
-    'Get-ProfileGraphicsVersion -ProfileName $ProfileName -Version $version',
+    'ConvertFrom-CafeBackendGraphicsHistory -ProfileName $profileForHistory -ResponseJson ([string]$sender.ResultText)',
+    'Get-CafeGraphicsHistoryPreset -ProfileName $ProfileName -Version $version',
     '$graphicsPresetState[$ProfileName]=$graphicsPreset',
     'GraphicsSettings',
     'graphics/$ProfileName.json'
@@ -403,9 +403,9 @@ if($script:TestWebsiteUrls.Count -ne 7 -or $script:TestSpotifyCalls -ne 1){throw
 # Preview UI: fixed-coordinate label overlays have been replaced by isolated
 # table cells on distinct tabs, so labels cannot cover neighboring inputs.
 $editorSource=$definitions['Show-ProfileEditor']
-foreach($historyFunction in @('ConvertTo-CafeGraphicsHistoryEntry','New-CafeGraphicsHistoryRequestUri','Get-CachedProfileGraphicsHistory','Get-ProfileGraphicsHistory','Set-CafeGraphicsHistoryUi','Get-ProfileGraphicsVersion','New-CafeGraphicsHistoryWorker')){
+foreach($historyFunction in @('Get-CafeMirrorGraphicsHistoryJson','ConvertFrom-CafeBackendGraphicsHistory','Get-CafeGraphicsHistoryPreset','Set-CafeGraphicsHistoryUi','New-CafeGraphicsHistoryWorker')){
     if(-not $definitions.ContainsKey($historyFunction)){
-        throw ('GitHub graphics history helper missing: '+$historyFunction)
+        throw ('Backend graphics history helper missing: '+$historyFunction)
     }
 }
 $historyLoadStart=$editorSource.IndexOf('$loadHistory.Add_Click({',[StringComparison]::Ordinal)
@@ -414,6 +414,7 @@ if($historyLoadStart -lt 0 -or $historyLoadEnd -le $historyLoadStart){throw 'Can
 $historyLoadBody=$editorSource.Substring($historyLoadStart,$historyLoadEnd-$historyLoadStart)
 if(-not $editorSource.Contains('$worker.Add_RunWorkerCompleted({') -or
    $editorSource -notmatch '\$worker\.RunWorkerAsync\(\$historyUri\)' -or
+   $historyLoadBody -notmatch '/v1/graphics/.*/history\?limit=4' -or
    $editorSource -notmatch '\$worker\.RequestContext=\$historyUiContext' -or
    $editorSource -notmatch '\$request=\$sender\.RequestContext' -or
    $editorSource -notmatch 'Set-CafeGraphicsHistoryUi -Context \$request -ErrorMessage \$message' -or
@@ -431,8 +432,8 @@ $restoreStart=$editorSource.IndexOf('$restoreHistory.Add_Click({',[StringCompari
 $restoreEnd=$editorSource.IndexOf('}.GetNewClosure())',$restoreStart,[StringComparison]::Ordinal)
 if($restoreStart -lt 0 -or $restoreEnd -le $restoreStart){throw 'Cannot identify graphics history restore handler.'}
 $restoreBody=$editorSource.Substring($restoreStart,$restoreEnd-$restoreStart)
-if($restoreBody -notmatch 'Get-ProfileGraphicsVersion' -or $restoreBody -notmatch 'applyGraphicsPresetToEditor' -or
-   $restoreBody -match 'Save-ProfileSettings|Sync-ProfileToGitHub|Invoke-GraphicsOnly'){
+if($restoreBody -notmatch 'Get-CafeGraphicsHistoryPreset' -or $restoreBody -notmatch 'applyGraphicsPresetToEditor' -or
+   $restoreBody -match 'Save-ProfileSettings|Sync-ProfileToBackend|Invoke-GraphicsOnly'){
     throw 'History restore must validate and load into the editor without saving or applying graphics.'
 }
 foreach($tabLabel in @('Mouse','NVIDIA / Display','CS2 / Apps')){
@@ -458,8 +459,8 @@ if($editorSource -match 'New-EditorLabel \$dialog ''Resolution (?:width|height)'
 }
 if($editorSource -notmatch '\$saveEditorValues = \{' -or
    $editorSource -notmatch 'Save-ProfileSettings' -or
-   $editorSource -notmatch 'Sync-ProfileToGitHub'){
-    throw 'Tab redesign must preserve existing profile Save Locally and GitHub Sync.'
+   $editorSource -notmatch 'Sync-ProfileToBackend'){
+    throw 'Tab redesign must preserve local saving and backend sync.'
 }
 foreach($fn in @('New-EditorTabGrid','Add-EditorTabField','New-EditorTabNumber','Add-EditorTabWide')){
     if(-not $definitions.ContainsKey($fn)){throw ('Tab layout helper missing: '+$fn)}
@@ -489,7 +490,7 @@ try{
        $historyUiTestContext.RestoreButton.Enabled -or
        -not $historyUiTestContext.LoadButton.Enabled -or
        -not $historyUiTestContext.HistoryState.Loaded){
-        throw 'A missing or empty GitHub history path must show an empty-history state and permit retry.'
+        throw 'An empty backend or mirror history must show an empty-history state and permit retry.'
     }
 }finally{
     $historyUiTestContext.HistoryChoice.Dispose();$historyUiTestContext.LoadButton.Dispose()
@@ -626,9 +627,9 @@ if($definitions['Show-PCDiagnostics'] -notmatch "Name 'PC diagnostics inventory'
    $definitions['Check-CafeLauncherUpdates'] -notmatch 'if \(\$Manual\).*CafeLauncher is up to date'){
     throw 'PC inventory must be timed on demand, and a manual up-to-date check must still show its information dialog.'
 }
-if($editorSource -notmatch 'Sync-ProfileToGitHub -ProfileName \$ProfileName -Token \$token' -or
-   $editorSource -notmatch 'Confirm GitHub sync'){
-    throw 'Production editor must retain confirmed JSON and CFG GitHub synchronization.'
+if($editorSource -notmatch 'Sync-ProfileToBackend -ProfileName \$ProfileName -Token \$token' -or
+   $editorSource -notmatch 'Confirm backend sync'){
+    throw 'Production editor must confirm and sync profile, graphics, and CFG to the backend.'
 }
 
 # Construct the production dashboard in memory. No GUI is shown and none
