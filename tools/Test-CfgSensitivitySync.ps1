@@ -267,7 +267,8 @@ function Invoke-CafeGitHubRestMethod {
 function Get-CafeCloudSnapshot {
     param([string]$ProfileName)
     $cfgName=[string]$script:GamingProfiles[$ProfileName].ConfigFile
-    return [pscustomobject]@{Cfg=[string]$script:FakeFiles[$cfgName];Source='Backend'}
+    $content=[string]$script:FakeFiles[$cfgName]
+    return [pscustomobject]@{Cfg=$content;CfgSensitivity=(Get-CafeCS2CfgSensitivity -Content $content);Source='Backend'}
 }
 # Opening Edit reads each selected profile's CFG value through the Contents API.
 $expectedProfileSens=@{FabMode='1.1';ArliMode='1';ArmlMode='1';BrileMode='1.2';OliMode='1.2';Provmode='1.2'}

@@ -659,6 +659,12 @@ function Refresh-ProfileFromGitHub {
     $script:ProfileRefreshStatus[$ProfileName]='GitHub'
     return 'GitHub'
 }
+function Refresh-ProfileFromBackend {
+    param([string]$ProfileName)
+    [void]$script:ProfileRefreshCalls.Add($ProfileName)
+    $script:ProfileRefreshStatus[$ProfileName]='Backend'
+    return 'Backend'
+}
 $script:LogPath=Join-Path $env:TEMP ('CafeLauncher-dashboard-CI-'+[Guid]::NewGuid().ToString('N')+'.log')
 $script:GitHubRateLimitSnapshot=$null
 $script:GitHubRateLimitLabel=$null
