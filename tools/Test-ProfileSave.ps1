@@ -26,6 +26,11 @@ if($c -lt 0){throw 'Editor save closure not found.'}
 $handlers=$editor.Substring($c)
 if($handlers -match '\$script:PendingSync\s*\['){throw 'BUG: script-scoped PendingSync in captured click closure.'}
 if($editor -notmatch '\$pendingSyncState\s*=\s*\$script:PendingSync'){throw 'Missing captured pending-sync hashtable.'}
+if($editor -notmatch '\$backendRetryBlockedState\s*=\s*\$script:BackendRetryBlocked' -or
+   $editor -notmatch '\$backendRetryBlockedState\.Remove\(\$ProfileName\)' -or
+   $editor -match '\$script:BackendRetryBlocked\.Remove\(\$ProfileName\)'){
+    throw 'Editor save must use the captured backend retry-blocked dictionary inside its GetNewClosure callback.'
+}
 if([regex]::Matches($handlers,'\$pendingSyncState\s*\[\s*\$ProfileName\s*\]').Count -ne 1 -or
    $handlers -notmatch 'pendingTargetState\[\$ProfileName\]=''Backend'''){
     throw 'Editor save must mark one captured local pending edit with backend as its destination.'

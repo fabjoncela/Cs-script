@@ -7910,10 +7910,12 @@ function Show-ProfileEditor {
     $capturedCS2ConvarsState = $script:CapturedCS2Convars
     $capturedCS2BindsState=$script:CapturedCS2Binds
     $pendingCfgSensitivityState=$script:PendingCfgSensitivity
+    $backendRetryBlockedState=$script:BackendRetryBlocked
     if ($null -eq $pendingSyncState -or $pendingSyncState -isnot [System.Collections.IDictionary] -or
         $null -eq $capturedCS2ConvarsState -or $capturedCS2ConvarsState -isnot [System.Collections.IDictionary] -or
         $null -eq $capturedCS2BindsState -or $capturedCS2BindsState -isnot [System.Collections.IDictionary] -or
-        $null -eq $pendingCfgSensitivityState -or $pendingCfgSensitivityState -isnot [System.Collections.IDictionary]) {
+        $null -eq $pendingCfgSensitivityState -or $pendingCfgSensitivityState -isnot [System.Collections.IDictionary] -or
+        $null -eq $backendRetryBlockedState -or $backendRetryBlockedState -isnot [System.Collections.IDictionary]) {
         throw 'Profile editor shared state is missing; cannot safely edit this profile.'
     }
 
@@ -8603,7 +8605,7 @@ function Show-ProfileEditor {
         $pendingSyncState[$ProfileName] = $true
         $pendingTargetState[$ProfileName]='Backend'
         Clear-CafeBackendQueue -ProfileName $ProfileName
-        [void]$script:BackendRetryBlocked.Remove($ProfileName)
+        [void]$backendRetryBlockedState.Remove($ProfileName)
         Save-ProfileSettings
         Write-Log "$ProfileName edited locally: pointer=$($p.PointerSpeed), acceleration enabled=$(-not $p.DisableAcceleration), display=$($p.Width)x$($p.Height)@$($p.RefreshHz), CS2=$($graphicsPreset.Settings.Width)x$($graphicsPreset.Settings.Height) refresh=$refreshPolicy scaling=$scalingMode, vibrance=$($p.Vibrance)%, hue=$($p.Hue) degrees, LogitechDPI=$($p.LogitechDPI), sensitivity=$sensValue."
     }.GetNewClosure()
