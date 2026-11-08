@@ -35,4 +35,14 @@ Do not persist a sync token or GitHub credential. During migration from the exis
 4. Route editor, Apply, Play + Exec, graphics history, and dashboard status through the backend-first adapter. Remove GitHub write authorization from the new save flow.
 5. Run the existing Windows PowerShell 5.1 focused tests plus new transport, pending-write, conflict, and migration cases; perform a real Windows UI smoke test before releasing the updated launcher to a café PC.
 
+## Follow-up: automate backend deployment
+
+After the CafeLauncher client integration passes Windows testing, add a GitHub Actions deployment flow for the backend repository:
+
+|  |  |
+|---|---|
+| cafelauncher-backend | Push changes → GitHub Actions runs tests → after they pass, deploy that backend revision to Ubuntu, restart its systemd services, and check the health endpoint. Roll back if the check fails. |
+
+Keep the CafeLauncher client release on its own Windows test and launcher publishing path. The Ubuntu server should not pull or deploy `Cs-script`.
+
 No backend server, Cloudflare, Tailscale, Docker, or remote profile data change is required for this client work.

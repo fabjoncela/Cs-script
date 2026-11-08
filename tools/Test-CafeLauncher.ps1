@@ -540,47 +540,34 @@ if($liveLogHistory.Count -ne 1 -or
 if(([regex]::Matches($psSource,'Initialize-LiveLogHistory')).Count -ne 2){
     throw 'Retained LIVE LOGS history must only be initialized by its helper and the Show Logs action.'
 }
-if($editorSource -notmatch 'Refresh-ProfileFromGitHub -ProfileName \$ProfileName' -or
+if($editorSource -notmatch 'Refresh-ProfileFromBackend -ProfileName \$ProfileName' -or
    $editorSource -notmatch 'Get-ProfileGraphicsPreset -ProfileName \$ProfileName -RequireGitHub' -or
    $editorSource -notmatch 'Resolve-PendingProfileChanges -ProfileName \$ProfileName' -or
    $editorSource -notmatch 'Confirm-LocalProfileApply -ProfileName \$ProfileName -Source \$profileSource -Action edit' -or
    $editorSource -notmatch '\[void\]\$dialog\.ShowDialog\(\$form\)'){
-    throw 'Opening the profile editor must refresh its profile and graphics from GitHub and require explicit local fallback confirmation.'
+    throw 'Opening the profile editor must refresh its profile and graphics from the backend/mirror and require explicit local fallback confirmation.'
 }
 $graphicsReader=@($psAst.FindAll({param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Get-ProfileGraphicsPreset'},$true))
 if($graphicsReader.Count -ne 1 -or $graphicsReader[0].Extent.Text -notmatch '\[switch\]\$RequireGitHub' -or
    $graphicsReader[0].Extent.Text -notmatch 'if\(\$RequireGitHub\)\{throw'){
-    throw 'Editor GitHub graphics refresh must fail closed so local fallback requires a separate user confirmation.'
+    throw 'Editor cloud graphics refresh must fail closed so local fallback requires a separate user confirmation.'
 }
 $startupTimerMatch=[regex]::Match($dashboardSource,'\$startupTimer\s*=\s*New-Object System\.Windows\.Forms\.Timer')
 if(-not $startupTimerMatch.Success){throw 'Startup update timer is missing.'}
 $startupSource=$dashboardSource.Substring($startupTimerMatch.Index)
-if($startupSource -match 'Refresh-DashboardProfiles|Refresh-ProfileFromGitHub'){
-    throw 'Dashboard startup must not spend GitHub requests refreshing all profiles.'
+if($startupSource -match 'Refresh-DashboardProfiles|Refresh-ProfileFromBackend'){
+    throw 'Dashboard startup must not refresh all backend profiles.'
 }
-$pendingChoiceUi=@($psAst.FindAll({param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Show-PendingProfileChoice'},$true))
 $pendingResolver=@($psAst.FindAll({param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Resolve-PendingProfileChanges'},$true))
-$confirmationAt=-1
-$authorizationAt=-1
-if($pendingResolver.Count -eq 1){
-    $confirmationAt=$pendingResolver[0].Extent.Text.IndexOf('$confirmUpload=',[StringComparison]::Ordinal)
-    $authorizationAt=$pendingResolver[0].Extent.Text.IndexOf('$authorization=Get-GitHubSyncAuthorization',[StringComparison]::Ordinal)
-}
-if($pendingChoiceUi.Count -ne 1 -or
-   $pendingChoiceUi[0].Extent.Text -notmatch 'Use GitHub settings' -or
-   $pendingChoiceUi[0].Extent.Text -notmatch 'Upload local edits to GitHub' -or
-   $pendingChoiceUi[0].Extent.Text -notmatch 'Cancel' -or
-   $pendingResolver.Count -ne 1 -or
-   $pendingResolver[0].Extent.Text -notmatch 'Show-PendingProfileChoice' -or
-   $pendingResolver[0].Extent.Text -notmatch 'Sync-ProfileToGitHub' -or
-   -not $pendingResolver[0].Extent.Text.Contains('Upload the local profile, graphics, and CFG sensitivity edits') -or
-   -not $pendingResolver[0].Extent.Text.Contains('Button2') -or
-   -not $pendingResolver[0].Extent.Text.Contains('$confirmUpload -ne [System.Windows.Forms.DialogResult]::Yes') -or
-   $confirmationAt -lt 0 -or $authorizationAt -lt $confirmationAt -or
-   -not $pendingResolver[0].Extent.Text.Contains('Refresh-ProfileFromGitHub -ProfileName $ProfileName -NoSave -ForceLoad') -or
-   -not $pendingResolver[0].Extent.Text.Contains('Get-ProfileGraphicsPreset -ProfileName $ProfileName -RequireGitHub') -or
-   -not $pendingResolver[0].Extent.Text.Contains('$script:PendingSync[$ProfileName]=$true')){
-    throw 'Pending edits must offer GitHub-first choices, confirm uploads before authorization, and retain local state if fresh GitHub reads fail.'
+$pendingResolverText=if($pendingResolver.Count -eq 1){$pendingResolver[0].Extent.Text}else{''}
+if($pendingResolver.Count -ne 1 -or
+   $pendingResolverText -notmatch 'PendingTarget\[\$ProfileName\].*GitHubLegacy' -or
+   $pendingResolverText -notmatch 'Sync-ProfileToBackend' -or
+   $pendingResolverText -notmatch 'Get-CafeBackendSyncToken' -or
+   $pendingResolverText -notmatch 'Get-CafeBackendSnapshot' -or
+   $pendingResolverText -notmatch 'Clear-CafeBackendQueue' -or
+   $pendingResolverText -notmatch 'local changes waiting to sync to the backend'){
+    throw 'Pending backend edits must be preserved, sync only to the backend, and discard only after a fresh backend read.'
 }
 $profileApply=@($psAst.FindAll({param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Invoke-GamingProfile'},$true))
 $graphicsApply=@($psAst.FindAll({param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Invoke-GraphicsOnly'},$true))
@@ -594,8 +581,8 @@ $routineStartAt=$profileApplyBody.IndexOf('full routine started',[StringComparis
 if($graphicsRefreshAt -lt 0 -or $routineStartAt -le $graphicsRefreshAt -or
    $profileApplyBody -notmatch '\$script:GamingProfiles\[\$ProfileName\]\.ScalingMode=\[int\]\$graphicsPreset\.ScalingMode' -or
    $profileApplyBody -notmatch 'No profile actions were applied' -or
-   $profileApplyBody -notmatch 'GitHub Graphics Refresh Failed'){
-    throw 'Normal profile Apply must verify the GitHub graphics preset, use its ScalingMode, and cancel before all actions if verification fails.'
+   $profileApplyBody -notmatch 'Cloud Graphics Refresh Failed'){
+    throw 'Normal profile Apply must verify the cloud graphics preset, use its ScalingMode, and cancel before all actions if verification fails.'
 }
 if($dashboardSource -match "New-CafeLabel -Text 'v\d{4}\.\d{2}\.\d{2}\.\d+'" -or
    $dashboardSource -notmatch "New-CafeLabel -Text \('v'\+\(Get-CafeLauncherRelease\)\)" -or

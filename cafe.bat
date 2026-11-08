@@ -9035,12 +9035,12 @@ function Invoke-GamingProfile {
             # Profile and Apply Graphics cannot choose different scaling.
             $graphicsPreset=Get-ProfileGraphicsPreset -ProfileName $ProfileName -RequireGitHub
             $script:GamingProfiles[$ProfileName].ScalingMode=[int]$graphicsPreset.ScalingMode
-            Write-Log ("$ProfileName profile apply verified graphics/$ProfileName.json on GitHub; authoritative ScalingMode="+$graphicsPreset.ScalingMode+'.')
+            Write-Log ("$ProfileName profile apply verified graphics/$ProfileName.json from the backend or mirror; authoritative ScalingMode="+$graphicsPreset.ScalingMode+'.')
             try{Save-ProfileSettings}catch{Write-Log ("Unable to cache the verified $ProfileName scaling mode locally: "+$_.Exception.Message) 'WARN'}
         }catch{
-            $message="Could not verify the latest GitHub CS2 graphics settings for $ProfileName. No profile actions were applied, to avoid using a different scaling mode than Apply Graphics.`r`n`r`n$($_.Exception.Message)"
+            $message="Could not verify the latest cloud CS2 graphics settings for $ProfileName. No profile actions were applied, to avoid using a different scaling mode than Apply Graphics.`r`n`r`n$($_.Exception.Message)"
             Write-Log ("$ProfileName profile apply canceled: "+$message) 'ERROR'
-            [void][System.Windows.Forms.MessageBox]::Show($message,'GitHub Graphics Refresh Failed','OK','Warning')
+            [void][System.Windows.Forms.MessageBox]::Show($message,'Cloud Graphics Refresh Failed','OK','Warning')
             return
         }
     }

@@ -45,14 +45,14 @@ if($source -notmatch '\$play\.Add_Click' -or $source -notmatch 'Start-CS2WithPro
     throw 'Missing independent Play + Exec profile button handler.'
 }
 $script:GamingProfiles=[ordered]@{
-    FabMode=@{ConfigFile='fab.cfg';CfgDownloadUrl='https://raw.githubusercontent.com/fabjoncela/Cs-script/main/fab.cfg'}
-    ArliMode=@{ConfigFile='arli.cfg';CfgDownloadUrl='https://raw.githubusercontent.com/fabjoncela/Cs-script/main/arli.cfg'}
-    BrileMode=@{ConfigFile='brile.cfg';CfgDownloadUrl='https://raw.githubusercontent.com/fabjoncela/Cs-script/main/brile.cfg'}
-    ArmlMode=@{ConfigFile='arml.cfg';CfgDownloadUrl='https://raw.githubusercontent.com/fabjoncela/Cs-script/main/arml.cfg'}
-    OliMode=@{ConfigFile='oli.cfg';CfgDownloadUrl='https://raw.githubusercontent.com/fabjoncela/Cs-script/main/oli.cfg'}
-    Provmode=@{ConfigFile='prov.cfg';CfgDownloadUrl='https://raw.githubusercontent.com/fabjoncela/Cs-script/main/prov.cfg'}
+    FabMode=@{ConfigFile='fab.cfg';CfgDownloadUrl='https://fabjon-hp.tail681ec9.ts.net:10000/v1/cfg/fab.cfg'}
+    ArliMode=@{ConfigFile='arli.cfg';CfgDownloadUrl='https://fabjon-hp.tail681ec9.ts.net:10000/v1/cfg/arli.cfg'}
+    BrileMode=@{ConfigFile='brile.cfg';CfgDownloadUrl='https://fabjon-hp.tail681ec9.ts.net:10000/v1/cfg/brile.cfg'}
+    ArmlMode=@{ConfigFile='arml.cfg';CfgDownloadUrl='https://fabjon-hp.tail681ec9.ts.net:10000/v1/cfg/arml.cfg'}
+    OliMode=@{ConfigFile='oli.cfg';CfgDownloadUrl='https://fabjon-hp.tail681ec9.ts.net:10000/v1/cfg/oli.cfg'}
+    Provmode=@{ConfigFile='prov.cfg';CfgDownloadUrl='https://fabjon-hp.tail681ec9.ts.net:10000/v1/cfg/prov.cfg'}
 }
-$script:FabCfgCloudUrl='https://raw.githubusercontent.com/fabjoncela/Cs-script/main/fab.cfg'
+$script:FabCfgCloudUrl='https://fabjon-hp.tail681ec9.ts.net:10000/v1/cfg/fab.cfg'
 $script:Installed=@()
 $script:InstalledUrls=@()
 $script:CloudPreferredFlags=@()
@@ -60,7 +60,7 @@ $script:Launched=@()
 $script:Events=@()
 $script:ShouldInstall=$true
 function Write-Log {param([string]$Message,[string]$Level='INFO')}
-function Refresh-ProfileFromGitHub {param([string]$ProfileName)}
+function Refresh-ProfileFromBackend {param([string]$ProfileName);return 'Backend'}
 function Resolve-PendingProfileChanges {param([string]$ProfileName);return $true}
 function Confirm-LocalProfileApply {param([string]$ProfileName,[string]$Source,[string]$Action='apply');return $true}
 function Get-Process {[CmdletBinding()] param([string]$Name); return $null}
@@ -102,8 +102,8 @@ foreach($name in @('FabMode','ArliMode','BrileMode','ArmlMode','OliMode','Provmo
 }
 if($script:Launched.Count -ne 6 -or $script:Installed.Count -ne 6){throw 'Expected exactly six installs and Steam launch requests.'}
 if(@($script:CloudPreferredFlags | Where-Object { -not $_ }).Count -ne 0){throw 'Play + Exec must prefer the selected profile CFG from GitHub.'}
-if(@($script:InstalledUrls | Where-Object { $_ -notmatch '^https://raw\.githubusercontent\.com/.+\.cfg$' }).Count -ne 0){
-    throw 'Play + Exec did not pass the selected GitHub profile CFG URL to the installer.'
+if(@($script:InstalledUrls | Where-Object { $_ -notmatch '^https://fabjon-hp\.tail681ec9\.ts\.net:10000/v1/cfg/[a-z0-9_-]+\.cfg$' }).Count -ne 0){
+    throw 'Play + Exec did not pass the selected backend CFG route to the installer.'
 }
 if($script:Events.Count -ne 18){throw 'Expected baseline install, profile CFG install, then launch for each profile.'}
 for($i=0;$i -lt 6;$i++){
@@ -128,4 +128,4 @@ for($i=0;$i -lt 6;$i++){
 $failed=$false
 try {[void](Get-CS2SteamLaunchArguments -CfgName 'oli.cfg && powershell.exe')}catch{$failed=$true}
 if(-not $failed){throw 'Invalid CFG name was accepted.'}
-Write-Host 'PASS: Six Play + Exec buttons install the baseline first, preserve GitHub CFG priority, and send ordered one-time Steam exec arguments; normal Apply never edits Steam.'
+Write-Host 'PASS: Six Play + Exec buttons install the baseline first, preserve backend CFG priority, and send ordered one-time Steam exec arguments; normal Apply never edits Steam.'

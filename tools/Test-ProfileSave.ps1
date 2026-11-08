@@ -14,7 +14,7 @@ if($confirm.Count -ne 1 -or $confirm[0].Extent.Text -notmatch "'YesNo','Warning'
     throw 'Local profile fallback must require an explicit Yes confirmation with No as the default.'
 }
 $apply=@($ast.FindAll({param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst]},$true) | Where-Object {$_.Name -eq 'Invoke-GamingProfile'})
-if($apply.Count -ne 1 -or $apply[0].Extent.Text -notmatch '(?s)Refresh-ProfileFromGitHub.*?Confirm-LocalProfileApply.*?\{return\}.*?Clear-RunOutcomes'){
+if($apply.Count -ne 1 -or $apply[0].Extent.Text -notmatch '(?s)Refresh-ProfileFromBackend.*?Confirm-LocalProfileApply.*?\{return\}.*?Clear-RunOutcomes'){
     throw 'Profile Apply must confirm local fallback before starting or clearing run state.'
 }
 $a=$code.IndexOf('function Show-ProfileEditor {',[StringComparison]::Ordinal)
@@ -27,7 +27,7 @@ $handlers=$editor.Substring($c)
 if($handlers -match '\$script:PendingSync\s*\['){throw 'BUG: script-scoped PendingSync in captured click closure.'}
 if($editor -notmatch '\$pendingSyncState\s*=\s*\$script:PendingSync'){throw 'Missing captured pending-sync hashtable.'}
 if([regex]::Matches($handlers,'\$pendingSyncState\s*\[\s*\$ProfileName\s*\]').Count -ne 2){
-    throw 'Both local save and GitHub sync must update captured pending-sync state.'
+    throw 'Both local save and backend sync must update captured pending-sync state.'
 }
 foreach($name in @('Export-ProfileValues','Save-ProfileSettings')){
     $found=@($ast.FindAll({param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst]},$true) | Where-Object { $_.Name -eq $name })
