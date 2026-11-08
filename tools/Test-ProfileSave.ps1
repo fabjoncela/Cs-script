@@ -26,8 +26,9 @@ if($c -lt 0){throw 'Editor save closure not found.'}
 $handlers=$editor.Substring($c)
 if($handlers -match '\$script:PendingSync\s*\['){throw 'BUG: script-scoped PendingSync in captured click closure.'}
 if($editor -notmatch '\$pendingSyncState\s*=\s*\$script:PendingSync'){throw 'Missing captured pending-sync hashtable.'}
-if([regex]::Matches($handlers,'\$pendingSyncState\s*\[\s*\$ProfileName\s*\]').Count -ne 2){
-    throw 'Both local save and backend sync must update captured pending-sync state.'
+if([regex]::Matches($handlers,'\$pendingSyncState\s*\[\s*\$ProfileName\s*\]').Count -ne 1 -or
+   $handlers -notmatch 'pendingTargetState\[\$ProfileName\]=''Backend'''){
+    throw 'Editor save must mark one captured local pending edit with backend as its destination.'
 }
 foreach($name in @('Export-ProfileValues','Save-ProfileSettings')){
     $found=@($ast.FindAll({param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst]},$true) | Where-Object { $_.Name -eq $name })

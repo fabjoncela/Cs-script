@@ -167,6 +167,7 @@ $script:CapturedCS2Convars=@{}
 $script:CapturedCS2Binds=@{}
 $script:PendingCfgSensitivity=@{}
 function Get-GitHubCfgFromContentsApi {param([string]$Repo,[string]$Branch,[string]$Path);return [pscustomobject]@{Content=''}}
+function Get-CafeCloudSnapshot {param([string]$ProfileName);return [pscustomobject]@{Cfg='sensitivity "1.25"';Source='Backend';Revision=1}}
 function Get-CS2ProfileBaselineCfgText {return ''}
 function Show-CafeCS2CaptureReviewDialog {param($Rows,$OwnerWindow);return @($Rows|Where-Object{$_.Import})}
 $allCaptureGroups=@('Graphics','Sensitivity','Crosshair','Viewmodel','HUD and Radar','Audio','Movement','Jump','Crouch','Walk','Use','Voice','Reload','Inspect','Scoreboard','Attack','Secondary attack','Drop','Weapon slots','Grenade keys','Scroll wheel')
