@@ -13,7 +13,6 @@ if(@($errors).Count){throw ('Launcher syntax error: '+$errors[0].Message)}
 $uiFunction=$ast.Find({param($n)$n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Set-CafeGraphicsHistoryUi'},$true)
 $editorFunction=$ast.Find({param($n)$n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Show-ProfileEditor'},$true)
 $workerFunction=$ast.Find({param($n)$n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'New-CafeGraphicsHistoryWorker'},$true)
-$uriFunction=$ast.Find({param($n)$n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'New-CafeGraphicsHistoryRequestUri'},$true)
 if(-not $uiFunction -or -not $editorFunction -or -not $workerFunction){throw 'Graphics history UI, editor, or background worker source was not found.'}
 Invoke-Expression $uiFunction.Extent.Text
 $editorSource=$editorFunction.Extent.Text
@@ -21,8 +20,7 @@ foreach($required in @(
     '$worker.RequestContext=$historyUiContext',
     '$historyUri=$script:BackendBaseUrl+''/v1/graphics/''+$ProfileName+''/history?limit=4''',
     '$request=$sender.RequestContext',
-    'Set-CafeGraphicsHistoryUi -Context $request -ErrorMessage $message',
-    'Set-CafeGraphicsHistoryUi -Context $request -NoHistory'
+    'Set-CafeGraphicsHistoryUi -Context $request -ErrorMessage $message'
 )){
     if(-not $editorSource.Contains($required)){throw ('Graphics history callback is missing required behavior: '+$required)}
 }
@@ -34,7 +32,7 @@ $loadHandlerEnd=$editorSource.IndexOf('}.GetNewClosure())',$loadHandlerStart,[St
 if($loadHandlerStart -lt 0 -or $loadHandlerEnd -le $loadHandlerStart){throw 'Cannot isolate the closed-over Load history handler.'}
 $loadHandlerSource=$editorSource.Substring($loadHandlerStart,$loadHandlerEnd-$loadHandlerStart)
 if($loadHandlerSource -match '\$script:Github(Repo|Branch)'){
-    throw 'The closed-over Load history handler must use its captured repository and branch values, not its private script scope.'
+    throw 'The closed-over Load history handler must use backend config, not GitHub repository settings.'
 }
 $completionSource=$editorSource.Substring($completionStart,$completionEnd-$completionStart)
 if($completionSource -match '\.GetNewClosure\(\)'){

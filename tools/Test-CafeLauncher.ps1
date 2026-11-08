@@ -288,9 +288,9 @@ $graphicsPresetFunction=@($psAst.FindAll({
         $node.Name -eq 'Get-ProfileGraphicsPreset'
 },$true))
 if($graphicsPresetFunction.Count -ne 1 -or
-   $graphicsPresetFunction[0].Extent.Text -notmatch 'Get-GitHubJsonFromContentsApi' -or
-   $graphicsPresetFunction[0].Extent.Text -match 'raw\.githubusercontent\.com'){
-    throw 'CS2 graphics presets must also use the validated Contents API instead of mutable raw CDN reads.'
+   $graphicsPresetFunction[0].Extent.Text -notmatch 'Get-CafeCloudSnapshot' -or
+   $graphicsPresetFunction[0].Extent.Text -notmatch 'RequireGitHub'){
+    throw 'CS2 graphics presets must use the backend/mirror adapter and require verified cloud data for Apply.'
 }
 
 # Exercise the extracted API reader against a mocked Contents API response.

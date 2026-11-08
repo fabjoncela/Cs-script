@@ -264,6 +264,11 @@ function Invoke-CafeGitHubRestMethod {
     $script:FakeLatestCommitSha=$script:FakeCommitSha
     return [pscustomobject]@{commit=[pscustomobject]@{sha=$script:FakeCommitSha}}
 }
+function Get-CafeCloudSnapshot {
+    param([string]$ProfileName)
+    $cfgName=[string]$script:GamingProfiles[$ProfileName].ConfigFile
+    return [pscustomobject]@{Cfg=[string]$script:FakeFiles[$cfgName];Source='Backend'}
+}
 # Opening Edit reads each selected profile's CFG value through the Contents API.
 $expectedProfileSens=@{FabMode='1.1';ArliMode='1';ArmlMode='1';BrileMode='1.2';OliMode='1.2';Provmode='1.2'}
 $oldLocalAppData=$env:LOCALAPPDATA
@@ -275,7 +280,7 @@ try{
         $script:PendingSync[$name]=$false
         [void]$script:PendingCfgSensitivity.Remove($name)
         $loaded=Get-ProfileCfgSensitivity -ProfileName $name
-        Assert-True ($loaded.Source -eq 'GitHub' -and $loaded.Sensitivity -ceq $expectedProfileSens[$name]) ($name+' did not load its own CFG sensitivity.')
+        Assert-True ($loaded.Source -eq 'Backend' -and $loaded.Sensitivity -ceq $expectedProfileSens[$name]) ($name+' did not load its own CFG sensitivity from backend-first source.')
         $script:PendingSync[$name]=$true
         $script:PendingCfgSensitivity[$name]='1.5'
     }
