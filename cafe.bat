@@ -11,7 +11,7 @@ del /q "%CAFE_RESTART_SIGNAL%" >nul 2>&1
 exit /b
 
 # POWERSHELL_GUI
-# CAFE_RELEASE=2026.11.08.2
+# CAFE_RELEASE=2026.11.08.4
 
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
@@ -660,6 +660,24 @@ public sealed class CafeSentryLogWorker : BackgroundWorker {
 # This deliberately makes no additional request to GitHub.
 $script:GitHubRateLimitSnapshot=$null
 $script:GitHubRateLimitLabel=$null
+$script:CloudReadSource='Checking'
+$script:CloudReadSourceLabel=$null
+function Set-CafeCloudReadSourceDisplay {
+    param([ValidateSet('Checking','Backend','GitHubMirror','LocalFallback','LocalPending')][string]$Source)
+    $script:CloudReadSource=$Source
+    if($script:CloudReadSourceLabel -and -not $script:CloudReadSourceLabel.IsDisposed){
+        switch($Source){
+            'Backend' {$script:CloudReadSourceLabel.Text='Read source: Backend API';$script:CloudReadSourceLabel.ForeColor=$script:DashboardPalette.Accent;break}
+            'GitHubMirror' {$script:CloudReadSourceLabel.Text='Read source: GitHub fallback';$script:CloudReadSourceLabel.ForeColor=[System.Drawing.Color]::FromArgb(255,190,105);break}
+            'LocalFallback' {$script:CloudReadSourceLabel.Text='Read source: Local data';$script:CloudReadSourceLabel.ForeColor=$script:DashboardPalette.Muted;break}
+            'LocalPending' {$script:CloudReadSourceLabel.Text='Read source: Local pending edits';$script:CloudReadSourceLabel.ForeColor=[System.Drawing.Color]::FromArgb(255,190,105);break}
+            default {$script:CloudReadSourceLabel.Text='Read source: Checking backend';$script:CloudReadSourceLabel.ForeColor=$script:DashboardPalette.Muted}
+        }
+    }
+    if($script:GitHubRateLimitLabel -and -not $script:GitHubRateLimitLabel.IsDisposed){
+        $script:GitHubRateLimitLabel.Visible=($Source -eq 'GitHubMirror')
+    }
+}
 function Set-CafeGitHubRateLimitDisplay {
     param([string]$Remaining,[string]$Limit)
     $remainingValue=0;$limitValue=0
@@ -673,6 +691,7 @@ function Set-CafeGitHubRateLimitDisplay {
     try{
         $script:GitHubRateLimitLabel.Text=$labelText
         $script:GitHubRateLimitLabel.ForeColor=if($remainingValue -le 5){[System.Drawing.Color]::FromArgb(255,150,120)}else{$MUTED}
+        $script:GitHubRateLimitLabel.Visible=($script:CloudReadSource -eq 'GitHubMirror')
     }catch{}
 }
 function Update-CafeGitHubRateLimitFromHeaders {
@@ -6247,7 +6266,9 @@ function Get-CafeBackendSnapshot {
     $profile=ConvertFrom-CafeCloudJson -Bytes $responses[0].Bytes
     $graphics=ConvertFrom-CafeCloudJson -Bytes $responses[1].Bytes
     $cfg=(New-Object Text.UTF8Encoding($false,$true)).GetString($responses[2].Bytes)
-    return (Assert-CafeCloudSnapshot -ProfileName $ProfileName -Profile $profile -Graphics $graphics -Cfg $cfg -Revision $revision -Source 'Backend')
+    $snapshot=Assert-CafeCloudSnapshot -ProfileName $ProfileName -Profile $profile -Graphics $graphics -Cfg $cfg -Revision $revision -Source 'Backend'
+    Set-CafeCloudReadSourceDisplay -Source 'Backend'
+    return $snapshot
 }
 function Get-CafeMirrorSnapshot {
     param([Parameter(Mandatory=$true)][string]$ProfileName)
@@ -6275,14 +6296,17 @@ function Get-CafeMirrorSnapshot {
     $profile=ConvertFrom-CafeCloudJson -Bytes $payload.profile
     $graphics=ConvertFrom-CafeCloudJson -Bytes $payload.graphics
     $cfg=(New-Object Text.UTF8Encoding($false,$true)).GetString($payload.cfg)
-    return (Assert-CafeCloudSnapshot -ProfileName $ProfileName -Profile $profile -Graphics $graphics -Cfg $cfg -Revision ([int]$entry.revision) -Source 'GitHubMirror')
+    $snapshot=Assert-CafeCloudSnapshot -ProfileName $ProfileName -Profile $profile -Graphics $graphics -Cfg $cfg -Revision ([int]$entry.revision) -Source 'GitHubMirror'
+    Set-CafeCloudReadSourceDisplay -Source 'GitHubMirror'
+    return $snapshot
 }
 function Get-CafeCloudSnapshot {
     param([Parameter(Mandatory=$true)][string]$ProfileName,[switch]$ForceRefresh)
     try{$snapshot=Get-CafeBackendSnapshot -ProfileName $ProfileName}
     catch{
         Write-Log ('Backend read failed for '+$ProfileName+'; trying the GitHub mirror: '+$_.Exception.Message) 'WARN'
-        $snapshot=Get-CafeMirrorSnapshot -ProfileName $ProfileName
+        try{$snapshot=Get-CafeMirrorSnapshot -ProfileName $ProfileName}
+        catch{Set-CafeCloudReadSourceDisplay -Source 'LocalFallback';throw}
     }
     $script:BackendSnapshots[$ProfileName]=$snapshot
     return $snapshot
@@ -6424,6 +6448,7 @@ function Refresh-ProfileFromBackend {
     if(-not $script:GamingProfiles.Contains($ProfileName)){throw 'Unknown backend profile.'}
     if($script:PendingSync[$ProfileName]){
         $script:ProfileRefreshStatus[$ProfileName]='LocalPending'
+        Set-CafeCloudReadSourceDisplay -Source 'LocalPending'
         return 'LocalPending'
     }
     try{
@@ -8798,11 +8823,11 @@ function Request-LogitechLiveDPI {
 }
 
 function Invoke-Logihub {
-    param([string[]]$Arguments)
+    param([string[]]$Arguments,[switch]$QuietOutput)
     $exe=Get-LogihubExecutable
     $output=(& $exe @Arguments 2>&1 | Out-String).Trim()
     $code=$LASTEXITCODE
-    if($output){Write-Log ('logihub '+($Arguments -join ' ')+': '+$output)}
+    if($output -and -not $QuietOutput){Write-Log ('logihub '+($Arguments -join ' ')+': '+$output)}
     if($code -ne 0){throw ('logihub exited '+$code+': '+$output)}
     return $output
 }
@@ -8847,9 +8872,13 @@ function Test-SameSuperlight {
 }
 function Get-LogitechDPIReadback {
     param([int]$DeviceIndex)
-    $read=Invoke-Logihub -Arguments @('dpi','get','--device',([string]$DeviceIndex))
+    $read=Invoke-Logihub -Arguments @('dpi','get','--device',([string]$DeviceIndex)) -QuietOutput
     foreach($line in @($read -split '\r?\n' | Where-Object {$_ -match '\S'})){
-        if($line -match ('^\s*'+$DeviceIndex+'\s+.+?\s+(\d+)\s*$')){return [int]$Matches[1]}
+        if($line -match ('^\s*'+$DeviceIndex+'\s+.+?\s+(\d+)\s*$')){
+            $dpi=[int]$Matches[1]
+            Write-Log ('Logitech DPI read-back: '+$dpi+' DPI (device '+$DeviceIndex+').')
+            return $dpi
+        }
     }
     throw ('Logitech DPI read-back cannot be parsed for device '+$DeviceIndex+': '+$read)
 }
@@ -9471,18 +9500,26 @@ $headerStatus.BackColor=$script:DashboardPalette.Header
 $header.Controls.Add($headerStatus)
 $versionTag=New-CafeLabel -Text ('v'+(Get-CafeLauncherRelease)) -Strong
 $versionTag.Dock='None'
-$versionTag.Location=New-Object System.Drawing.Point(8,12)
-$versionTag.Size=New-Object System.Drawing.Size(250,27)
+$versionTag.Location=New-Object System.Drawing.Point(8,3)
+$versionTag.Size=New-Object System.Drawing.Size(250,24)
 $versionTag.ForeColor=$script:DashboardPalette.Accent
 $versionTag.TextAlign='MiddleRight'
 $headerStatus.Controls.Add($versionTag)
+$script:CloudReadSourceLabel=New-CafeLabel -Text 'Read source: Checking backend' -FontSize 8
+$script:CloudReadSourceLabel.Dock='None'
+$script:CloudReadSourceLabel.Location=New-Object System.Drawing.Point(8,27)
+$script:CloudReadSourceLabel.Size=New-Object System.Drawing.Size(250,19)
+$script:CloudReadSourceLabel.TextAlign='MiddleRight'
+$headerStatus.Controls.Add($script:CloudReadSourceLabel)
 $script:GitHubRateLimitLabel=New-CafeLabel -Text 'GitHub API: waiting for request' -FontSize 8
 $script:GitHubRateLimitLabel.Dock='None'
-$script:GitHubRateLimitLabel.Location=New-Object System.Drawing.Point(8,43)
-$script:GitHubRateLimitLabel.Size=New-Object System.Drawing.Size(250,36)
+$script:GitHubRateLimitLabel.Location=New-Object System.Drawing.Point(8,47)
+$script:GitHubRateLimitLabel.Size=New-Object System.Drawing.Size(250,32)
 $script:GitHubRateLimitLabel.ForeColor=$script:DashboardPalette.Muted
 $script:GitHubRateLimitLabel.TextAlign='MiddleRight'
+$script:GitHubRateLimitLabel.Visible=$false
 $headerStatus.Controls.Add($script:GitHubRateLimitLabel)
+Set-CafeCloudReadSourceDisplay -Source $script:CloudReadSource
 if($script:GitHubRateLimitSnapshot){
     Set-CafeGitHubRateLimitDisplay -Remaining ([string]$script:GitHubRateLimitSnapshot.Remaining) `
         -Limit ([string]$script:GitHubRateLimitSnapshot.Limit)

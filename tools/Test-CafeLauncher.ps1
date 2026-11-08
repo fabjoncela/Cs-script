@@ -56,7 +56,7 @@ if (@($parseErrors).Count -gt 0) {
     }
     throw ('PowerShell syntax check failed: {0} error(s). First error at cafe.bat line {1}, column {2}: {3}; text: {4}' -f @($parseErrors).Count, ($marker + 1 + $parseErrors[0].Extent.StartLineNumber), $parseErrors[0].Extent.StartColumnNumber, $parseErrors[0].Message, $parseErrors[0].Extent.Text)
 }
-$rateLimitFunctionNames=@('Set-CafeGitHubRateLimitDisplay','Update-CafeGitHubRateLimitFromHeaders','Invoke-CafeGitHubRestMethod')
+$rateLimitFunctionNames=@('Set-CafeGitHubRateLimitDisplay','Update-CafeGitHubRateLimitFromHeaders','Invoke-CafeGitHubRestMethod','Set-CafeCloudReadSourceDisplay')
 foreach($functionName in $rateLimitFunctionNames){
     $functionAst=@($psAst.FindAll({param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $functionName},$true))
     if($functionAst.Count -ne 1){throw ('Missing or duplicate GitHub rate-limit function: '+$functionName)}
@@ -64,6 +64,15 @@ foreach($functionName in $rateLimitFunctionNames){
 }
 if($psSource -match '(?i)Invoke-RestMethod\s+-Uri\s+(?!''https://api\.steampowered\.com/ISteamRemoteStorage/GetPublishedFileDetails/v1/''|"https://api\.steampowered\.com/ISteamRemoteStorage/GetPublishedFileDetails/v1/"|\$workshopUri|\$uri)'){
     throw 'GitHub REST requests must use the response-header tracking wrapper.'
+}
+$cloudSnapshotFunction=@($psAst.FindAll({param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Get-CafeCloudSnapshot'},$true))
+$backendSnapshotFunction=@($psAst.FindAll({param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Get-CafeBackendSnapshot'},$true))
+$mirrorSnapshotFunction=@($psAst.FindAll({param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Get-CafeMirrorSnapshot'},$true))
+if($cloudSnapshotFunction.Count -ne 1 -or
+   $backendSnapshotFunction.Count -ne 1 -or $backendSnapshotFunction[0].Extent.Text -notmatch "Set-CafeCloudReadSourceDisplay -Source 'Backend'" -or
+   $mirrorSnapshotFunction.Count -ne 1 -or $mirrorSnapshotFunction[0].Extent.Text -notmatch "Set-CafeCloudReadSourceDisplay -Source 'GitHubMirror'" -or
+   $cloudSnapshotFunction[0].Extent.Text -notmatch "Set-CafeCloudReadSourceDisplay -Source 'LocalFallback'"){
+    throw 'Cloud snapshot reads must report backend, mirror, and local fallback source changes to the dashboard.'
 }
 
 # Regression: the retired standalone NVIDIA shortcut stays absent while
@@ -663,11 +672,14 @@ function Refresh-ProfileFromBackend {
     param([string]$ProfileName)
     [void]$script:ProfileRefreshCalls.Add($ProfileName)
     $script:ProfileRefreshStatus[$ProfileName]='Backend'
+    Set-CafeCloudReadSourceDisplay -Source 'Backend'
     return 'Backend'
 }
 $script:LogPath=Join-Path $env:TEMP ('CafeLauncher-dashboard-CI-'+[Guid]::NewGuid().ToString('N')+'.log')
 $script:GitHubRateLimitSnapshot=$null
 $script:GitHubRateLimitLabel=$null
+$script:CloudReadSource='Checking'
+$script:CloudReadSourceLabel=$null
 # Load the production dashboard palette explicitly because this CI test evaluates
 # the dashboard code separately from the launcher startup sequence.
 $paletteMatch=[regex]::Match($psSource,'(?ms)^\$script:DashboardPalette\s*=\s*@\{.*?^\}')
@@ -751,19 +763,29 @@ try {
     }
     $script:PendingSync['FabMode']=$false
     $script:ProfileRefreshStatus['FabMode']='LocalFallback'
+    Set-CafeCloudReadSourceDisplay -Source 'LocalFallback'
     Update-SelectedProfileCard -Name 'FabMode'
     if($script:SelectedProfileHint.Text -ne 'Backend and mirror unavailable; showing local values.'){
         throw 'Dashboard must identify local values shown after backend and mirror reads fail.'
     }
-    if(-not $script:GitHubRateLimitLabel -or $script:GitHubRateLimitLabel.Text -ne 'GitHub API: waiting for request'){
-        throw 'Dashboard must show the API allowance next to the launcher version.'
+    if(-not $script:CloudReadSourceLabel -or $script:CloudReadSourceLabel.Text -ne 'Read source: Local data' -or
+       -not $script:GitHubRateLimitLabel -or $script:GitHubRateLimitLabel.Visible){
+        throw 'Dashboard must identify local read fallback and hide GitHub API quota unless the mirror is active.'
     }
     Update-CafeGitHubRateLimitFromHeaders -Headers @{
         'X-RateLimit-Remaining'='42';'X-RateLimit-Limit'='60';'X-RateLimit-Reset'='1792000000';'X-RateLimit-Resource'='core'
     }
     if($script:GitHubRateLimitLabel.Text -notmatch '^GitHub API: 42/60 left\r?\nLast checked \d{2}:\d{2}:\d{2}$' -or
-       $script:GitHubRateLimitLabel.Height -lt 36){
+       $script:GitHubRateLimitLabel.Height -lt 32){
         throw ('The dashboard did not display the latest remaining count from response headers. Actual label="'+$script:GitHubRateLimitLabel.Text+'"; snapshot='+[string]$script:GitHubRateLimitSnapshot.Remaining)
+    }
+    Set-CafeCloudReadSourceDisplay -Source 'GitHubMirror'
+    if($script:CloudReadSourceLabel.Text -ne 'Read source: GitHub fallback' -or -not $script:GitHubRateLimitLabel.Visible){
+        throw 'Dashboard must identify the GitHub mirror as fallback and show its API quota status.'
+    }
+    Set-CafeCloudReadSourceDisplay -Source 'Backend'
+    if($script:CloudReadSourceLabel.Text -ne 'Read source: Backend API' -or $script:GitHubRateLimitLabel.Visible){
+        throw 'Dashboard must identify backend reads and hide the GitHub API quota status.'
     }
     if($root.RowStyles[2].Height -ne 44){
         throw 'LIVE LOGS must start collapsed.'

@@ -3,7 +3,7 @@
 This file gives Codex and maintainers the operational context needed to work safely in this repository. **Always follow the checked-out source tree.** The generated state block below reports the launcher release marker, not whether that code has shipped to `main`.
 
 <!-- BEGIN GENERATED LAUNCHER STATE -->
-- Launcher release: `2026.11.08.2`
+- Launcher release: `2026.11.08.4`
 - Generated from the unique `# CAFE_RELEASE` marker in `cafe.bat` by `tools/Update-Context.ps1`.
 <!-- END GENERATED LAUNCHER STATE -->
 
@@ -23,6 +23,8 @@ CafeLauncher is a portable Windows internet-café setup launcher. The hybrid `ca
 ## Backend integration in this local checkout
 
 The in-progress client uses the CafeLauncherBackend API for profile, graphics, CFG, and graphics-history reads. When the API is unavailable, it reads the public `cafelauncher-backend-mirror` snapshot after checking the manifest hashes. There is one cloud behavior; there is no GitHub-only mode switch. Profile writes go only to the backend. The launcher keeps failed edits in a local pending queue, verifies a successful backend write by reading it back, and retries while open only with a sync token held in memory. A restart requires the token again. Pending edits left by the older GitHub-based launcher remain blocked until explicitly resolved.
+
+The dashboard's top-right read-source label shows the most recent cloud source: Backend API, GitHub fallback, or local data when both cloud reads fail. GitHub API remaining-request status is visible only while the verified mirror is the active fallback.
 
 This integration is uncommitted local development on `main`, not a shipped launcher. The updater and graphics module download still use the original `Cs-script` repository. The pinned graphics module can accept a preset supplied by the launcher, so Apply Graphics uses the backend or verified mirror preset. Complete Windows PowerShell 5.1 and WinForms validation before release. The local `CAFE_RELEASE` marker reflects source changes and does not imply matching published release assets exist.
 

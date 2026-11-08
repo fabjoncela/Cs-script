@@ -132,8 +132,19 @@ if(-not (Test-SameSuperlight $expectedDevice ([pscustomobject]@{Index=2;Model='p
     throw 'DPI target revalidation must reject a changed index or model.'
 }
 Invoke-Expression $functions['Get-LogitechDPIReadback']
-function Invoke-Logihub { param([string[]]$Arguments) return "2 PRO X SUPERLIGHT 2 800`n" }
+function Write-Log { param([string]$Message,[string]$Level='INFO');[void]$script:DpiReadbackLogs.Add($Message) }
+function Invoke-Logihub {
+    param([string[]]$Arguments,[switch]$QuietOutput)
+    $script:DpiReadbackQuiet=$QuietOutput
+    return "DEVICE NAME DPI ERROR`n------ ------- --- -----`n2 PRO X SUPERLIGHT 2 800`n"
+}
+$script:DpiReadbackLogs=New-Object System.Collections.ArrayList
+$script:DpiReadbackQuiet=$false
 if((Get-LogitechDPIReadback -DeviceIndex 2) -ne 800){throw 'DPI read-back parser failed.'}
+if(-not $script:DpiReadbackQuiet -or $script:DpiReadbackLogs.Count -ne 1 -or
+   $script:DpiReadbackLogs[0] -cne 'Logitech DPI read-back: 800 DPI (device 2).'){
+    throw 'Successful DPI read-back must be logged without the CLI table ERROR header.'
+}
 if($source -notmatch 'c54d'){
     throw 'C54D helper integration is missing.'
 }
