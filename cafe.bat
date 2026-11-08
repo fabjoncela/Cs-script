@@ -9423,10 +9423,11 @@ function Update-SelectedProfileCard {
             $script:SelectedProfileHint.Text='Showing local values; changes are pending sync.'
         }else{
             switch($refreshStatus){
-                {$_ -in @('GitHub','VerifiedGitHub')} {$script:SelectedProfileHint.Text='Profile values verified from GitHub.';break}
+                'Backend' {$script:SelectedProfileHint.Text='Profile values verified from backend.';break}
+                'GitHubMirror' {$script:SelectedProfileHint.Text='Profile values verified from GitHub mirror.';break}
                 'LocalPending' {$script:SelectedProfileHint.Text='Showing local values; changes are pending sync.';break}
-                'LocalFallback' {$script:SelectedProfileHint.Text='GitHub refresh failed; showing local values.';break}
-                default {$script:SelectedProfileHint.Text='Profile values have not been refreshed from GitHub yet.'}
+                'LocalFallback' {$script:SelectedProfileHint.Text='Backend and mirror unavailable; showing local values.';break}
+                default {$script:SelectedProfileHint.Text='Profile values have not been refreshed from the backend yet.'}
             }
         }
     }

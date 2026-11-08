@@ -741,8 +741,8 @@ try {
         throw 'Dashboard summary, manual DPI or utility buttons were not created correctly.'
     }
     if($script:ProfileRefreshCalls.Count -ne 1 -or $script:ProfileRefreshCalls[0] -cne 'FabMode' -or
-       $script:SelectedProfileHint.Text -ne 'Profile values verified from GitHub.'){
-        throw 'Dashboard startup must refresh and display only its initially selected profile.'
+       $script:SelectedProfileHint.Text -ne 'Profile values verified from backend.'){
+        throw 'Dashboard startup must refresh and display only its initially selected backend profile.'
     }
     $script:PendingSync['FabMode']=$true
     Update-SelectedProfileCard -Name 'FabMode'
@@ -752,8 +752,8 @@ try {
     $script:PendingSync['FabMode']=$false
     $script:ProfileRefreshStatus['FabMode']='LocalFallback'
     Update-SelectedProfileCard -Name 'FabMode'
-    if($script:SelectedProfileHint.Text -ne 'GitHub refresh failed; showing local values.'){
-        throw 'Dashboard must identify local values shown after a failed GitHub refresh.'
+    if($script:SelectedProfileHint.Text -ne 'Backend and mirror unavailable; showing local values.'){
+        throw 'Dashboard must identify local values shown after backend and mirror reads fail.'
     }
     if(-not $script:GitHubRateLimitLabel -or $script:GitHubRateLimitLabel.Text -ne 'GitHub API: waiting for request'){
         throw 'Dashboard must show the API allowance next to the launcher version.'
