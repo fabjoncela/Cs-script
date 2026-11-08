@@ -20,20 +20,19 @@ This file gives Codex and maintainers the operational context needed to work saf
 
 CafeLauncher is a portable Windows internet-café setup launcher. The hybrid `cafe.bat` contains the PowerShell/WinForms app, profile actions, and embedded C# display/NVIDIA interop. `graphics/ApplyGraphics.ps1` is a separately hash-pinned module for editing the active Steam account's CS2 video settings. There is no compiled application build step.
 
-## Backend integration in this local checkout
+## Backend integration in the current launcher
 
-The in-progress client uses the CafeLauncherBackend API for profile, graphics, CFG, and graphics-history reads. When the API is unavailable, it reads the public `cafelauncher-backend-mirror` snapshot after checking the manifest hashes. There is one cloud behavior; there is no GitHub-only mode switch. Profile writes go only to the backend. The launcher keeps failed edits in a local pending queue, verifies a successful backend write by reading it back, and retries while open only with a sync token held in memory. A restart requires the token again. Pending edits left by the older GitHub-based launcher remain blocked until explicitly resolved.
+The client uses the CafeLauncherBackend API for profile, graphics, CFG, and graphics-history reads. When the API is unavailable, it reads the public `cafelauncher-backend-mirror` snapshot after checking the manifest hashes. There is one cloud behavior; there is no GitHub-only mode switch. Active profile writes go only to the backend. The launcher keeps failed edits in a local pending queue, verifies a successful backend write by reading it back, and retries while open only with a sync token held in memory. A restart requires the token again. Pending edits left by the older GitHub-based launcher remain blocked until explicitly resolved.
 
 The dashboard's top-right read-source label shows the most recent cloud source: Backend API, GitHub fallback, or local data when both cloud reads fail. GitHub API remaining-request status is visible only while the verified mirror is the active fallback.
 
-This integration is uncommitted local development on `main`, not a shipped launcher. The updater and graphics module download still use the original `Cs-script` repository. The pinned graphics module can accept a preset supplied by the launcher, so Apply Graphics uses the backend or verified mirror preset. Complete Windows PowerShell 5.1 and WinForms validation before release. The local `CAFE_RELEASE` marker reflects source changes and does not imply matching published release assets exist.
+This backend client is part of the current `main` launcher source, release `2026.11.08.4`, and that release was published to the existing Google Drive launcher file on 2026-11-08. Google Drive remains a launcher distribution mirror; it does not store profile data or proxy backend API requests. The updater and graphics module download still use the original `Cs-script` repository. The pinned graphics module can accept a preset supplied by the launcher, so Apply Graphics uses the backend or verified mirror preset. Keep backend deployment and launcher distribution as separate workflows.
 
 Main project files:
 
 - `AGENTS.md` — entry-point instructions Codex automatically reads; directs it to this context file.
 - `cafe.bat` — launcher UI, profile persistence and sync, Windows/NVIDIA operations, module loader.
-- `profiles/<ProfileName>.json` — cloud profile preferences.
-- `graphics/<ProfileName>.json` — canonical CS2 graphics presets; each profile has its own file.
+- `profiles/<ProfileName>.json` and `graphics/<ProfileName>.json` — retained profile/graphics files in this repository; the running launcher reads current cloud data from the backend API or its verified public mirror.
 - `graphics/ApplyGraphics.ps1` — validated CS2 video settings editor and backup/replace logic.
 - `tools/Test-*.ps1` — Windows PowerShell 5.1 tests, mostly fixture or mock based.
 - `.github/workflows/cafe-syntax.yml` — Windows PowerShell validation in CI.
@@ -42,13 +41,13 @@ Main project files:
 
 | Area | Implementation | Focused verification |
 | --- | --- | --- |
-| Profile editor, persistence, and backend sync | `cafe.bat`: `Show-ProfileEditor`, `Refresh-ProfileFromBackend`, `Sync-ProfileToBackend` | `Test-ProfileSave.ps1`, `Test-CfgSensitivitySync.ps1`, `Test-ProfileCfgSensitivity.ps1`; new transport and Windows UI checks pending |
-| CS2 graphics apply and history | `graphics/ApplyGraphics.ps1`; `cafe.bat`: `Invoke-GraphicsOnly`, `Get-ProfileGraphicsHistory` | `Test-Graphics.ps1`, `Test-GraphicsHistory.ps1`, `Test-GraphicsHistoryAsync.ps1`, `Test-GraphicsHistoryUI.ps1`, `Test-NvidiaCompatibility.ps1`, `Test-NvidiaDvcFallback.ps1` |
+| Profile editor, persistence, and backend sync | `cafe.bat`: `Show-ProfileEditor`, `Refresh-ProfileFromBackend`, `Sync-ProfileToBackend`, `Start-CafeBackendRetryHealthCheck` | `Test-ProfileSave.ps1`, `Test-BackendRetry.ps1`, `Test-GitHubSyncAuth.ps1`, `Test-ProfileCfgSensitivity.ps1` |
+| CS2 graphics apply and history | `graphics/ApplyGraphics.ps1`; `cafe.bat`: `Invoke-GraphicsOnly`, `Get-ProfileGraphicsHistory`, backend/mirror history adapter | `Test-Graphics.ps1`, `Test-GraphicsHistory.ps1`, `Test-GraphicsHistoryAsync.ps1`, `Test-GraphicsHistoryUI.ps1`, `Test-NvidiaCompatibility.ps1`, `Test-NvidiaDvcFallback.ps1` |
 | CS2 settings capture, Extras editor, and crosshair share-code import/preview | `cafe.bat`: `Get-CafeCS2GraphicsCapture`, `Get-CafeCS2UserConvarsCapture`, `Get-CafeCS2UserKeysCapture`, `ConvertFrom-CafeCS2UserConvarsText`, `ConvertFrom-CafeCS2UserKeysText`, `Show-CafeCS2CaptureOptionsDialog`, `Show-CafeCS2CaptureReviewDialog`, `Invoke-CafeCS2CaptureReview`, `Show-CafeCS2ExtrasDialog`, `ConvertFrom-CafeCS2CrosshairShareCode`, `ConvertTo-CafeCS2CrosshairPreviewModel`, `Draw-CafeCS2CrosshairPreview`, `Show-CafeCS2CrosshairPreviewDialog` | `Test-CS2GraphicsCapture.ps1`, `Test-CfgSensitivitySync.ps1`, `Test-CrosshairShareCode.ps1` |
 | Steam/CS2 discovery and Play + Exec | `cafe.bat`: `Get-SteamLibraryRoots`, `Get-CS2SteamLaunchArguments`, `Start-CS2WithProfileCfg` | `Test-SteamPathDiscovery.ps1`, `Test-SteamLaunchOptions.ps1` |
 | Workshop cleanup | `cafe.bat`: `Get-CafeWorkshopCleanupSnapshot`, `Remove-CafeWorkshopItems`, `Show-CafeWorkshopCleanupDialog` | `Test-WorkshopCleanup.ps1` |
 | Logitech live DPI | `cafe.bat`: `Set-LogitechLiveDPI`, `Invoke-LogitechDPISetAndReadback` | `Test-LogitechDPI.ps1`, `Test-SuperlightDevice.ps1` |
-| Action result reporting and GitHub quota display | `cafe.bat`: `Set-StepResult`, `Write-Log`, `Add-LiveLogLine`, `Set-CafeGitHubRateLimitDisplay` | `Test-StepResults.ps1`, `Test-GitHubRateLimit.ps1` |
+| Action result reporting and fallback GitHub quota display | `cafe.bat`: `Set-StepResult`, `Write-Log`, `Add-LiveLogLine`, `Set-CafeGitHubRateLimitDisplay` | `Test-StepResults.ps1`, `Test-GitHubRateLimit.ps1` |
 
 Use this map to locate the implementation and focused test. The full verification command list is below.
 
@@ -104,7 +103,7 @@ The **CS2 / Apps** profile editor has an **Edit Extras** action that opens a sep
 - Scroll-wheel option lookup supports both profile hashtables and ordered staged bind maps.
 - Staging bind replacements asks for confirmation and names the key/action changes. Moving push-to-talk identifies the old key that will be removed and keeps the profile's separate voice-key field in sync. Only one push-to-talk key may remain active.
 - The existing **Push-to-talk key (CFG)** selector and Extras Binds editor share the same staged PTT choice. Extras displays the selector's current choice. If the selector disagrees with a staged PTT bind, saving removes that stale generic bind and sync uses the selected profile voice-key value; matching PTT actions staged by Extras or Capture remain intact. Explicit reset markers and unrelated staged binds are preserved.
-- Extras stages into the same per-profile pending convar/bind maps as Capture CS2. It changes no CS2 files and performs no GitHub writes. **Save Locally** persists the pending maps; **Save & Sync** applies them to the selected profile CFG with the existing exact diff confirmation and read-back verification.
+- Extras stages into the same per-profile pending convar/bind maps as Capture CS2. It changes no CS2 files or remote data by itself. **Save Locally** persists the pending maps; **Save & Sync to Backend** applies them to the selected profile CFG with the existing exact diff confirmation and read-back verification.
 - The CS2 / Apps editor's **Paste Viewmodel** action accepts semicolon/newline-separated commands for `viewmodel_fov`, `viewmodel_offset_x/y/z`, `viewmodel_presetpos` (0-2), `cl_prefer_lefthanded`, and safe `bind KEY switchhands` commands. It validates every command before staging anything, applies per-setting numeric ranges, and merges into that profile's pending CFG convars/binds while preserving other staged and saved values. Built-in presets cannot be mixed with custom offsets; selecting a built-in preset stages removal of custom viewmodel overrides, while custom values default to preset position 0. Hand-switch binds are staged without execution, and cannot take over the selected push-to-talk key. Repeated pastes update matching keys while retaining earlier ones; **Save Locally** or **Save & Sync** commits them through the existing profile flow. Pasted text is never executed as console input.
 - Regression fixtures for CFG reset sentinels, numeric zero, added bind groups, and editor wiring are in `tools/Test-CfgSensitivitySync.ps1` and `tools/Test-CS2GraphicsCapture.ps1`.
 
@@ -115,17 +114,17 @@ The **Mouse** tab can also import a pasted crosshair share code offline. It supp
 
 CafeLauncher adds a custom WinForms confirmation dialog before crosshair values are staged. `ConvertTo-CafeCS2CrosshairPreviewModel` validates the decoder output; `Draw-CafeCS2CrosshairPreview` draws using the panel's `Paint` event and .NET `System.Drawing`. It renders cross, circle, square, dot-only, and quadrant style families separately. Static Quadrant (style 9) uses the decoded quadrant-size ratio for four short diagonal ring arcs with outer radius `max(1, gap) + thickness`; length does not affect this style. `New-CafeCS2StaticQuadrantRaster` evaluates radial and angular edge coverage, fill and outline opacity, and linear-light color blending per native game pixel, then `Draw-CafeCS2CrosshairPreview` enlarges the raster with nearest-neighbor sampling. The geometry follows the MIT-licensed [`setposgg/cs2-crosshair`](https://github.com/setposgg/cs2-crosshair) port of the 2026-10-08 CS2 client; attribution is in `THIRD_PARTY_NOTICES.md`. The raster math was independently implemented after studying the public [crosshair.club renderer](https://crosshair.club/static/js/cs2-crosshair-render.js?v=1791479013), which reconstructs the September 30, 2026 game shader. For the user's style-9 share code, the 16×16 native RGBA raster on the solid Stone background matches that public renderer byte for byte. This validates agreement with the public reconstruction, not with a lossless CS2 capture. The dialog defaults to a warm stone color like the user's reference and also offers dark, light, and locally drawn foliage-like backgrounds. Dragging and recentering only move the preview; they do not change imported settings. **Import** stages values only after a successful initial paint; fixed-position preview labels are undocked so decoded settings and Import/Cancel remain visible. Canceling, closing the dialog, or a rendering error leaves the profile's staged values unchanged. Dynamic/recoil styles are shown at rest, and missing source resolution uses a labeled 1080p reference scale. Half outlines, non-quadrant styles, foliage compositing, screenshot scaling, and game postprocessing remain approximations. The implementation prompt and acceptance notes are in [`prompts/cs2-crosshair-visual-preview.md`](./prompts/cs2-crosshair-visual-preview.md).
 
-The **CS2 / Apps** editor can load the three previous versions of `graphics/<ProfileName>.json` from GitHub commit history.
+The **CS2 / Apps** editor can load earlier graphics revisions from the backend history API, with validated mirror history as a fallback.
 
 - The commit list is cached per profile for 24 hours; manual refresh bypasses the cache.
 - Restore fetches and validates the chosen version, then fills the editor without saving or applying it. Saving or syncing remains a separate user action.
 - History works offline only when the version is already listed in the fresh cache. Fetching an older preset requires internet.
 - The background completion callback receives its profile and WinForms controls through the worker instance's `RequestContext` property; it does not depend on nested PowerShell closure captures. Empty history and HTTP 404 show the no-earlier-versions state, while other failures remain visible and retryable. The request URI and status are logged for diagnosis. `tools/Test-GraphicsHistoryUI.ps1` covers callback wiring and UI recovery. See [graphics history loading diagnosis](./GRAPHICS_HISTORY_LOADING_DIAGNOSIS.md).
-- The Load history click handler captures the configured repository and branch before `GetNewClosure()` creates its private script scope. `New-CafeGraphicsHistoryRequestUri` validates those values and is covered by `Test-GraphicsHistory.ps1`.
+- Mirror history lookup and URI validation are covered by `Test-GraphicsHistory.ps1`; normal history reads use the backend API.
 
 ### Planned: Profile graphics, settings, and crosshair history (not implemented)
 
-Preliminary review of the current `main` source found that **Load history** covers only `graphics/<ProfileName>.json`. It does not provide history for `profiles/<ProfileName>.json` or the profile CFG that stores CS2 sensitivity and crosshair convars. GitHub currently returns commit history for all three file types. The existing graphics history tests mock GitHub and check the background HTTP worker separately; they do not exercise the full Windows UI flow. The editor now handles background completion through `RunWorkerCompleted` instead of polling with a nested timer callback.
+The current **Load history** covers graphics revisions. It does not provide history for profile settings or the profile CFG that stores CS2 sensitivity and crosshair convars. The backend history endpoint is authoritative; the verified public mirror supplies fallback history. The graphics history tests use local fixtures and check the background worker separately; they do not exercise the full Windows UI flow. The editor handles background completion through `RunWorkerCompleted` and request context.
 
 Plan:
 
@@ -135,14 +134,14 @@ Plan:
    - **Graphics:** `graphics/<ProfileName>.json`.
    - **Profile settings:** `profiles/<ProfileName>.json`.
    - **Sensitivity and crosshair:** the profile CFG (for example, `fab.cfg`), using only supported sensitivity and crosshair values.
-4. Use GitHub file commit history for the selected source. Keep histories separate by profile and file, show the commit date/message and short commit ID, skip the current version, and provide an explicit refresh. Scope cache entries and invalidation to the selected profile and file.
-5. Validate a selected historical file with the existing schema/CFG validators, then stage only that category in the editor. Restoring must not directly edit CS2 files, save locally, or sync to GitHub. CFG history must preserve unrelated current CFG commands and use the existing diff confirmation when the user later saves or syncs.
+4. Add an explicit backend history contract for each selected source; use only the verified mirror as a read fallback. Keep histories separate by profile and file, show the revision date/message and identifier, skip the current version, and provide an explicit refresh. Scope cache entries and invalidation to the selected profile and file.
+5. Validate a selected historical file with the existing schema/CFG validators, then stage only that category in the editor. Restoring must not directly edit CS2 files, save locally, or sync to the backend. CFG history must preserve unrelated current CFG commands and use the existing diff confirmation when the user later saves or syncs.
 6. Add focused mocked tests for each source, history ordering, cache refresh/invalidation, invalid or mismatched files, deleted versions, and empty/offline responses. Verify cancel leaves drafts unchanged and restore stages values only. Add a Windows UI smoke test for the complete load-select-restore flow.
 
 
 Dashboard **Apply Graphics** is a separate action from the normal profile Apply and **Play + Exec** buttons. Saving in the editor does not apply the settings immediately.
 - Each profile card orders its actions as 1.Apply profile, 2.Game Graphics, 3.Play + Settings, Edit profile, and Capture CS2, with a 12 px gap before Edit and Capture.
-- The dashboard builds profile cards in the ordered `GamingProfiles` registry and displays five per page. Previous/Next changes only which cards are attached to the dashboard; it does not refresh profiles or make GitHub requests. The sixth registered profile begins page 2. The current registry contains six profiles, so `Provmode` appears on page 2.
+- The dashboard builds profile cards in the ordered `GamingProfiles` registry and displays five per page. Previous/Next changes only which cards are attached to the dashboard; it does not refresh profiles or make cloud requests. The sixth registered profile begins page 2. The current registry contains six profiles, so `Provmode` appears on page 2.
 - Profile-row hover feedback is active only while the launcher is the active window and the Dashboard tab is selected. Deactivating the launcher clears any hover color immediately, including when a modal profile editor opens.
 - The dashboard refreshes its initially selected `FabMode` from the backend or verified mirror before showing it. Edit, Apply, Play + Exec, and Graphics refresh the profile they act on. The selected-profile card distinguishes verified cloud values, local pending values, and local fallback values.
 - Normal Apply reads the selected profile's graphics preset through the same backend-first adapter and uses its `ScalingMode` as authoritative. Apply Graphics fetches the preset immediately before changing CS2; local fallback requires explicit confirmation.
@@ -275,7 +274,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tools\Update-Context.p
 
 GitHub Actions runs these Windows PowerShell 5.1 checks in the existing Profiles and CS2 jobs:
 
-- GitHub sync authentication and CS2 graphics capture.
+- Backend sync authorization and CS2 graphics capture.
 - Graphics history, including its async worker, and Steam/CS2 path discovery.
 
 Changes to those test scripts trigger CI on pull requests and pushes to `main`.
@@ -287,8 +286,8 @@ The `publish-drive` job runs after all five validation jobs for pushes to `main`
 
 The checks cover:
 
-- Parser/formatting and profile Apply's GitHub-authoritative graphics scaling and fail-closed behavior.
-- Mocked persistence and GitHub sync, device-flow worker compilation, and in-memory token clearing without network or GUI.
+- Parser/formatting and profile Apply's backend-or-verified-mirror graphics scaling authority and fail-closed behavior.
+- Mocked local persistence and the legacy GitHub sync helper; backend sync authorization and in-memory token handling without network or GUI.
 - Per-profile CFG sensitivity presence/format, CFG-backed editor/apply contracts, and legacy JSON-field removal.
 - Graphics fixtures, legacy DVC range mapping without hardware writes, read-only NVIDIA capability inventory, mocked Steam launch arguments, and status reporting.
 

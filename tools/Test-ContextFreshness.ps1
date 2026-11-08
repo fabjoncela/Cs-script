@@ -10,7 +10,7 @@ foreach($required in @(
     'main` is the production source',
     'testing/development until merged',
     '**Mouse** tab contains Windows mouse controls and the per-profile **CS2 sensitivity** field',
-    'three previous versions of `graphics/<ProfileName>.json` from GitHub commit history',
+    'earlier graphics revisions from the backend history API, with validated mirror history as a fallback',
     'cached per profile for 24 hours',
     'GraphicsSettings',
     'profiles/<ProfileName>.json` and `graphics/<ProfileName>.json',

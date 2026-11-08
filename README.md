@@ -23,17 +23,17 @@ The dashboard keeps separate settings for six profiles:
 
 | Profile | Cloud settings | CS2 config |
 | --- | --- | --- |
-| FabMode | [profiles/FabMode.json](./profiles/FabMode.json) | [fab.cfg](./fab.cfg) |
-| ArliMode | [profiles/ArliMode.json](./profiles/ArliMode.json) | [arli.cfg](./arli.cfg) |
-| BrileMode | [profiles/BrileMode.json](./profiles/BrileMode.json) | [brile.cfg](./brile.cfg) |
-| ArmlMode | [profiles/ArmlMode.json](./profiles/ArmlMode.json) | [arml.cfg](./arml.cfg) |
-| OliMode | [profiles/OliMode.json](./profiles/OliMode.json) | [oli.cfg](./oli.cfg) |
-| Provmode | [profiles/Provmode.json](./profiles/Provmode.json) | [prov.cfg](./prov.cfg) |
+| FabMode | Backend API (public GitHub mirror fallback) | Backend API (public GitHub mirror fallback) |
+| ArliMode | Backend API (public GitHub mirror fallback) | Backend API (public GitHub mirror fallback) |
+| BrileMode | Backend API (public GitHub mirror fallback) | Backend API (public GitHub mirror fallback) |
+| ArmlMode | Backend API (public GitHub mirror fallback) | Backend API (public GitHub mirror fallback) |
+| OliMode | Backend API (public GitHub mirror fallback) | Backend API (public GitHub mirror fallback) |
+| Provmode | Backend API (public GitHub mirror fallback) | Backend API (public GitHub mirror fallback) |
 
 ### Apply and launch
 
 - **Apply** refreshes the selected profile, then applies its mouse settings, any enabled display settings, its CS2 config, and configured app actions. It does not start CS2 or change Steam's saved launch options.
-- **Play + Exec** installs a CafeLauncher baseline containing captured defaults for profile-managed binds, radar, sensitivity, FPS, and visibility, with the developer console enabled. The baseline leaves crosshair settings to the selected profile CFG. Play + Exec installs that CFG and launches with `+exec cafelauncher_profile_baseline.cfg +exec <profile>.cfg`; the profile CFG runs last, and GitHub remains the preferred CFG source. This clears profile leftovers such as ArliMode's CapsLock bind or another profile's MWHEELDOWN jump before applying the selection. It does not apply mouse or display settings, modify persistent launch options, or restart Steam.
+- **Play + Exec** installs a CafeLauncher baseline containing captured defaults for profile-managed binds, radar, sensitivity, FPS, and visibility, with the developer console enabled. The baseline leaves crosshair settings to the selected profile CFG. Play + Exec installs that CFG and launches with `+exec cafelauncher_profile_baseline.cfg +exec <profile>.cfg`; the profile CFG runs last, using the backend and then its verified public mirror fallback. This clears profile leftovers such as ArliMode's CapsLock bind or another profile's MWHEELDOWN jump before applying the selection. It does not apply mouse or display settings, modify persistent launch options, or restart Steam.
 - **Apply Graphics** is a separate action for the selected profile's CS2 video settings.
 - A failed step is reported in the result summary and LIVE LOGS. Other profile steps can continue where appropriate.
 
@@ -41,13 +41,13 @@ The dashboard keeps separate settings for six profiles:
 
 **Save Locally** stores profile settings and the graphics editor snapshot in `%LOCALAPPDATA%\CafeLauncher\profiles.json`. The profile stays marked as pending sync; local app data may be cleared by café PC reset software such as Deep Freeze.
 
-**Save & Sync to GitHub** asks for one-time authorization using a personal access token or GitHub device sign-in. The launcher updates that profile's JSON and graphics preset, and only the recognized CFG commands the user changed, such as sensitivity, crosshair values, or push-to-talk. Other binds and CFG commands are preserved. The launcher reads the saved files back and verifies them before clearing the pending state. Credentials stay in memory during the sync and are not saved to disk. **Never enter a GitHub credential on an untrusted shared PC.**
+**Save & Sync to Backend** asks for a backend sync token for the current session. The launcher sends the profile, graphics preset, and selected CFG changes as one revision-checked bundle, then reads the result back before clearing the pending state. If a write fails, the edit stays in a local queue and can retry while the launcher remains open and the session token is available. The token is kept in memory and is not saved to disk. The public GitHub mirror is read-only; pending edits from an older GitHub-based launcher must be resolved before backend sync.
 
 Before editing or applying a profile with pending local changes, the launcher offers to sync them, discard them and fetch the latest cloud files, or cancel. A failed refresh does not silently replace local values with stale cached data.
 
 ## CS2 graphics editor
 
-Each profile has its own canonical preset under [`graphics/`](./graphics/). In the **CS2 / Apps** editor, you can set resolution, aspect ratio, fullscreen mode, refresh rate, NVIDIA scaling mode, and supported CS2 video options such as MSAA, shadows, textures, HDR, Reflex, FSR, VSync, and CMAA.
+Each profile has its own graphics preset in the backend, with the verified public GitHub mirror as a read fallback. In the **CS2 / Apps** editor, you can set resolution, aspect ratio, fullscreen mode, refresh rate, NVIDIA scaling mode, and supported CS2 video options such as MSAA, shadows, textures, HDR, Reflex, FSR, VSync, and CMAA.
 
 FabMode, ArliMode, ArmlMode, OliMode, and Provmode currently use 1280×960 4:3 fullscreen defaults. Provmode currently copies OliMode's profile and graphics values. BrileMode uses 1920×1080 16:9. Presets request the highest refresh rate advertised for the selected game resolution, or can use an exact rate when it is available.
 
@@ -89,7 +89,7 @@ Backups are stored under `%LOCALAPPDATA%\CafeLauncher\backups`. If the original 
 
 - Windows 10 or 11 with Windows PowerShell 5.1, `cmd.exe`, and Windows Forms.
 - NVIDIA hardware and a compatible driver are needed for NVIDIA-specific operations. Steam, CS2, FACEIT, and Logitech G HUB are needed only for their related features.
-- Online profile refresh and GitHub sync require internet access. **Apply Graphics** can use a validated pending local graphics preset offline; other offline fallbacks require confirmation. Cached files are not treated as proof of current cloud settings.
+- Profile reads use the backend API and can fall back to its verified public GitHub mirror. Profile sync writes only to the backend and requires internet access plus a session sync token. **Apply Graphics** can use a validated pending local graphics preset offline; other offline fallbacks require confirmation. Cached files are not treated as proof of current cloud settings.
 - The downloaded graphics helper is pinned by a Git blob hash and cached for reuse. CFG downloads also have a local cache for supported offline cases.
 
 ## Contributing and validation
