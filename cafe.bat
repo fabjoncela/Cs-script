@@ -3584,7 +3584,7 @@ function Launch-ProfileApps {
 # ==============================================================
 # PROFILE DEFAULTS - Edit in GUI, save locally or sync via backend
 # Cloud profile settings: profiles/<ProfileName>.json (public read).
-# CS2 .cfg files remain separately managed on GitHub.
+# CS2 .cfg files are stored with profile revisions in the backend; the public GitHub mirror exposes read-only copies.
 # Local unsynced edits ALWAYS win over downloaded cloud settings.
 # ==============================================================
 $script:ProfileDefinitionsTimingId=Start-CafeTimingOperation -Type 'Local' -Name 'Profile definitions and state' -Group Startup
@@ -5618,9 +5618,9 @@ function Set-CafeCapturedConvarsInCfg {
     return $text
 }
 function Get-ProfileGraphicsPreset {
-    param([Parameter(Mandatory=$true)][string]$ProfileName,[switch]$Canonical,[switch]$RequireGitHub)
+    param([Parameter(Mandatory=$true)][string]$ProfileName,[switch]$Canonical,[switch]$RequireVerifiedCloud)
     if(-not $script:GamingProfiles.Contains($ProfileName)){throw ('Unknown graphics profile: '+$ProfileName)}
-    if($RequireGitHub -and $script:PendingSync[$ProfileName]){
+    if($RequireVerifiedCloud -and $script:PendingSync[$ProfileName]){
         throw ('This profile has unsynced local edits. Resolve them before refreshing its cloud graphics preset.')
     }
     if(-not $Canonical -and $script:PendingSync[$ProfileName] -and $script:GraphicsPresets.Contains($ProfileName)){
@@ -5639,7 +5639,7 @@ function Get-ProfileGraphicsPreset {
         return $preset
     }catch{
         Write-Log ('Graphics preset download unavailable: '+$_.Exception.Message) 'WARN'
-        if($RequireGitHub){throw ('Could not verify the latest backend or mirrored graphics preset for '+$ProfileName+': '+$_.Exception.Message)}
+        if($RequireVerifiedCloud){throw ('Could not verify the latest backend or mirrored graphics preset for '+$ProfileName+': '+$_.Exception.Message)}
     }
     foreach($file in @($cache,$local)){
         if(-not(Test-Path -LiteralPath $file -PathType Leaf)){continue}
@@ -6340,16 +6340,16 @@ function Get-ProfileCfgSensitivity {
         try{$cfgDirectory=Find-CS2ConfigFolder -NoPrompt}catch{}
         $fallbackPath=$null
         try{$fallbackPath=Get-FriendConfigFallback -CfgName $cfgName -CfgDirectory $cfgDirectory}catch{}
-        if(-not $fallbackPath){throw ('Could not verify '+$cfgName+' on GitHub and no local CFG fallback is available. '+$remoteError)}
+        if(-not $fallbackPath){throw ('Could not verify '+$cfgName+' from the backend or its GitHub mirror, and no local CFG fallback is available. '+$remoteError)}
         if(-not $LocalProfileConfirmed){
             $answer=[System.Windows.Forms.MessageBox]::Show(
-                ("Could not verify the latest GitHub $cfgName for $ProfileName.`r`n`r`nUse the available cached/local CFG sensitivity instead? It may be older than GitHub.`r`n`r`nYes = use the local CFG; No = cancel editing."),
+                ("Could not verify the latest backend or GitHub mirror copy of $cfgName for $ProfileName.`r`n`r`nUse the available cached/local CFG sensitivity instead? It may be older than the cloud copy.`r`n`r`nYes = use the local CFG; No = cancel editing."),
                 'Confirm local CS2 sensitivity','YesNo','Warning','Button2')
             if($answer -ne [System.Windows.Forms.DialogResult]::Yes){throw 'Profile editing canceled because the latest CFG sensitivity could not be verified.'}
         }
         $localContent=[IO.File]::ReadAllText($fallbackPath)
         $localSensitivity=Get-CafeCS2CfgSensitivity -Content $localContent
-        Write-Log ($ProfileName+' sensitivity loaded from explicitly confirmed local CFG '+$fallbackPath+'. GitHub error: '+$remoteError) 'WARN'
+        Write-Log ($ProfileName+' sensitivity loaded from explicitly confirmed local CFG '+$fallbackPath+'. Backend/mirror error: '+$remoteError) 'WARN'
         return [pscustomobject]@{Sensitivity=$localSensitivity;Source='LocalFallback'}
     }
 }
@@ -7866,7 +7866,7 @@ function Show-ProfileEditor {
     $profileSource=Refresh-ProfileFromBackend -ProfileName $ProfileName
     if(-not (Confirm-LocalProfileApply -ProfileName $ProfileName -Source $profileSource -Action edit)){return}
     try{
-        $graphicsPreset=Get-ProfileGraphicsPreset -ProfileName $ProfileName -RequireGitHub
+        $graphicsPreset=Get-ProfileGraphicsPreset -ProfileName $ProfileName -RequireVerifiedCloud
     }catch{
         try{$localGraphics=Get-ProfileGraphicsPreset -ProfileName $ProfileName}catch{
             [void][System.Windows.Forms.MessageBox]::Show(
@@ -7874,7 +7874,7 @@ function Show-ProfileEditor {
                 'CS2 Graphics Unavailable','OK','Warning')
             return
         }
-        $message="CafeLauncher could not verify the latest GitHub CS2 graphics preset for $ProfileName.`r`n`r`nUse the available local graphics copy anyway? It may be older than GitHub.`r`n`r`nYes = open using local graphics; No = cancel."
+        $message="CafeLauncher could not verify the latest backend or GitHub mirror CS2 graphics preset for $ProfileName.`r`n`r`nUse the available local graphics copy anyway? It may be older than the cloud copy.`r`n`r`nYes = open using local graphics; No = cancel."
         $answer=[System.Windows.Forms.MessageBox]::Show($message,'Confirm local CS2 graphics','YesNo','Warning','Button2')
         if($answer -ne [System.Windows.Forms.DialogResult]::Yes){return}
         $graphicsPreset=$localGraphics
@@ -9062,7 +9062,7 @@ function Invoke-GamingProfile {
             # compatibility, but graphics/<Profile>.json is authoritative.
             # Refresh and validate it before any profile action so Apply
             # Profile and Apply Graphics cannot choose different scaling.
-            $graphicsPreset=Get-ProfileGraphicsPreset -ProfileName $ProfileName -RequireGitHub
+            $graphicsPreset=Get-ProfileGraphicsPreset -ProfileName $ProfileName -RequireVerifiedCloud
             $script:GamingProfiles[$ProfileName].ScalingMode=[int]$graphicsPreset.ScalingMode
             Write-Log ("$ProfileName profile apply verified graphics/$ProfileName.json from the backend or mirror; authoritative ScalingMode="+$graphicsPreset.ScalingMode+'.')
             try{Save-ProfileSettings}catch{Write-Log ("Unable to cache the verified $ProfileName scaling mode locally: "+$_.Exception.Message) 'WARN'}
@@ -9301,7 +9301,7 @@ function Invoke-GraphicsOnly {
     }
     . $cache
     try{
-        $preset=Get-ProfileGraphicsPreset -ProfileName $ModeName -Canonical -RequireGitHub
+        $preset=Get-ProfileGraphicsPreset -ProfileName $ModeName -Canonical -RequireVerifiedCloud
     }catch{
         Write-Log ('Current backend and mirror graphics are unavailable for '+$ModeName+': '+$_.Exception.Message) 'WARN'
         $localPath=Join-Path $env:LOCALAPPDATA ('CafeLauncher\graphics-cache\'+$ModeName+'.json')

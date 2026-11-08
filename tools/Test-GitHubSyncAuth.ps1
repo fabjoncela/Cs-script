@@ -43,4 +43,12 @@ if($localHandler -match 'Get-CafeBackendSyncToken|Sync-ProfileToBackend' -or
 foreach($required in @('New-CafeBackendPayload','Save-CafeBackendQueue','Read-CafeBackendQueue','expectedRevision','backend-pending')){
     if(-not $source.Contains($required)){throw ('Missing pending backend sync behavior: '+$required)}
 }
+$legacyWriteCalls=@($ast.FindAll({
+    param($node)
+    $node -is [Management.Automation.Language.CommandAst] -and
+        $node.GetCommandName() -in @('Sync-ProfileToGitHub','Get-GitHubSyncAuthorization')
+},$true))
+if($legacyWriteCalls.Count){
+    throw 'Production launcher code must not call the retired GitHub profile write or authorization chooser; GitHub is a read-only fallback.'
+}
 Write-Host 'PASS: backend sync token stays in memory, edits queue locally, and writes verify backend read-back; GitHub is read-only.'

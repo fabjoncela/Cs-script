@@ -303,7 +303,7 @@ $graphicsPresetFunction=@($psAst.FindAll({
 },$true))
 if($graphicsPresetFunction.Count -ne 1 -or
    $graphicsPresetFunction[0].Extent.Text -notmatch 'Get-CafeCloudSnapshot' -or
-   $graphicsPresetFunction[0].Extent.Text -notmatch 'RequireGitHub'){
+   $graphicsPresetFunction[0].Extent.Text -notmatch 'RequireVerifiedCloud'){
     throw 'CS2 graphics presets must use the backend/mirror adapter and require verified cloud data for Apply.'
 }
 
@@ -556,15 +556,15 @@ if(([regex]::Matches($psSource,'Initialize-LiveLogHistory')).Count -ne 2){
     throw 'Retained LIVE LOGS history must only be initialized by its helper and the Show Logs action.'
 }
 if($editorSource -notmatch 'Refresh-ProfileFromBackend -ProfileName \$ProfileName' -or
-   $editorSource -notmatch 'Get-ProfileGraphicsPreset -ProfileName \$ProfileName -RequireGitHub' -or
+   $editorSource -notmatch 'Get-ProfileGraphicsPreset -ProfileName \$ProfileName -RequireVerifiedCloud' -or
    $editorSource -notmatch 'Resolve-PendingProfileChanges -ProfileName \$ProfileName' -or
    $editorSource -notmatch 'Confirm-LocalProfileApply -ProfileName \$ProfileName -Source \$profileSource -Action edit' -or
    $editorSource -notmatch '\[void\]\$dialog\.ShowDialog\(\$form\)'){
     throw 'Opening the profile editor must refresh its profile and graphics from the backend/mirror and require explicit local fallback confirmation.'
 }
 $graphicsReader=@($psAst.FindAll({param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Get-ProfileGraphicsPreset'},$true))
-if($graphicsReader.Count -ne 1 -or $graphicsReader[0].Extent.Text -notmatch '\[switch\]\$RequireGitHub' -or
-   $graphicsReader[0].Extent.Text -notmatch 'if\(\$RequireGitHub\)\{throw'){
+if($graphicsReader.Count -ne 1 -or $graphicsReader[0].Extent.Text -notmatch '\[switch\]\$RequireVerifiedCloud' -or
+   $graphicsReader[0].Extent.Text -notmatch 'if\(\$RequireVerifiedCloud\)\{throw'){
     throw 'Editor cloud graphics refresh must fail closed so local fallback requires a separate user confirmation.'
 }
 $startupTimerMatch=[regex]::Match($dashboardSource,'\$startupTimer\s*=\s*New-Object System\.Windows\.Forms\.Timer')
@@ -591,7 +591,7 @@ if($profileApply.Count -ne 1 -or $profileApply[0].Extent.Text -notmatch 'Resolve
     throw 'Profile and graphics apply actions must resolve unsynced edits before using cloud settings.'
 }
 $profileApplyBody=$profileApply[0].Extent.Text
-$graphicsRefreshAt=$profileApplyBody.IndexOf('Get-ProfileGraphicsPreset -ProfileName $ProfileName -RequireGitHub',[StringComparison]::Ordinal)
+$graphicsRefreshAt=$profileApplyBody.IndexOf('Get-ProfileGraphicsPreset -ProfileName $ProfileName -RequireVerifiedCloud',[StringComparison]::Ordinal)
 $routineStartAt=$profileApplyBody.IndexOf('full routine started',[StringComparison]::Ordinal)
 if($graphicsRefreshAt -lt 0 -or $routineStartAt -le $graphicsRefreshAt -or
    $profileApplyBody -notmatch '\$script:GamingProfiles\[\$ProfileName\]\.ScalingMode=\[int\]\$graphicsPreset\.ScalingMode' -or
