@@ -11,6 +11,7 @@ on:
       - 'tools/Test-GitHubRateLimit.ps1'
       - 'tools/Test-ProfileSave.ps1'
       - 'tools/Test-BackendRetry.ps1'
+      - 'tools/Test-BackendMirrorFreshness.ps1'
       - 'tools/Test-CfgSensitivitySync.ps1'
       - 'tools/Test-ProfileCfgSensitivity.ps1'
       - 'tools/Test-GitHubSyncAuth.ps1'
@@ -53,6 +54,7 @@ on:
       - 'tools/Test-GitHubRateLimit.ps1'
       - 'tools/Test-ProfileSave.ps1'
       - 'tools/Test-BackendRetry.ps1'
+      - 'tools/Test-BackendMirrorFreshness.ps1'
       - 'tools/Test-CfgSensitivitySync.ps1'
       - 'tools/Test-ProfileCfgSensitivity.ps1'
       - 'tools/Test-GitHubSyncAuth.ps1'
@@ -128,6 +130,10 @@ jobs:
         shell: powershell
         run: |
           & "$env:GITHUB_WORKSPACE\tools\Test-BackendRetry.ps1"
+      - name: Test backend mirror freshness and fallback confirmation
+        shell: powershell
+        run: |
+          & "$env:GITHUB_WORKSPACE\tools\Test-BackendMirrorFreshness.ps1"
       - name: Test GitHub profile CFG sync (mocked)
         shell: powershell
         run: |

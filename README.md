@@ -45,6 +45,8 @@ The dashboard keeps separate settings for six profiles:
 
 Before editing or applying a profile with pending local changes, the launcher offers to sync them, discard them and fetch the latest cloud files, or cancel. A failed refresh does not silently replace local values with stale cached data.
 
+If the backend is unavailable, profile reads can use the public GitHub mirror. The launcher rejects a mirror revision older than the latest revision this PC has verified and asks before using mirror-sourced values for Edit, Apply, Play + Exec, or Apply Graphics. The mirror may still be behind a backend update this PC has not yet seen, so retry against the backend when it is available.
+
 ## CS2 graphics editor
 
 Each profile has its own graphics preset in the backend, with the verified public GitHub mirror as a read fallback. In the **CS2 / Apps** editor, you can set resolution, aspect ratio, fullscreen mode, refresh rate, NVIDIA scaling mode, and supported CS2 video options such as MSAA, shadows, textures, HDR, Reflex, FSR, VSync, and CMAA.
@@ -55,7 +57,7 @@ FabMode, ArliMode, ArmlMode, OliMode, and Provmode currently use 1280×960 4:3 f
 - **Preview & Import** in **Edit → Mouse** decodes a pasted CS2 crosshair share code and opens a local visual preview with stone, dark, light, and foliage-like backgrounds. Static Quadrant is drawn as four short arcs around a square center dot, following current CS2 geometry. A local per-pixel raster applies smooth edge coverage and color blending at game-pixel size before nearest-neighbor enlargement. Dragging the crosshair only checks visibility. **Import** stages the values for the selected profile; canceling does not change staged settings. Dynamic styles are shown at rest. The reference rendering model is publicly reconstructed, so an exact in-game pixel match has not been confirmed.
 - **Copy graphics** copies only graphics fields from another profile. **Reset** reloads the selected profile's canonical preset. Neither saves automatically.
 - **Load history** can show the three previous versions of a profile's preset. Restoring loads values into the editor; it does not save or apply them.
-- **Apply Graphics** requires CS2 to be closed. It validates the selected profile and active Steam account, backs up the target file, changes recognized settings, verifies the result, and reports fields that were applied, skipped, or could not be verified.
+- **Apply Graphics** requires CS2 to be closed. If it must use the GitHub mirror because the backend is unavailable, the launcher asks before applying that possibly older preset. It validates the selected profile and active Steam account, backs up the target file, changes recognized settings, verifies the result, and reports fields that were applied, skipped, or could not be verified.
 
 Graphics changes affect only the active Steam account's `userdata/<id>/730/local/cfg/cs2_video.txt`. The launcher preserves unrelated and hardware-specific fields. If an exact display mode is unavailable, it reports the fallback and avoids claiming that an unsupported mode was applied.
 

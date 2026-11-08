@@ -6305,7 +6305,15 @@ function Get-CafeCloudSnapshot {
     try{$snapshot=Get-CafeBackendSnapshot -ProfileName $ProfileName}
     catch{
         Write-Log ('Backend read failed for '+$ProfileName+'; trying the GitHub mirror: '+$_.Exception.Message) 'WARN'
-        try{$snapshot=Get-CafeMirrorSnapshot -ProfileName $ProfileName}
+        try{
+            $snapshot=Get-CafeMirrorSnapshot -ProfileName $ProfileName
+            if($script:BackendRevisions.ContainsKey($ProfileName)){
+                $lastVerifiedRevision=[int]$script:BackendRevisions[$ProfileName]
+                if([int]$snapshot.Revision -lt $lastVerifiedRevision){
+                    throw ('GitHub mirror revision '+$snapshot.Revision+' is older than the last verified revision '+$lastVerifiedRevision+'.')
+                }
+            }
+        }
         catch{Set-CafeCloudReadSourceDisplay -Source 'LocalFallback';throw}
     }
     $script:BackendSnapshots[$ProfileName]=$snapshot
@@ -6473,20 +6481,24 @@ function Refresh-ProfileFromBackend {
 function Confirm-LocalProfileApply {
     param([Parameter(Mandatory=$true)][string]$ProfileName,[Parameter(Mandatory=$true)][string]$Source,
         [ValidateSet('apply','edit')][string]$Action='apply')
-    if($Source -notin @('LocalPending','LocalFallback')){return $true}
-    $reason=if($Source -eq 'LocalPending'){
-        'This profile has local changes waiting to sync to the backend.'
-    }else{
-        'CafeLauncher could not verify the latest profile on the backend or its mirror.'
+    if($Source -notin @('LocalPending','LocalFallback','GitHubMirror')){return $true}
+    $revision=0
+    if($script:BackendSnapshots.ContainsKey($ProfileName)){$revision=[int]$script:BackendSnapshots[$ProfileName].Revision}
+    $reason=switch($Source){
+        'LocalPending' {'This profile has local changes waiting to sync to the backend.';break}
+        'GitHubMirror' {"The backend API is unavailable. This profile came from the public GitHub mirror at revision $revision, which can lag behind the backend.";break}
+        default {'CafeLauncher could not verify the latest profile on the backend or its mirror.'}
     }
     $verb=if($Action -eq 'edit'){'Opening the editor'}else{'Applying now'}
-    $message="$reason`r`n`r`n$verb will use the local saved values, which may be older than the cloud copy. Choose Yes to continue, or No to cancel and try again when the backend or mirror is available."
-    $answer=[System.Windows.Forms.MessageBox]::Show($message,'Confirm local profile settings','YesNo','Warning','Button2')
+    $fallbackNote=if($Source -eq 'LocalPending'){'The local values may differ from the latest backend copy.'}else{'This copy may be older than the backend.'}
+    $message="$reason`r`n`r`n$verb will use the values from this source. $fallbackNote Choose Yes to continue, or No to cancel and retry when the backend is available."
+    $title=if($Source -eq 'GitHubMirror'){'Confirm GitHub mirror settings'}else{'Confirm local profile settings'}
+    $answer=[System.Windows.Forms.MessageBox]::Show($message,$title,'YesNo','Warning','Button2')
     if($answer -eq [System.Windows.Forms.DialogResult]::Yes){
-        Write-Log "$ProfileName local settings apply explicitly confirmed ($Source)." 'WARN'
+        Write-Log "$ProfileName fallback settings apply explicitly confirmed ($Source, revision $revision)." 'WARN'
         return $true
     }
-    Write-Log "$ProfileName apply canceled; local settings were not applied because the latest cloud copy could not be verified." 'INFO'
+    Write-Log "$ProfileName apply canceled; fallback settings were not applied without confirmation ($Source)." 'INFO'
     return $false
 }
 
@@ -9300,10 +9312,15 @@ function Invoke-GraphicsOnly {
         throw 'Cached graphics module failed signature/hash validation. Graphics not applied.'
     }
     . $cache
-    try{
-        $preset=Get-ProfileGraphicsPreset -ProfileName $ModeName -Canonical -RequireVerifiedCloud
-    }catch{
+    $cloudSnapshot=$null
+    try{$cloudSnapshot=Get-CafeCloudSnapshot -ProfileName $ModeName -ForceRefresh}
+    catch{
         Write-Log ('Current backend and mirror graphics are unavailable for '+$ModeName+': '+$_.Exception.Message) 'WARN'
+    }
+    if($cloudSnapshot){
+        if(-not (Confirm-LocalProfileApply -ProfileName $ModeName -Source $cloudSnapshot.Source)){return}
+        $preset=$cloudSnapshot.Graphics
+    }else{
         $localPath=Join-Path $env:LOCALAPPDATA ('CafeLauncher\graphics-cache\'+$ModeName+'.json')
         if(-not (Confirm-CS2GraphicsPresetUse -ModeName $ModeName -Path $localPath)){throw 'Apply Graphics canceled; current cloud preset could not be verified.'}
         $preset=Get-ProfileGraphicsPreset -ProfileName $ModeName -Canonical
