@@ -79,8 +79,8 @@ function Assert-CS2GraphicsDisplayPolicy {
 }
 function Confirm-CS2GraphicsPresetUse {
     param([string]$ModeName,[string]$Path,[switch]$Unsynced)
-    $reason=if($Unsynced){'This profile has local graphics changes that have not been synced to GitHub.'}else{'CafeLauncher could not verify the latest graphics preset on GitHub.'}
-    $message="$reason`r`n`r`nApply the local graphics values from:`r`n$Path`r`n`r`nThey may be older than GitHub. Choose Yes to use them anyway, or No to cancel."
+    $reason=if($Unsynced){'This profile has local graphics changes waiting to sync.'}else{'CafeLauncher could not verify the latest graphics preset on the backend or its mirror.'}
+    $message="$reason`r`n`r`nApply the local graphics values from:`r`n$Path`r`n`r`nThey may be older than the cloud copy. Choose Yes to use them anyway, or No to cancel."
     $answer=[System.Windows.Forms.MessageBox]::Show($message,'Confirm local CS2 graphics','YesNo','Warning','Button2')
     return ($answer -eq [System.Windows.Forms.DialogResult]::Yes)
 }
@@ -309,11 +309,12 @@ function Save-CS2VideoFileWithBackup {
 }
 
 function Apply-CS2ModeGraphics {
-    param([string]$ModeName)
+    param([string]$ModeName,$Preset)
     Write-Log ("Clicked: Apply Graphics "+$ModeName)
     try{
         if(Get-Process -Name cs2 -ErrorAction SilentlyContinue){throw 'CS2 is running. Close CS2 completely, then click Apply Graphics again.'}
-        $preset=Get-CS2ModeGraphicsPreset -ModeName $ModeName
+        $preset=if($null -ne $Preset){$Preset}else{Get-CS2ModeGraphicsPreset -ModeName $ModeName}
+        if([string]$preset.ProfileName -cne $ModeName -or [int]$preset.SchemaVersion -ne 1){throw 'Graphics preset profile/schema mismatch.'}
         $displayPolicy=Assert-CS2GraphicsDisplayPolicy -Preset $preset
         $refreshPolicy=if($preset.PSObject.Properties['RefreshPolicy'] -and $preset.RefreshPolicy){[string]$preset.RefreshPolicy}else{'Highest'}
         $scalingMode=if($preset.PSObject.Properties['ScalingMode'] -and $null -ne $preset.ScalingMode){[int]$preset.ScalingMode}else{2}

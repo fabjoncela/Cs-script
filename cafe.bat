@@ -11,7 +11,7 @@ del /q "%CAFE_RESTART_SIGNAL%" >nul 2>&1
 exit /b
 
 # POWERSHELL_GUI
-# CAFE_RELEASE=2026.11.07.19
+# CAFE_RELEASE=2026.11.08.1
 
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
@@ -2881,9 +2881,11 @@ function Assert-ConfigUrl {
     $uri = $null
     if (-not [Uri]::TryCreate($Url, [UriKind]::Absolute, [ref]$uri) -or
         $uri.Scheme -ne 'https' -or $Url.Length -gt 2048 -or
-        $uri.Host -ne 'raw.githubusercontent.com' -or
-        $uri.AbsolutePath -notmatch '^/[^/]+/[^/]+/[^/]+/(?:[^/]+/)*[A-Za-z0-9_-]+\.cfg$') {
-        throw 'Config URL must be a direct HTTPS raw.githubusercontent.com link ending in .cfg.'
+        (($uri.Host -ne 'raw.githubusercontent.com' -or
+          $uri.AbsolutePath -notmatch '^/[^/]+/[^/]+/[^/]+/(?:[^/]+/)*[A-Za-z0-9_-]+\.cfg$') -and
+         ($uri.Host -ne 'fabjon-hp.tail681ec9.ts.net' -or $uri.Port -ne 10000 -or
+          $uri.AbsolutePath -notmatch '^/v1/cfg/[a-z0-9_-]+\.cfg$'))) {
+        throw 'Config URL must be the CafeLauncher backend CFG endpoint or a direct HTTPS raw.githubusercontent.com CFG link.'
     }
 }
 
@@ -2891,6 +2893,28 @@ function Get-ProfileCfgSource {
     param([Parameter(Mandatory=$true)][string]$CfgName,[string]$DownloadUrl='',[switch]$CloudPreferred)
     if($CfgName -notmatch '^[a-z0-9_-]+\.cfg$'){throw 'Invalid profile CFG filename.'}
     $launcherDir = Split-Path -Parent $env:CAFE_SCRIPT
+    if($CloudPreferred){
+        $profileName=($script:GamingProfiles.Keys|Where-Object{[string]$script:GamingProfiles[$_].ConfigFile -ceq $CfgName}|Select-Object -First 1)
+        if(-not $profileName){throw ('No profile owns CFG '+$CfgName+'.')}
+        $cached=Join-Path $env:LOCALAPPDATA ('CafeLauncher\cfg-cache\'+$CfgName)
+        try{
+            $snapshot=Get-CafeCloudSnapshot -ProfileName ([string]$profileName)
+            $cacheDir=Split-Path -Parent $cached
+            if(-not(Test-Path -LiteralPath $cacheDir)){[void](New-Item -ItemType Directory -Path $cacheDir -Force -ErrorAction Stop)}
+            $temporary=Join-Path $cacheDir ($CfgName+'.'+[Guid]::NewGuid().ToString('N')+'.tmp')
+            try{
+                [IO.File]::WriteAllText($temporary,[string]$snapshot.Cfg,(New-Object Text.UTF8Encoding($false)))
+                Move-Item -LiteralPath $temporary -Destination $cached -Force -ErrorAction Stop
+            }finally{if(Test-Path -LiteralPath $temporary){Remove-Item -LiteralPath $temporary -Force -ErrorAction SilentlyContinue}}
+            Write-Log ($CfgName+' loaded from '+$snapshot.Source+' for installation.')
+            return [pscustomobject]@{Type='File';Value=$cached;RememberUrl=$false}
+        }catch{
+            Write-Log ('Backend and GitHub mirror CFG read failed: '+$_.Exception.Message) 'WARN'
+            if(Test-Path -LiteralPath $cached -PathType Leaf){return [pscustomobject]@{Type='File';Value=$cached;RememberUrl=$false}}
+            if($launcherDir){$localCfg=Join-Path $launcherDir $CfgName;if(Test-Path -LiteralPath $localCfg -PathType Leaf){return [pscustomobject]@{Type='File';Value=$localCfg;RememberUrl=$false}}}
+            throw ('No verified cloud or local '+$CfgName+' is available.')
+        }
+    }
     if ($CloudPreferred -and -not [string]::IsNullOrWhiteSpace($DownloadUrl)) {
         Assert-ConfigUrl $DownloadUrl
         return [pscustomobject]@{ Type='Url'; Value=$DownloadUrl; RememberUrl=$false }
@@ -3539,7 +3563,7 @@ function Launch-ProfileApps {
 }
 
 # ==============================================================
-# PROFILE DEFAULTS - Edit in GUI, save locally or sync via GitHub
+# PROFILE DEFAULTS - Edit in GUI, save locally or sync via backend
 # Cloud profile settings: profiles/<ProfileName>.json (public read).
 # CS2 .cfg files remain separately managed on GitHub.
 # Local unsynced edits ALWAYS win over downloaded cloud settings.
@@ -3550,7 +3574,7 @@ $script:GithubBranch = 'main'
 # Public GitHub App client ID used only by the optional device sign-in flow.
 # The corresponding app must enable device flow and repo Contents read/write.
 $script:GithubDeviceFlowClientId = 'Iv23libHoHzpzAPDKmNX'
-$script:FabCfgCloudUrl = 'https://raw.githubusercontent.com/fabjoncela/Cs-script/main/fab.cfg'
+$script:FabCfgCloudUrl = 'https://fabjon-hp.tail681ec9.ts.net:10000/v1/cfg/fab.cfg'
 $script:GamingProfiles = [ordered]@{
     FabMode = @{
         PointerSpeed=10; LogitechDPI=800; DisableAcceleration=$true; ApplyNvidia=$true; ScalingMode=2
@@ -3560,29 +3584,34 @@ $script:GamingProfiles = [ordered]@{
     ArliMode = @{
         PointerSpeed=10; LogitechDPI=800; DisableAcceleration=$true; ApplyNvidia=$true; ScalingMode=2
         Width=1920; Height=1080; RefreshHz=360; Vibrance=75; Hue=-1
-        VoicePushToTalkKey=''; ConfigFile='arli.cfg'; CfgDownloadUrl='https://raw.githubusercontent.com/fabjoncela/Cs-script/main/arli.cfg'; LaunchApps=$true; LaunchWebsiteEnabled=$true; LaunchWebsiteUrl='https://metastack.gg/'
+        VoicePushToTalkKey=''; ConfigFile='arli.cfg'; CfgDownloadUrl='https://fabjon-hp.tail681ec9.ts.net:10000/v1/cfg/arli.cfg'; LaunchApps=$true; LaunchWebsiteEnabled=$true; LaunchWebsiteUrl='https://metastack.gg/'
     }
     BrileMode = @{
         PointerSpeed=10; LogitechDPI=800; DisableAcceleration=$true; ApplyNvidia=$true; ScalingMode=2
         Width=1920; Height=1080; RefreshHz=360; Vibrance=75; Hue=-1
-        VoicePushToTalkKey=''; ConfigFile='brile.cfg'; CfgDownloadUrl='https://raw.githubusercontent.com/fabjoncela/Cs-script/main/brile.cfg'; LaunchApps=$true; LaunchWebsiteEnabled=$true; LaunchWebsiteUrl='https://metastack.gg/'
+        VoicePushToTalkKey=''; ConfigFile='brile.cfg'; CfgDownloadUrl='https://fabjon-hp.tail681ec9.ts.net:10000/v1/cfg/brile.cfg'; LaunchApps=$true; LaunchWebsiteEnabled=$true; LaunchWebsiteUrl='https://metastack.gg/'
     }
     ArmlMode = @{
         PointerSpeed=10; LogitechDPI=800; DisableAcceleration=$true; ApplyNvidia=$true; ScalingMode=2
         Width=1920; Height=1080; RefreshHz=360; Vibrance=75; Hue=-1
-        VoicePushToTalkKey=''; ConfigFile='arml.cfg'; CfgDownloadUrl='https://raw.githubusercontent.com/fabjoncela/Cs-script/main/arml.cfg'; LaunchApps=$true; LaunchWebsiteEnabled=$true; LaunchWebsiteUrl='https://metastack.gg/'
+        VoicePushToTalkKey=''; ConfigFile='arml.cfg'; CfgDownloadUrl='https://fabjon-hp.tail681ec9.ts.net:10000/v1/cfg/arml.cfg'; LaunchApps=$true; LaunchWebsiteEnabled=$true; LaunchWebsiteUrl='https://metastack.gg/'
     }
     OliMode = @{
         PointerSpeed=10; LogitechDPI=800; DisableAcceleration=$true; ApplyNvidia=$true; ScalingMode=2
         Width=1920; Height=1080; RefreshHz=360; Vibrance=75; Hue=-1
-        VoicePushToTalkKey=''; ConfigFile='oli.cfg'; CfgDownloadUrl='https://raw.githubusercontent.com/fabjoncela/Cs-script/main/oli.cfg'; LaunchApps=$true; LaunchWebsiteEnabled=$true; LaunchWebsiteUrl='https://metastack.gg/'
+        VoicePushToTalkKey=''; ConfigFile='oli.cfg'; CfgDownloadUrl='https://fabjon-hp.tail681ec9.ts.net:10000/v1/cfg/oli.cfg'; LaunchApps=$true; LaunchWebsiteEnabled=$true; LaunchWebsiteUrl='https://metastack.gg/'
     }
     Provmode = @{
         PointerSpeed=8; LogitechDPI=350; DisableAcceleration=$true; ApplyNvidia=$true; ScalingMode=2
         Width=1920; Height=1080; RefreshHz=300; Vibrance=75; Hue=-1
-        VoicePushToTalkKey=''; ConfigFile='prov.cfg'; CfgDownloadUrl='https://raw.githubusercontent.com/fabjoncela/Cs-script/main/prov.cfg'; LaunchApps=$true; LaunchWebsiteEnabled=$true; LaunchWebsiteUrl='https://metastack.gg/'
+        VoicePushToTalkKey=''; ConfigFile='prov.cfg'; CfgDownloadUrl='https://fabjon-hp.tail681ec9.ts.net:10000/v1/cfg/prov.cfg'; LaunchApps=$true; LaunchWebsiteEnabled=$true; LaunchWebsiteUrl='https://metastack.gg/'
     }
 }
+$script:BackendBaseUrl = 'https://fabjon-hp.tail681ec9.ts.net:10000'
+$script:MirrorRawBase = 'https://raw.githubusercontent.com/fabjoncela/cafelauncher-backend-mirror/main'
+$script:BackendSnapshots = @{}
+$script:BackendRevisions = @{}
+$script:PendingTarget = @{}
 $script:ProfileSettingsPath = Join-Path $env:LOCALAPPDATA 'CafeLauncher\profiles.json'
 $script:PendingSync = @{}
 $script:PendingCfgSensitivity = @{}
@@ -5461,8 +5490,8 @@ function Invoke-CafeCS2CaptureReview {
     $needsCfg=($convarCapture -and $convarCapture.Values.Count) -or ($bindCapture -and $bindCapture.Values.Count)
     if($needsCfg){
         $cfgName=[string]$script:GamingProfiles[$ProfileName].ConfigFile
-        $cfg=Get-GitHubCfgFromContentsApi -Repo $script:GithubRepo -Branch $script:GithubBranch -Path $cfgName
-        $profileCfg=[string]$cfg.Content
+        $snapshot=Get-CafeCloudSnapshot -ProfileName $ProfileName
+        $profileCfg=[string]$snapshot.Cfg
     }
     $rows=Get-CafeCS2CaptureReviewRows -Groups $Groups -GraphicsCapture $videoCapture -ConvarCapture $convarCapture -BindCapture $bindCapture -ProfileCfg $profileCfg -BasePreset $BasePreset -BaseCfg $baselineCfg
     $selected=Show-CafeCS2CaptureReviewDialog -Rows $rows -OwnerWindow $OwnerWindow
@@ -5573,7 +5602,7 @@ function Get-ProfileGraphicsPreset {
     param([Parameter(Mandatory=$true)][string]$ProfileName,[switch]$Canonical,[switch]$RequireGitHub)
     if(-not $script:GamingProfiles.Contains($ProfileName)){throw ('Unknown graphics profile: '+$ProfileName)}
     if($RequireGitHub -and $script:PendingSync[$ProfileName]){
-        throw ('This profile has unsynced local edits. Resolve them before refreshing its GitHub graphics preset.')
+        throw ('This profile has unsynced local edits. Resolve them before refreshing its cloud graphics preset.')
     }
     if(-not $Canonical -and $script:PendingSync[$ProfileName] -and $script:GraphicsPresets.Contains($ProfileName)){
         return $script:GraphicsPresets[$ProfileName]
@@ -5581,8 +5610,8 @@ function Get-ProfileGraphicsPreset {
     $cache=Join-Path $env:LOCALAPPDATA ("CafeLauncher\graphics-cache\"+$ProfileName+'.json')
     $local=Join-Path (Split-Path -Parent $env:CAFE_SCRIPT) ("graphics\"+$ProfileName+'.json')
     try{
-        $remote=Get-GitHubJsonFromContentsApi -Repo $script:GithubRepo -Branch $script:GithubBranch -Path "graphics/$ProfileName.json" -MaxBytes 1048576
-        $preset=ConvertTo-CafeGraphicsPreset -ProfileName $ProfileName -Preset $remote
+        $snapshot=Get-CafeCloudSnapshot -ProfileName $ProfileName
+        $preset=$snapshot.Graphics
         if(-not $Canonical){
             $script:GraphicsPresets[$ProfileName]=$preset
             $script:GamingProfiles[$ProfileName].ScalingMode=[int]$preset.ScalingMode
@@ -5591,7 +5620,7 @@ function Get-ProfileGraphicsPreset {
         return $preset
     }catch{
         Write-Log ('Graphics preset download unavailable: '+$_.Exception.Message) 'WARN'
-        if($RequireGitHub){throw ('Could not verify the latest GitHub graphics preset for '+$ProfileName+': '+$_.Exception.Message)}
+        if($RequireGitHub){throw ('Could not verify the latest backend or mirrored graphics preset for '+$ProfileName+': '+$_.Exception.Message)}
     }
     foreach($file in @($cache,$local)){
         if(-not(Test-Path -LiteralPath $file -PathType Leaf)){continue}
@@ -5620,6 +5649,63 @@ function ConvertTo-CafeGraphicsHistoryEntry {
     if(-not $message){$message='GitHub graphics update'}
     if($message.Length -gt 120){$message=$message.Substring(0,117)+'...'}
     return [pscustomobject]@{Sha=([string]$Commit.sha).ToLowerInvariant();DateUtc=$date.ToUniversalTime().ToString('o');Message=$message}
+}
+function Get-CafeMirrorGraphicsHistoryJson {
+    param([Parameter(Mandatory=$true)][string]$ProfileName)
+    if(-not $script:GamingProfiles.Contains($ProfileName)){throw 'Unknown graphics profile.'}
+    $base=[string]$script:MirrorRawBase
+    $manifest=ConvertFrom-CafeCloudJson -Bytes (Get-CafeHttpBytes -Uri ($base+'/mirror-manifest.json?fresh='+[Guid]::NewGuid().ToString('N'))).Bytes
+    if([int]$manifest.schemaVersion -ne 1 -or [string]$manifest.repository -cne 'fabjoncela/cafelauncher-backend-mirror' -or
+       [string]$manifest.branch -cne 'main' -or [int]$manifest.generation -lt 1){throw 'Mirror history manifest is invalid.'}
+    $entryProperty=$manifest.profiles.PSObject.Properties[$ProfileName]
+    if(-not $entryProperty){throw 'Graphics history is absent from the mirror manifest.'}
+    $entry=$entryProperty.Value
+    $path='history/graphics/'+$ProfileName+'.json'
+    $expectedHash=[string]$entry.sha256.graphicsHistory
+    if([string]$entry.files.graphicsHistory -cne $path -or $expectedHash -notmatch '^[a-fA-F0-9]{64}$'){
+        throw 'Mirror graphics history path or hash is invalid.'
+    }
+    $bytes=(Get-CafeHttpBytes -Uri ($base+'/'+$path+'?fresh='+[Guid]::NewGuid().ToString('N')) -MaxBytes 2097152).Bytes
+    $sha=[Security.Cryptography.SHA256]::Create()
+    try{$actual=[BitConverter]::ToString($sha.ComputeHash($bytes)).Replace('-','').ToLowerInvariant()}finally{$sha.Dispose()}
+    if($actual -cne $expectedHash.ToLowerInvariant()){throw 'Mirror graphics history hash mismatch.'}
+    $json=(New-Object Text.UTF8Encoding($false,$true)).GetString($bytes)
+    $parsed=ConvertFrom-Json -InputObject $json -ErrorAction Stop
+    if(@($parsed.revisions).Count -lt 1 -or [int]$parsed.revisions[0].revision -ne [int]$entry.revision){
+        throw 'Mirror graphics history revision is inconsistent with the manifest.'
+    }
+    return $json
+}
+function ConvertFrom-CafeBackendGraphicsHistory {
+    param([Parameter(Mandatory=$true)][string]$ProfileName,[Parameter(Mandatory=$true)][string]$ResponseJson)
+    if([string]::IsNullOrWhiteSpace($ResponseJson)){throw 'Graphics history response is empty.'}
+    $response=ConvertFrom-Json -InputObject $ResponseJson -ErrorAction Stop
+    if([string]$response.profile -cne $ProfileName){throw 'Graphics history profile mismatch.'}
+    $revisions=@($response.revisions)
+    if($revisions.Count -lt 1 -or $revisions.Count -gt 50){throw 'Graphics history revision list is invalid.'}
+    $versions=New-Object 'System.Collections.Generic.List[object]'
+    $previous=[int]::MaxValue
+    for($index=0;$index -lt $revisions.Count;$index++){
+        $item=$revisions[$index]
+        $revision=0
+        if(-not [int]::TryParse([string]$item.revision,[ref]$revision) -or $revision -lt 1 -or $revision -ge $previous){
+            throw 'Graphics history revisions are invalid or out of order.'
+        }
+        $previous=$revision
+        $date=[DateTimeOffset]::MinValue
+        if(-not [DateTimeOffset]::TryParse([string]$item.createdUtc,[ref]$date)){throw 'Graphics history date is invalid.'}
+        $preset=ConvertTo-CafeGraphicsPreset -ProfileName $ProfileName -Preset $item.graphics
+        if($index -gt 0 -and $versions.Count -lt 3){
+            $versions.Add([pscustomobject]@{Revision=$revision;DateUtc=$date.ToUniversalTime().ToString('o');Message=('Backend revision '+$revision);Graphics=$preset})
+        }
+    }
+    return @($versions.ToArray())
+}
+function Get-CafeGraphicsHistoryPreset {
+    param([Parameter(Mandatory=$true)][string]$ProfileName,[Parameter(Mandatory=$true)]$Version)
+    $revision=0
+    if(-not [int]::TryParse([string]$Version.Revision,[ref]$revision) -or $revision -lt 1){throw 'Selected graphics history revision is invalid.'}
+    return (ConvertTo-CafeGraphicsPreset -ProfileName $ProfileName -Preset $Version.Graphics)
 }
 function New-CafeGraphicsHistoryRequestUri {
     param(
@@ -5721,17 +5807,17 @@ function Set-CafeGraphicsHistoryUi {
         $historyChoice.Items.Clear()
         $historyChoice.Tag=[object[]]$Versions
         if($NoHistory -or $Versions.Count -eq 0){
-            [void]$historyChoice.Items.Add('No earlier GitHub versions found')
+            [void]$historyChoice.Items.Add('No earlier graphics versions found')
             $historyChoice.Enabled=$false
             $restoreButton.Enabled=$false
             $historyChoice.SelectedIndex=0
-            if($NoHistory){$statusLabel.Text='No earlier GitHub versions were found for this profile (GitHub returned 404 for its history path).'}
+            if($NoHistory){$statusLabel.Text='No earlier graphics versions were found for this profile.'}
             else{$statusLabel.Text='No earlier synced graphics versions were found for this profile.'}
         }else{
             foreach($version in $Versions){
                 $dateLabel=[string]$version.DateUtc
                 try{$dateLabel=([DateTimeOffset]::Parse([string]$version.DateUtc)).ToLocalTime().ToString('yyyy-MM-dd HH:mm')}catch{}
-                [void]$historyChoice.Items.Add(($dateLabel+' — '+[string]$version.Message+' ['+$version.Sha.Substring(0,7)+']'))
+                [void]$historyChoice.Items.Add(($dateLabel+' — '+[string]$version.Message))
             }
             $historyChoice.Enabled=$true
             $historyChoice.SelectedIndex=0
@@ -5921,6 +6007,15 @@ function Load-ProfileSettings {
                     try{[void](Set-CafeCapturedBindsInCfg -Content '' -Binds $capturedBinds);$script:CapturedCS2Binds[$name]=$capturedBinds}catch{Write-Log "Ignored invalid local $name captured binds." 'WARN'}
                 }
             }
+            $savedRevision=$savedProfile.Value.PSObject.Properties['BackendRevision']
+            if($savedRevision){
+                $revision=0
+                if([int]::TryParse([string]$savedRevision.Value,[ref]$revision) -and $revision -gt 0){$script:BackendRevisions[$name]=$revision}
+            }
+            if($script:PendingSync[$name]){
+                $savedTarget=$savedProfile.Value.PSObject.Properties['PendingTarget']
+                $script:PendingTarget[$name]=if($savedTarget -and [string]$savedTarget.Value -ceq 'Backend'){'Backend'}else{'GitHubLegacy'}
+            }
             $verifiedBlob=$savedProfile.Value.PSObject.Properties['GitHubVerifiedProfileSha']
             $verifiedCommit=$savedProfile.Value.PSObject.Properties['GitHubVerifiedCommitSha']
             if($verifiedBlob -and [string]$verifiedBlob.Value -match '^[a-fA-F0-9]{40}$' -and
@@ -5974,6 +6069,8 @@ function Save-ProfileSettings {
             $snapshot['GraphicsSettings']=$script:GraphicsPresets[$name]
         }
         $snapshot['SyncPending'] = [bool]$script:PendingSync[$name]
+        if($script:BackendRevisions.ContainsKey($name)){$snapshot['BackendRevision']=[int]$script:BackendRevisions[$name]}
+        if($script:PendingSync[$name]){$snapshot['PendingTarget']=$(if($script:PendingTarget.ContainsKey($name)){[string]$script:PendingTarget[$name]}else{'GitHubLegacy'})}
         if($script:VerifiedProfileState.ContainsKey($name)){
             $snapshot['GitHubVerifiedProfileSha']=[string]$script:VerifiedProfileState[$name].BlobSha
             $snapshot['GitHubVerifiedCommitSha']=[string]$script:VerifiedProfileState[$name].CommitSha
@@ -6081,6 +6178,115 @@ function Get-GitHubCfgFromContentsApi {
     return [pscustomobject]@{Path=$Path;BlobSha=[string]$file.sha;Content=$content;Sensitivity=$sensitivity}
 }
 
+function Get-CafeHttpBytes {
+    param([Parameter(Mandatory=$true)][string]$Uri,[int]$MaxBytes=1048576)
+    if($MaxBytes -lt 1 -or $MaxBytes -gt 4194304){throw 'Cloud response size limit is invalid.'}
+    $parsed=$null
+    if(-not [Uri]::TryCreate($Uri,[UriKind]::Absolute,[ref]$parsed) -or $parsed.Scheme -ne 'https' -or
+       $parsed.Host -notin @('fabjon-hp.tail681ec9.ts.net','raw.githubusercontent.com')){
+        throw 'Unexpected cloud URL.'
+    }
+    [Net.ServicePointManager]::SecurityProtocol=[Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+    $request=[Net.HttpWebRequest][Net.WebRequest]::Create($parsed)
+    $request.Method='GET'
+    $request.UserAgent='CafeLauncher-BackendRead'
+    $request.Accept='application/json, text/plain'
+    $request.Timeout=12000
+    $request.ReadWriteTimeout=12000
+    $request.AllowAutoRedirect=$false
+    $request.Headers['Cache-Control']='no-cache'
+    $response=$null;$stream=$null;$memory=$null
+    try{
+        $response=[Net.HttpWebResponse]$request.GetResponse()
+        if($response.StatusCode -ne [Net.HttpStatusCode]::OK){throw ('Cloud read returned HTTP '+[int]$response.StatusCode+'.')}
+        if($response.ContentLength -gt $MaxBytes){throw 'Cloud response exceeds its size limit.'}
+        $stream=$response.GetResponseStream()
+        $memory=New-Object IO.MemoryStream
+        $buffer=New-Object byte[] 8192
+        while(($read=$stream.Read($buffer,0,$buffer.Length)) -gt 0){
+            $memory.Write($buffer,0,$read)
+            if($memory.Length -gt $MaxBytes){throw 'Cloud response exceeds its size limit.'}
+        }
+        return [pscustomobject]@{Bytes=$memory.ToArray();Headers=$response.Headers}
+    }finally{
+        if($memory){$memory.Dispose()}
+        if($stream){$stream.Dispose()}
+        if($response){$response.Dispose()}
+    }
+}
+function ConvertFrom-CafeCloudJson {
+    param([Parameter(Mandatory=$true)][byte[]]$Bytes)
+    $text=(New-Object Text.UTF8Encoding($false,$true)).GetString($Bytes)
+    return (ConvertFrom-Json -InputObject $text -ErrorAction Stop)
+}
+function Assert-CafeCloudSnapshot {
+    param([Parameter(Mandatory=$true)][string]$ProfileName,$Profile,$Graphics,[string]$Cfg,[int]$Revision,[string]$Source)
+    $cfgName=[string]$script:GamingProfiles[$ProfileName].ConfigFile
+    if($Revision -lt 1 -or $Profile.ProfileName -cne $ProfileName -or [int]$Profile.SchemaVersion -ne 1 -or
+       [string]$Profile.CfgDownloadUrl -cne ('/v1/cfg/'+$cfgName)){
+        throw 'Cloud profile identity, revision, or CFG route is invalid.'
+    }
+    $preset=ConvertTo-CafeGraphicsPreset -ProfileName $ProfileName -Preset $Graphics
+    if([string]$Cfg -match "`0" -or [Text.Encoding]::UTF8.GetByteCount($Cfg) -gt 2097152){throw 'Cloud CFG content is invalid.'}
+    $sensitivity=Get-CafeCS2CfgSensitivity -Content $Cfg
+    return [pscustomobject]@{Profile=$Profile;Graphics=$preset;Cfg=$Cfg;CfgSensitivity=$sensitivity;Revision=$Revision;Source=$Source}
+}
+function Get-CafeBackendSnapshot {
+    param([Parameter(Mandatory=$true)][string]$ProfileName)
+    if(-not $script:GamingProfiles.Contains($ProfileName)){throw 'Unknown backend profile.'}
+    $cfgName=[string]$script:GamingProfiles[$ProfileName].ConfigFile
+    $paths=@(('/v1/profiles/'+$ProfileName),('/v1/graphics/'+$ProfileName),('/v1/cfg/'+$cfgName))
+    $responses=@($paths|ForEach-Object{Get-CafeHttpBytes -Uri ($script:BackendBaseUrl+$_) -MaxBytes 2097152})
+    $revision=0
+    foreach($response in $responses){
+        $value=0
+        if(-not [int]::TryParse([string]$response.Headers['X-Profile-Revision'],[ref]$value) -or $value -lt 1){throw 'Backend response has no valid revision.'}
+        if($revision -and $value -ne $revision){throw 'Backend profile, graphics, and CFG revisions differ.'}
+        $revision=$value
+    }
+    $profile=ConvertFrom-CafeCloudJson -Bytes $responses[0].Bytes
+    $graphics=ConvertFrom-CafeCloudJson -Bytes $responses[1].Bytes
+    $cfg=(New-Object Text.UTF8Encoding($false,$true)).GetString($responses[2].Bytes)
+    return (Assert-CafeCloudSnapshot -ProfileName $ProfileName -Profile $profile -Graphics $graphics -Cfg $cfg -Revision $revision -Source 'Backend')
+}
+function Get-CafeMirrorSnapshot {
+    param([Parameter(Mandatory=$true)][string]$ProfileName)
+    if(-not $script:GamingProfiles.Contains($ProfileName)){throw 'Unknown mirror profile.'}
+    $manifestResponse=Get-CafeHttpBytes -Uri ($script:MirrorRawBase+'/mirror-manifest.json?fresh='+[Guid]::NewGuid().ToString('N'))
+    $manifest=ConvertFrom-CafeCloudJson -Bytes $manifestResponse.Bytes
+    if([int]$manifest.schemaVersion -ne 1 -or [string]$manifest.repository -cne 'fabjoncela/cafelauncher-backend-mirror' -or
+       [string]$manifest.branch -cne 'main' -or [int]$manifest.generation -lt 1){throw 'Mirror manifest identity or generation is invalid.'}
+    $profileProperty=$manifest.profiles.PSObject.Properties[$ProfileName]
+    if(-not $profileProperty){throw 'Profile is absent from the mirror manifest.'}
+    $entry=$profileProperty.Value
+    $cfgName=[string]$script:GamingProfiles[$ProfileName].ConfigFile
+    $expectedPaths=@{profile=('profiles/'+$ProfileName+'.json');graphics=('graphics/'+$ProfileName+'.json');cfg=('cfg/'+$cfgName)}
+    $payload=@{}
+    foreach($kind in @('profile','graphics','cfg')){
+        $path=[string]$entry.files.$kind
+        $expectedHash=[string]$entry.sha256.$kind
+        if($path -cne $expectedPaths[$kind] -or $expectedHash -notmatch '^[a-fA-F0-9]{64}$'){throw 'Mirror file path or hash is invalid.'}
+        $response=Get-CafeHttpBytes -Uri ($script:MirrorRawBase+'/'+$path+'?fresh='+[Guid]::NewGuid().ToString('N')) -MaxBytes 2097152
+        $sha=[Security.Cryptography.SHA256]::Create()
+        try{$actual=[BitConverter]::ToString($sha.ComputeHash($response.Bytes)).Replace('-','').ToLowerInvariant()}finally{$sha.Dispose()}
+        if($actual -cne $expectedHash.ToLowerInvariant()){throw ('Mirror hash mismatch for '+$path+'.')}
+        $payload[$kind]=$response.Bytes
+    }
+    $profile=ConvertFrom-CafeCloudJson -Bytes $payload.profile
+    $graphics=ConvertFrom-CafeCloudJson -Bytes $payload.graphics
+    $cfg=(New-Object Text.UTF8Encoding($false,$true)).GetString($payload.cfg)
+    return (Assert-CafeCloudSnapshot -ProfileName $ProfileName -Profile $profile -Graphics $graphics -Cfg $cfg -Revision ([int]$entry.revision) -Source 'GitHubMirror')
+}
+function Get-CafeCloudSnapshot {
+    param([Parameter(Mandatory=$true)][string]$ProfileName,[switch]$ForceRefresh)
+    try{$snapshot=Get-CafeBackendSnapshot -ProfileName $ProfileName}
+    catch{
+        Write-Log ('Backend read failed for '+$ProfileName+'; trying the GitHub mirror: '+$_.Exception.Message) 'WARN'
+        $snapshot=Get-CafeMirrorSnapshot -ProfileName $ProfileName
+    }
+    $script:BackendSnapshots[$ProfileName]=$snapshot
+    return $snapshot
+}
 function Get-ProfileCfgSensitivity {
     param([Parameter(Mandatory=$true)][string]$ProfileName,[switch]$LocalProfileConfirmed)
     if(-not $script:GamingProfiles.Contains($ProfileName)){throw "Unknown CS2 profile: $ProfileName"}
@@ -6095,14 +6301,15 @@ function Get-ProfileCfgSensitivity {
         return [pscustomobject]@{Sensitivity=$draft;Source='LocalPending'}
     }
     try{
-        $remote=Get-GitHubCfgFromContentsApi -Repo $script:GithubRepo -Branch $script:GithubBranch -Path $cfgName
+        $snapshot=Get-CafeCloudSnapshot -ProfileName $ProfileName
+        $remote=[pscustomobject]@{Content=$snapshot.Cfg;Sensitivity=$snapshot.CfgSensitivity;Source=$snapshot.Source}
         try{
             $cacheDir=Join-Path $env:LOCALAPPDATA 'CafeLauncher\cfg-cache'
             if(-not (Test-Path -LiteralPath $cacheDir)){[void](New-Item -ItemType Directory -Path $cacheDir -Force -ErrorAction Stop)}
             [IO.File]::WriteAllText((Join-Path $cacheDir $cfgName),$remote.Content,(New-Object System.Text.UTF8Encoding($false)))
         }catch{Write-Log ('Could not cache verified '+$cfgName+' for offline sensitivity display: '+$_.Exception.Message) 'WARN'}
-        Write-Log ($ProfileName+' sensitivity loaded from GitHub '+$cfgName+' ('+$remote.BlobSha+').')
-        return [pscustomobject]@{Sensitivity=$remote.Sensitivity;Source='GitHub'}
+        Write-Log ($ProfileName+' sensitivity loaded from '+$remote.Source+' '+$cfgName+'.')
+        return [pscustomobject]@{Sensitivity=$remote.Sensitivity;Source=$remote.Source}
     }catch{
         $remoteError=$_.Exception.Message
         $cfgDirectory=$null
@@ -6211,160 +6418,124 @@ function Refresh-ProfileFromGitHub {
     }
 }
 
+function Refresh-ProfileFromBackend {
+    param([Parameter(Mandatory=$true)][string]$ProfileName,[switch]$NoSave,[switch]$ForceLoad,
+        [ValidateSet('Startup','Later')][string]$TimingGroup='Later')
+    if(-not $script:GamingProfiles.Contains($ProfileName)){throw 'Unknown backend profile.'}
+    if($script:PendingSync[$ProfileName]){
+        $script:ProfileRefreshStatus[$ProfileName]='LocalPending'
+        return 'LocalPending'
+    }
+    try{
+        $snapshot=Get-CafeCloudSnapshot -ProfileName $ProfileName -ForceRefresh
+        $remote=ConvertFrom-Json -InputObject ($snapshot.Profile|ConvertTo-Json -Depth 6 -Compress) -ErrorAction Stop
+        $cfgName=[string]$script:GamingProfiles[$ProfileName].ConfigFile
+        $remote.CfgDownloadUrl=($script:BackendBaseUrl+'/v1/cfg/'+$cfgName)
+        Import-ProfileValues -ProfileName $ProfileName -SavedProfile $remote -SourceLabel $snapshot.Source
+        $script:GraphicsPresets[$ProfileName]=$snapshot.Graphics
+        $script:GamingProfiles[$ProfileName].ScalingMode=[int]$snapshot.Graphics.ScalingMode
+        $script:BackendRevisions[$ProfileName]=[int]$snapshot.Revision
+        $script:ProfileRefreshStatus[$ProfileName]=[string]$snapshot.Source
+        if(-not $NoSave){try{Save-ProfileSettings}catch{Write-Log ('Could not cache backend profile: '+$_.Exception.Message) 'WARN'}}
+        Write-Log ($ProfileName+' loaded from '+$snapshot.Source+' revision '+$snapshot.Revision+'.')
+        return [string]$snapshot.Source
+    }catch{
+        Write-Log ($ProfileName+' backend and mirror reads failed; local values retained: '+$_.Exception.Message) 'WARN'
+        $script:ProfileRefreshStatus[$ProfileName]='LocalFallback'
+        return 'LocalFallback'
+    }
+}
 function Confirm-LocalProfileApply {
     param([Parameter(Mandatory=$true)][string]$ProfileName,[Parameter(Mandatory=$true)][string]$Source,
         [ValidateSet('apply','edit')][string]$Action='apply')
     if($Source -notin @('LocalPending','LocalFallback')){return $true}
     $reason=if($Source -eq 'LocalPending'){
-        'This profile has local changes that have not been synced to GitHub.'
+        'This profile has local changes waiting to sync to the backend.'
     }else{
-        'CafeLauncher could not verify the latest profile on GitHub.'
+        'CafeLauncher could not verify the latest profile on the backend or its mirror.'
     }
     $verb=if($Action -eq 'edit'){'Opening the editor'}else{'Applying now'}
-    $message="$reason`r`n`r`n$verb will use the local saved values, which may be older than GitHub. Choose Yes to continue with local values, or No to cancel and try again when GitHub is available."
+    $message="$reason`r`n`r`n$verb will use the local saved values, which may be older than the cloud copy. Choose Yes to continue, or No to cancel and try again when the backend or mirror is available."
     $answer=[System.Windows.Forms.MessageBox]::Show($message,'Confirm local profile settings','YesNo','Warning','Button2')
     if($answer -eq [System.Windows.Forms.DialogResult]::Yes){
         Write-Log "$ProfileName local settings apply explicitly confirmed ($Source)." 'WARN'
         return $true
     }
-    Write-Log "$ProfileName apply canceled; local settings were not applied because GitHub priority could not be confirmed." 'INFO'
+    Write-Log "$ProfileName apply canceled; local settings were not applied because the latest cloud copy could not be verified." 'INFO'
     return $false
-}
-
-function Show-PendingProfileChoice {
-    param([Parameter(Mandatory=$true)][string]$ProfileName)
-    $choiceForm=New-Object System.Windows.Forms.Form
-    $choiceForm.Text='Resolve unsynced profile edits'
-    $choiceForm.ClientSize=New-Object System.Drawing.Size(700,278)
-    $choiceForm.StartPosition='CenterParent'
-    $choiceForm.FormBorderStyle='FixedDialog'
-    $choiceForm.MaximizeBox=$false
-    $choiceForm.MinimizeBox=$false
-    $choiceForm.ShowInTaskbar=$false
-    $choiceForm.BackColor=$PANEL
-    $choiceForm.ForeColor=$WHITE
-    $choiceForm.Font=New-Object System.Drawing.Font('Segoe UI',10)
-    $intro=New-Object System.Windows.Forms.Label
-    $intro.Text="$ProfileName has local profile, CS2 graphics, and/or CFG sensitivity edits that have not been synced to GitHub."
-    $intro.Location=New-Object System.Drawing.Point(20,18)
-    $intro.Size=New-Object System.Drawing.Size(660,42)
-    $choiceForm.Controls.Add($intro)
-    $githubDetails=New-Object System.Windows.Forms.Label
-    $githubDetails.Text='Use GitHub settings: discard these local edits and load the latest profile, graphics, and CFG sensitivity from GitHub.'
-    $githubDetails.Location=New-Object System.Drawing.Point(20,70)
-    $githubDetails.Size=New-Object System.Drawing.Size(660,38)
-    $choiceForm.Controls.Add($githubDetails)
-    $localDetails=New-Object System.Windows.Forms.Label
-    $localDetails.Text='Upload local edits to GitHub: replace GitHub settings with this computer''s edits. This can overwrite newer GitHub settings.'
-    $localDetails.Location=New-Object System.Drawing.Point(20,116)
-    $localDetails.Size=New-Object System.Drawing.Size(660,42)
-    $choiceForm.Controls.Add($localDetails)
-    $choiceState=[pscustomobject]@{Value='Cancel'}
-    $githubButton=New-Object System.Windows.Forms.Button
-    $githubButton.Text='Use GitHub settings'
-    $githubButton.Location=New-Object System.Drawing.Point(20,207)
-    $githubButton.Size=New-Object System.Drawing.Size(205,42)
-    $githubButton.BackColor=[System.Drawing.Color]::FromArgb(38,132,102)
-    $githubButton.ForeColor=$WHITE
-    $githubButton.FlatStyle='Flat'
-    $githubButton.Add_Click({$choiceState.Value='GitHub';$choiceForm.Close()}.GetNewClosure())
-    $choiceForm.Controls.Add($githubButton)
-    $uploadButton=New-Object System.Windows.Forms.Button
-    $uploadButton.Text='Upload local edits to GitHub'
-    $uploadButton.Location=New-Object System.Drawing.Point(240,207)
-    $uploadButton.Size=New-Object System.Drawing.Size(265,42)
-    $uploadButton.BackColor=$BLUE
-    $uploadButton.ForeColor=$WHITE
-    $uploadButton.FlatStyle='Flat'
-    $uploadButton.Add_Click({$choiceState.Value='UploadLocal';$choiceForm.Close()}.GetNewClosure())
-    $choiceForm.Controls.Add($uploadButton)
-    $cancelButton=New-Object System.Windows.Forms.Button
-    $cancelButton.Text='Cancel'
-    $cancelButton.Location=New-Object System.Drawing.Point(560,207)
-    $cancelButton.Size=New-Object System.Drawing.Size(120,42)
-    $cancelButton.DialogResult=[System.Windows.Forms.DialogResult]::Cancel
-    $choiceForm.Controls.Add($cancelButton)
-    $choiceForm.AcceptButton=$githubButton
-    $choiceForm.CancelButton=$cancelButton
-    try{[void]$choiceForm.ShowDialog($form);return [string]$choiceState.Value}
-    finally{$choiceForm.Dispose()}
 }
 
 function Resolve-PendingProfileChanges {
     param([Parameter(Mandatory=$true)][string]$ProfileName)
     if(-not $script:PendingSync[$ProfileName]){return $true}
-    $choice=Show-PendingProfileChoice -ProfileName $ProfileName
-    if($choice -eq 'Cancel'){Write-Log "$ProfileName action canceled; unsynced local edits were kept.";return $false}
-    if($choice -eq 'UploadLocal'){
-        $confirmUpload=[System.Windows.Forms.MessageBox]::Show(
-            ("Upload the local profile, graphics, and CFG sensitivity edits for $ProfileName to GitHub?`r`n`r`nThis replaces GitHub settings and may overwrite newer values."),
-            'Confirm upload to GitHub','YesNo','Warning','Button2')
-        if($confirmUpload -ne [System.Windows.Forms.DialogResult]::Yes){
-            Write-Log "$ProfileName local edits were not uploaded; the user canceled the overwrite confirmation." 'INFO'
-            return $false
-        }
-        $authorization=$null;$token=$null
-        try{
-            $authorization=Get-GitHubSyncAuthorization -OwnerWindow $form
-            if($null -eq $authorization -or [string]::IsNullOrWhiteSpace([string]$authorization.Token)){
-                Write-Log "$ProfileName action canceled; GitHub authorization was not completed." 'WARN'
-                return $false
-            }
-            if($authorization.Method -eq 'GitHub device sign-in'){
-                $confirm=[System.Windows.Forms.MessageBox]::Show(
-                    ('Sync these local edits using GitHub account @'+$authorization.Login+'?'),
-                    'Confirm GitHub account','YesNo','Question')
-                if($confirm -ne [System.Windows.Forms.DialogResult]::Yes){return $false}
-            }
-            $token=[string]$authorization.Token
-            $authorization.Token=$null
-            Sync-ProfileToGitHub -ProfileName $ProfileName -Token $token
-            $script:PendingSync[$ProfileName]=$false
-            Save-ProfileSettings
-            Write-Log "$ProfileName pending local profile and graphics edits synced and read-back verified before continuing."
-            return $true
-        }catch{
-            Write-Log "$ProfileName could not sync pending edits; action canceled and local edits remain pending. $($_.Exception.Message)" 'ERROR'
-            [void][System.Windows.Forms.MessageBox]::Show(
-                ("Could not sync $ProfileName. The local edits remain saved and pending; no action was applied.`n`n"+$_.Exception.Message),
-                'Profile Sync Required','OK','Warning')
-            return $false
-        }finally{$token=$null;$authorization=$null}
+    if($script:PendingTarget[$ProfileName] -eq 'GitHubLegacy'){
+        $message=($ProfileName+' has local edits saved by the older GitHub-based launcher. They will not be redirected or discarded automatically.'+
+            "`r`n`r`nUse the older launcher to resolve or export them before using this backend version.")
+        [void][System.Windows.Forms.MessageBox]::Show($message,'Old pending edits preserved','OK','Warning')
+        Write-Log ($ProfileName+' action blocked: old GitHub pending edits require explicit migration.') 'WARN'
+        return $false
     }
-
-    # Adopt GitHub settings only after both current files have been fetched and
-    # validated. Restore the local state if either read fails.
-    $profileBefore=@{}
-    foreach($key in $script:GamingProfiles[$ProfileName].Keys){$profileBefore[$key]=$script:GamingProfiles[$ProfileName][$key]}
+    $message=($ProfileName+' has local changes waiting to sync to the backend.'+"`r`n`r`n"+
+        'Yes = try backend sync now.'+"`r`n"+
+        'No = discard local changes after fetching the current backend version.'+"`r`n"+
+        'Cancel = keep local edits and stop this action.')
+    $choice=[System.Windows.Forms.MessageBox]::Show($message,'Resolve pending backend edits','YesNoCancel','Warning','Button3')
+    if($choice -eq [System.Windows.Forms.DialogResult]::Cancel){return $false}
+    if($choice -eq [System.Windows.Forms.DialogResult]::Yes){
+        $token=Get-CafeBackendSyncToken -OwnerWindow $form
+        if([string]::IsNullOrWhiteSpace([string]$token)){return $false}
+        try{
+            $confirmCfgChanges={
+                param($cfgPreview)
+                $icon=if($cfgPreview.HasWarnings){'Warning'}else{'Question'}
+                $answer=[System.Windows.Forms.MessageBox]::Show(([string]$cfgPreview.Text+[Environment]::NewLine+[Environment]::NewLine+'Sync these CFG changes to the backend?'),
+                    'Review CFG changes','YesNo',$icon)
+                return ($answer -eq [System.Windows.Forms.DialogResult]::Yes)
+            }
+            $result=Sync-ProfileToBackend -ProfileName $ProfileName -Token $token -ConfirmCfgChanges $confirmCfgChanges
+            return (-not [bool]$result.Canceled)
+        }catch{
+            Write-Log ($ProfileName+' pending backend sync failed; local edit kept: '+$_.Exception.Message) 'WARN'
+            [void][System.Windows.Forms.MessageBox]::Show(($ProfileName+' remains saved locally and waiting to sync.'+[Environment]::NewLine+$_.Exception.Message),
+                'Backend sync pending','OK','Warning')
+            return $false
+        }finally{$token=$null}
+    }
+    $confirm=[System.Windows.Forms.MessageBox]::Show(('Discard all local pending changes for '+$ProfileName+' after loading its current backend version? This cannot be undone.'),
+        'Confirm discard','YesNo','Warning','Button2')
+    if($confirm -ne [System.Windows.Forms.DialogResult]::Yes){return $false}
+    $before=Export-ProfileValues -ProfileName $ProfileName
     $graphicsBefore=$script:GraphicsPresets[$ProfileName]
-    $verifiedBefore=$script:VerifiedProfileState[$ProfileName]
-    $hadPendingCfgSensitivity=$script:PendingCfgSensitivity.ContainsKey($ProfileName)
-    $pendingCfgSensitivityBefore=if($hadPendingCfgSensitivity){[string]$script:PendingCfgSensitivity[$ProfileName]}else{$null}
+    $revisionBefore=$script:BackendRevisions[$ProfileName]
     try{
+        $snapshot=Get-CafeBackendSnapshot -ProfileName $ProfileName
+        $remote=ConvertFrom-Json -InputObject ($snapshot.Profile|ConvertTo-Json -Depth 6 -Compress) -ErrorAction Stop
+        $remote.CfgDownloadUrl=($script:BackendBaseUrl+'/v1/cfg/'+[string]$script:GamingProfiles[$ProfileName].ConfigFile)
+        Import-ProfileValues -ProfileName $ProfileName -SavedProfile $remote -SourceLabel 'Backend'
+        $script:GraphicsPresets[$ProfileName]=$snapshot.Graphics
+        $script:GamingProfiles[$ProfileName].ScalingMode=[int]$snapshot.Graphics.ScalingMode
+        $script:BackendRevisions[$ProfileName]=[int]$snapshot.Revision
         $script:PendingSync[$ProfileName]=$false
-        [void]$script:PendingCfgSensitivity.Remove($ProfileName)
-        $profileSource=Refresh-ProfileFromGitHub -ProfileName $ProfileName -NoSave -ForceLoad
-        if($profileSource -notin @('GitHub','VerifiedGitHub')){throw 'The latest GitHub profile could not be verified.'}
-        [void](Get-ProfileGraphicsPreset -ProfileName $ProfileName -RequireGitHub)
-        [void](Get-ProfileCfgSensitivity -ProfileName $ProfileName)
         Save-ProfileSettings
-        Write-Log "$ProfileName unsynced edits discarded only after the latest GitHub profile and graphics files were verified."
+        [void]$script:PendingCfgSensitivity.Remove($ProfileName)
+        [void]$script:CapturedCS2Convars.Remove($ProfileName)
+        [void]$script:CapturedCS2Binds.Remove($ProfileName)
+        [void]$script:PendingTarget.Remove($ProfileName)
+        Clear-CafeBackendQueue -ProfileName $ProfileName
+        $script:BackendSnapshots[$ProfileName]=$snapshot
+        Write-Log ($ProfileName+' local pending edits discarded after verified backend revision '+$snapshot.Revision+' was saved.') 'WARN'
         return $true
     }catch{
-        foreach($key in @($script:GamingProfiles[$ProfileName].Keys)){[void]$script:GamingProfiles[$ProfileName].Remove($key)}
-        foreach($key in $profileBefore.Keys){$script:GamingProfiles[$ProfileName][$key]=$profileBefore[$key]}
-        if($graphicsBefore){$script:GraphicsPresets[$ProfileName]=$graphicsBefore}else{$script:GraphicsPresets.Remove($ProfileName)}
-        if($verifiedBefore){$script:VerifiedProfileState[$ProfileName]=$verifiedBefore}else{$script:VerifiedProfileState.Remove($ProfileName)}
-        if($hadPendingCfgSensitivity){$script:PendingCfgSensitivity[$ProfileName]=$pendingCfgSensitivityBefore}else{[void]$script:PendingCfgSensitivity.Remove($ProfileName)}
+        Import-ProfileValues -ProfileName $ProfileName -SavedProfile $before -SourceLabel 'local'
+        if($graphicsBefore){$script:GraphicsPresets[$ProfileName]=$graphicsBefore}
+        if($revisionBefore){$script:BackendRevisions[$ProfileName]=$revisionBefore}
         $script:PendingSync[$ProfileName]=$true
-        Write-Log "$ProfileName could not discard local edits because GitHub refresh failed; local values remain pending. $($_.Exception.Message)" 'ERROR'
-        [void][System.Windows.Forms.MessageBox]::Show(
-            ("Could not load current GitHub settings for $ProfileName. Local edits were kept and no action was applied.`n`n"+$_.Exception.Message),
-            'GitHub Refresh Failed','OK','Warning')
+        Write-Log ($ProfileName+' could not discard pending edits; local data was kept: '+$_.Exception.Message) 'ERROR'
+        [void][System.Windows.Forms.MessageBox]::Show(('Local changes were kept.'+[Environment]::NewLine+$_.Exception.Message),
+            'Backend refresh failed','OK','Warning')
         return $false
     }
 }
-
 function Get-GitHubSyncPersonalToken {
     param($OwnerWindow)
     $authForm = New-Object System.Windows.Forms.Form
@@ -6890,6 +7061,263 @@ function Get-CafeCfgChangePreview {
     return [pscustomobject]@{Text=[string]::Join([Environment]::NewLine,$lines.ToArray());ChangeCount=$changes.Count;HasWarnings=($oldWeaponGap -or $oldOutlineThickness)}
 }
 
+$script:BackendRetryBlocked=@{}
+$script:BackendRetryWorker=$null
+$script:BackendSyncToken=$null
+function New-CafeBackendHealthWorker {
+    if(-not ('CafeBackendHealthWorker' -as [type])){
+        Add-Type -Language CSharp -TypeDefinition @'
+using System;
+using System.ComponentModel;
+using System.Net;
+
+public sealed class CafeBackendHealthWorker : BackgroundWorker {
+    public object RequestContext { get; set; }
+    public bool Healthy { get; private set; }
+    public CafeBackendHealthWorker() {
+        DoWork += delegate(object sender, DoWorkEventArgs e) {
+            try {
+                var request = (HttpWebRequest)WebRequest.Create((string)e.Argument);
+                request.Method = "GET";
+                request.Timeout = 3000;
+                request.ReadWriteTimeout = 3000;
+                request.AllowAutoRedirect = false;
+                using (var response = (HttpWebResponse)request.GetResponse()) {
+                    Healthy = response.StatusCode == HttpStatusCode.OK;
+                }
+            } catch { Healthy = false; }
+        };
+    }
+}
+'@
+    }
+    return (New-Object CafeBackendHealthWorker)
+}
+function Start-CafeBackendRetryHealthCheck {
+    if([string]::IsNullOrWhiteSpace([string]$script:BackendSyncToken)){return}
+    if($script:BackendRetryWorker -and $script:BackendRetryWorker.IsBusy){return}
+    $pending=$null
+    foreach($name in @($script:GamingProfiles.Keys)){
+        if(-not $script:PendingSync[$name] -or $script:PendingTarget[$name] -ne 'Backend' -or $script:BackendRetryBlocked[$name]){continue}
+        if(Test-Path -LiteralPath (Get-CafeBackendQueuePath -ProfileName $name) -PathType Leaf){$pending=[string]$name;break}
+    }
+    if(-not $pending){return}
+    $worker=New-CafeBackendHealthWorker
+    $worker.RequestContext=@{ProfileName=$pending;Token=[string]$script:BackendSyncToken}
+    $worker.Add_RunWorkerCompleted({
+        param($sender,$eventArgs)
+        $context=$sender.RequestContext
+        try{
+            if($sender.Healthy -and $context -is [System.Collections.IDictionary] -and
+               $script:PendingSync[[string]$context['ProfileName']]){
+                $profile=[string]$context['ProfileName']
+                try{
+                    $result=Sync-ProfileToBackend -ProfileName $profile -Token ([string]$context['Token'])
+                    if(-not $result.Canceled){
+                        [void]$script:BackendRetryBlocked.Remove($profile)
+                        Write-Log ($profile+' pending edit automatically synced to backend revision '+$result.Revision+'.')
+                        if($script:SelectedProfile -eq $profile){Update-SelectedProfileCard -Name $profile}
+                    }
+                }catch{
+                    $message=$_.Exception.Message
+                    if($message -match 'conflict|invalid|mismatch'){$script:BackendRetryBlocked[$profile]=$true}
+                    Write-Log ($profile+' backend retry is still pending: '+$message) 'WARN'
+                }
+            }
+        }finally{
+            if($context -is [System.Collections.IDictionary]){$context['Token']=$null}
+            $sender.RequestContext=$null
+            $sender.Dispose()
+            $script:BackendRetryWorker=$null
+        }
+    })
+    $script:BackendRetryWorker=$worker
+    $worker.RunWorkerAsync($script:BackendBaseUrl+'/v1/health')
+}
+function Get-CafeBackendQueuePath {
+    param([Parameter(Mandatory=$true)][string]$ProfileName)
+    if(-not $script:GamingProfiles.Contains($ProfileName)){throw 'Unknown pending backend profile.'}
+    return (Join-Path $env:LOCALAPPDATA ('CafeLauncher\backend-pending\'+$ProfileName+'.json'))
+}
+function Read-CafeBackendQueue {
+    param([Parameter(Mandatory=$true)][string]$ProfileName)
+    $path=Get-CafeBackendQueuePath -ProfileName $ProfileName
+    if(-not(Test-Path -LiteralPath $path -PathType Leaf)){return $null}
+    if((Get-Item -LiteralPath $path -ErrorAction Stop).Length -gt 4194304){throw 'Pending backend bundle exceeds the size limit.'}
+    $queue=Get-Content -LiteralPath $path -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+    if([int]$queue.SchemaVersion -ne 1 -or [string]$queue.ProfileName -cne $ProfileName -or
+       [string]$queue.Payload.profile.ProfileName -cne $ProfileName -or
+       [string]$queue.Payload.graphics.ProfileName -cne $ProfileName -or
+       [int]$queue.Payload.expectedRevision -lt 1 -or
+       [string]::IsNullOrWhiteSpace([string]$queue.Payload.cfg)){
+        throw 'Pending backend bundle is invalid; local edits were kept.'
+    }
+    return $queue
+}
+function Save-CafeBackendQueue {
+    param([Parameter(Mandatory=$true)][string]$ProfileName,[Parameter(Mandatory=$true)]$Payload)
+    $path=Get-CafeBackendQueuePath -ProfileName $ProfileName
+    $directory=Split-Path -Parent $path
+    if(-not(Test-Path -LiteralPath $directory)){[void](New-Item -ItemType Directory -Path $directory -Force -ErrorAction Stop)}
+    $temporary=Join-Path $directory ($ProfileName+'.'+[Guid]::NewGuid().ToString('N')+'.tmp')
+    try{
+        $queue=[ordered]@{SchemaVersion=1;ProfileName=$ProfileName;Payload=$Payload}
+        $json=$queue|ConvertTo-Json -Depth 9
+        if([Text.Encoding]::UTF8.GetByteCount($json) -gt 4194304){throw 'Pending backend bundle exceeds the size limit.'}
+        [IO.File]::WriteAllText($temporary,$json,(New-Object Text.UTF8Encoding($false)))
+        Move-Item -LiteralPath $temporary -Destination $path -Force -ErrorAction Stop
+    }finally{if(Test-Path -LiteralPath $temporary){Remove-Item -LiteralPath $temporary -Force -ErrorAction SilentlyContinue}}
+}
+function Clear-CafeBackendQueue {
+    param([Parameter(Mandatory=$true)][string]$ProfileName)
+    $path=Get-CafeBackendQueuePath -ProfileName $ProfileName
+    if(Test-Path -LiteralPath $path -PathType Leaf){Remove-Item -LiteralPath $path -Force -ErrorAction Stop}
+}
+function New-CafeBackendPayload {
+    param([Parameter(Mandatory=$true)][string]$ProfileName,[scriptblock]$ConfirmCfgChanges)
+    if(-not $script:BackendRevisions.ContainsKey($ProfileName)){
+        throw 'No verified backend revision is saved for this profile. Keep the local edit, review the backend version, then retry.'
+    }
+    $expected=[int]$script:BackendRevisions[$ProfileName]
+    $snapshot=Get-CafeCloudSnapshot -ProfileName $ProfileName -ForceRefresh
+    if($snapshot.Revision -ne $expected){throw ('Backend profile changed from revision '+$expected+' to '+$snapshot.Revision+'. Review before retrying; local edits were kept.')}
+    $values=Export-ProfileValues -ProfileName $ProfileName
+    if($null -eq $values -or $values -isnot [System.Collections.IDictionary]){throw 'Local profile values are invalid.'}
+    $cfgName=[string]$script:GamingProfiles[$ProfileName].ConfigFile
+    $profile=[ordered]@{SchemaVersion=1;ProfileName=$ProfileName}
+    foreach($key in @($values.Keys)){$profile[$key]=$values[$key]}
+    $profile['CfgDownloadUrl']='/v1/cfg/'+$cfgName
+    if(-not $script:GraphicsPresets.Contains($ProfileName)){throw 'No local graphics preset is available.'}
+    $preset=ConvertTo-CafeGraphicsPreset -ProfileName $ProfileName -Preset $script:GraphicsPresets[$ProfileName]
+    $graphics=[ordered]@{SchemaVersion=1;ProfileName=$ProfileName;DisplayPolicy='ApplyPreset';RefreshPolicy=[string]$preset.RefreshPolicy;ScalingMode=[int]$preset.ScalingMode;Settings=$preset.Settings}
+    $cfg=[string]$snapshot.Cfg
+    $convars=$script:CapturedCS2Convars[$ProfileName]
+    $binds=$script:CapturedCS2Binds[$ProfileName]
+    if($convars -and $convars.Count){$cfg=Set-CafeCapturedConvarsInCfg -Content $cfg -Values $convars}
+    if($binds -and $binds.Count){$cfg=Set-CafeCapturedBindsInCfg -Content $cfg -Binds $binds}
+    if($script:PendingCfgSensitivity.ContainsKey($ProfileName)){
+        $sensitivity=ConvertTo-CafeCS2Sensitivity -Value ([string]$script:PendingCfgSensitivity[$ProfileName])
+        $cfg=Set-CS2CfgSensitivityText -Content $cfg -Sensitivity $sensitivity
+    }
+    $voice=[string]$values['VoicePushToTalkKey']
+    if($voice){$cfg=Set-CafeVoiceBindingInCfg -Content $cfg -Key $voice}
+    [void](Get-CafeCS2CfgSensitivity -Content $cfg)
+    if($cfg -cne [string]$snapshot.Cfg -and $ConfirmCfgChanges){
+        $preview=Get-CafeCfgChangePreview -CfgName $cfgName -Before ([string]$snapshot.Cfg) -After $cfg
+        if(-not (& $ConfirmCfgChanges $preview)){return [pscustomobject]@{Canceled=$true}}
+    }
+    return [pscustomobject]@{Canceled=$false;Payload=([ordered]@{expectedRevision=$expected;profile=$profile;graphics=$graphics;cfg=$cfg})}
+}
+function Test-CafeBackendBundleMatch {
+    param([Parameter(Mandatory=$true)]$Payload,[Parameter(Mandatory=$true)]$Snapshot)
+    if([string]$Payload.cfg -cne [string]$Snapshot.Cfg){return $false}
+    foreach($property in $Payload.profile.PSObject.Properties){
+        $remote=$Snapshot.Profile.PSObject.Properties[$property.Name]
+        if(-not $remote){return $false}
+        if((ConvertTo-Json -InputObject $property.Value -Compress -Depth 8) -cne
+           (ConvertTo-Json -InputObject $remote.Value -Compress -Depth 8)){return $false}
+    }
+    $expectedGraphics=ConvertTo-CafeGraphicsPreset -ProfileName ([string]$Payload.profile.ProfileName) -Preset $Payload.graphics
+    $actualGraphics=$Snapshot.Graphics
+    if([string]$expectedGraphics.RefreshPolicy -cne [string]$actualGraphics.RefreshPolicy -or
+       [int]$expectedGraphics.ScalingMode -ne [int]$actualGraphics.ScalingMode){return $false}
+    foreach($key in $expectedGraphics.Settings.Keys){
+        if(-not $actualGraphics.Settings.Contains($key) -or [int]$expectedGraphics.Settings[$key] -ne [int]$actualGraphics.Settings[$key]){return $false}
+    }
+    return ($expectedGraphics.Settings.Count -eq $actualGraphics.Settings.Count)
+}
+function Complete-CafeBackendSync {
+    param([Parameter(Mandatory=$true)][string]$ProfileName,[Parameter(Mandatory=$true)]$Snapshot)
+    $remote=ConvertFrom-Json -InputObject ($Snapshot.Profile|ConvertTo-Json -Depth 6 -Compress) -ErrorAction Stop
+    $remote.CfgDownloadUrl=($script:BackendBaseUrl+'/v1/cfg/'+[string]$script:GamingProfiles[$ProfileName].ConfigFile)
+    Import-ProfileValues -ProfileName $ProfileName -SavedProfile $remote -SourceLabel 'Backend'
+    $script:GraphicsPresets[$ProfileName]=$Snapshot.Graphics
+    $script:GamingProfiles[$ProfileName].ScalingMode=[int]$Snapshot.Graphics.ScalingMode
+    $script:BackendRevisions[$ProfileName]=[int]$Snapshot.Revision
+    $script:BackendSnapshots[$ProfileName]=$Snapshot
+    $script:PendingSync[$ProfileName]=$false
+    try{Save-ProfileSettings}catch{$script:PendingSync[$ProfileName]=$true;throw}
+    [void]$script:PendingCfgSensitivity.Remove($ProfileName)
+    [void]$script:CapturedCS2Convars.Remove($ProfileName)
+    [void]$script:CapturedCS2Binds.Remove($ProfileName)
+    [void]$script:PendingTarget.Remove($ProfileName)
+    Clear-CafeBackendQueue -ProfileName $ProfileName
+    Write-Log ($ProfileName+' backend revision '+$Snapshot.Revision+' read-back verified; local pending edit cleared.')
+}
+function Sync-ProfileToBackend {
+    param([Parameter(Mandatory=$true)][string]$ProfileName,[Parameter(Mandatory=$true)][string]$Token,[scriptblock]$ConfirmCfgChanges)
+    if(-not $script:GamingProfiles.Contains($ProfileName)){throw 'Unknown backend profile.'}
+    if($script:PendingTarget[$ProfileName] -eq 'GitHubLegacy'){
+        throw 'This edit was saved by the older GitHub-based launcher. Resolve or export it before backend sync; it will not be redirected automatically.'
+    }
+    if($Token.Length -lt 32){throw 'A backend sync token is required.'}
+    $queue=Read-CafeBackendQueue -ProfileName $ProfileName
+    if(-not $queue){
+        $created=New-CafeBackendPayload -ProfileName $ProfileName -ConfirmCfgChanges $ConfirmCfgChanges
+        if($created.Canceled){return [pscustomobject]@{Canceled=$true}}
+        Save-CafeBackendQueue -ProfileName $ProfileName -Payload $created.Payload
+        $queue=Read-CafeBackendQueue -ProfileName $ProfileName
+    }
+    $payload=$queue.Payload
+    $current=Get-CafeBackendSnapshot -ProfileName $ProfileName
+    if($current.Revision -ne [int]$payload.expectedRevision){
+        if(Test-CafeBackendBundleMatch -Payload $payload -Snapshot $current){
+            Complete-CafeBackendSync -ProfileName $ProfileName -Snapshot $current
+            return [pscustomobject]@{Canceled=$false;Revision=$current.Revision;AlreadyAccepted=$true}
+        }
+        throw ('Backend revision conflict: expected '+$payload.expectedRevision+', current '+$current.Revision+'. Local edits remain pending for review.')
+    }
+    $uri=$script:BackendBaseUrl+'/v1/profiles/'+$ProfileName+'/sync'
+    $headers=@{Authorization=('Bearer '+$Token);Accept='application/json'}
+    try{
+        [Net.ServicePointManager]::SecurityProtocol=[Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+        $result=Invoke-RestMethod -Uri $uri -Method Put -Headers $headers -ContentType 'application/json' -Body ($payload|ConvertTo-Json -Depth 9 -Compress) -TimeoutSec 20 -MaximumRedirection 0 -ErrorAction Stop
+        if([string]$result.profile -cne $ProfileName -or [int]$result.revision -lt 1){throw 'Backend did not confirm a valid profile revision.'}
+        $readback=Get-CafeBackendSnapshot -ProfileName $ProfileName
+        if($readback.Revision -ne [int]$result.revision -or -not(Test-CafeBackendBundleMatch -Payload $payload -Snapshot $readback)){
+            throw 'Backend accepted the request, but read-back did not match. Local edits remain pending for retry.'
+        }
+        Complete-CafeBackendSync -ProfileName $ProfileName -Snapshot $readback
+        return [pscustomobject]@{Canceled=$false;Revision=$readback.Revision;AlreadyAccepted=$false}
+    }catch{
+        $responseProperty=$_.Exception.PSObject.Properties['Response']
+        if($responseProperty -and $responseProperty.Value){
+            $status=[int]$responseProperty.Value.StatusCode
+            if($status -eq 401 -or $status -eq 403){$script:BackendSyncToken=$null}
+            if($status -eq 409){throw 'Backend revision conflict. Local edits remain pending; review the current backend profile before retrying.'}
+        }
+        throw
+    }finally{$headers.Authorization=$null}
+}
+function Get-CafeBackendSyncToken {
+    param($OwnerWindow)
+    if(-not [string]::IsNullOrWhiteSpace([string]$script:BackendSyncToken)){return [string]$script:BackendSyncToken}
+    $dialog=New-Object System.Windows.Forms.Form
+    $dialog.Text='Backend sync authorization';$dialog.ClientSize=New-Object System.Drawing.Size(440,150)
+    $dialog.StartPosition='CenterParent';$dialog.FormBorderStyle='FixedDialog';$dialog.MaximizeBox=$false;$dialog.MinimizeBox=$false
+    $label=New-Object System.Windows.Forms.Label
+    $label.Text='Enter the backend sync token for this session. It will not be saved.'
+    $label.Location=New-Object System.Drawing.Point(16,16);$label.Size=New-Object System.Drawing.Size(410,38)
+    $dialog.Controls.Add($label)
+    $field=New-Object System.Windows.Forms.TextBox
+    $field.Location=New-Object System.Drawing.Point(16,61);$field.Size=New-Object System.Drawing.Size(408,25)
+    $field.UseSystemPasswordChar=$true
+    $dialog.Controls.Add($field)
+    $ok=New-Object System.Windows.Forms.Button
+    $ok.Text='Continue';$ok.Location=New-Object System.Drawing.Point(208,105);$ok.Size=New-Object System.Drawing.Size(100,30)
+    $ok.DialogResult=[System.Windows.Forms.DialogResult]::OK;$dialog.Controls.Add($ok)
+    $cancel=New-Object System.Windows.Forms.Button
+    $cancel.Text='Cancel';$cancel.Location=New-Object System.Drawing.Point(324,105);$cancel.Size=New-Object System.Drawing.Size(100,30)
+    $cancel.DialogResult=[System.Windows.Forms.DialogResult]::Cancel;$dialog.Controls.Add($cancel)
+    $dialog.AcceptButton=$ok;$dialog.CancelButton=$cancel
+    try{
+        if($dialog.ShowDialog($OwnerWindow) -ne [System.Windows.Forms.DialogResult]::OK){return $null}
+        $token=[string]$field.Text
+        if($token.Length -lt 32){throw 'Backend sync token must be at least 32 characters.'}
+        $script:BackendSyncToken=$token
+        return $token
+    }finally{$field.Clear();$dialog.Dispose()}
+}
 function Sync-ProfileToGitHub {
     param([Parameter(Mandatory=$true)][string]$ProfileName, [Parameter(Mandatory=$true)][string]$Token,[scriptblock]$ConfirmCfgChanges)
     if (-not $script:GamingProfiles.Contains($ProfileName)) { throw "Unknown profile: $ProfileName" }
@@ -7410,7 +7838,7 @@ function Show-ProfileEditor {
     param([Parameter(Mandatory=$true)][string]$ProfileName,[switch]$CaptureOnOpen)
     if(-not $script:GamingProfiles.Contains($ProfileName)){throw "Unknown profile: $ProfileName"}
     if(-not (Resolve-PendingProfileChanges -ProfileName $ProfileName)){return}
-    $profileSource=Refresh-ProfileFromGitHub -ProfileName $ProfileName
+    $profileSource=Refresh-ProfileFromBackend -ProfileName $ProfileName
     if(-not (Confirm-LocalProfileApply -ProfileName $ProfileName -Source $profileSource -Action edit)){return}
     try{
         $graphicsPreset=Get-ProfileGraphicsPreset -ProfileName $ProfileName -RequireGitHub
@@ -7440,6 +7868,7 @@ function Show-ProfileEditor {
     # GetNewClosure() creates a dynamic module scope, so capture references to the
     # launcher's shared state dictionaries before wiring click handlers.
     $pendingSyncState = $script:PendingSync
+    $pendingTargetState = $script:PendingTarget
     $graphicsPresetState = $script:GraphicsPresets
     $capturedCS2ConvarsState = $script:CapturedCS2Convars
     $capturedCS2BindsState=$script:CapturedCS2Binds
@@ -7582,7 +8011,7 @@ function Show-ProfileEditor {
     # CFG remains authoritative unless this profile has unsynced local edits.
     $voiceSelected=[string]$p.VoicePushToTalkKey
     if(-not $pendingSyncState[$ProfileName]){
-        try{$voiceSelected=Get-CafeGitHubVoiceBinding -CfgName ([string]$p.ConfigFile)}catch{Write-Log ('Voice key lookup unavailable: '+$_.Exception.Message) 'WARN'}
+        try{$voiceSelected=Get-CafeVoiceBindingFromCfg -Content ([string](Get-CafeCloudSnapshot -ProfileName $ProfileName -ForceRefresh).Cfg)}catch{Write-Log ('Voice key lookup unavailable: '+$_.Exception.Message) 'WARN'}
     }
     $voiceOptions=@('','V','MOUSE4','MOUSE5','CAPSLOCK','ALT','K','SPACE','SHIFT','CTRL','TAB')+
         @('A','B','C','D','E','F','G','H','I','J','L','M','N','O','P','Q','R','S','T','U','W','X','Y','Z')+
@@ -7755,7 +8184,7 @@ function Show-ProfileEditor {
     [void]$editorFooter.RowStyles.Add((New-Object System.Windows.Forms.RowStyle('Percent',100)))
     $editorRoot.Controls.Add($editorFooter,0,2)
     $tip=New-Object System.Windows.Forms.Label
-    $tip.Text='Save the profile and CS2 graphics locally, or sync both to GitHub. Click Apply Graphics to use CS2 settings.'
+    $tip.Text='Save locally or sync to the backend. The public GitHub mirror is read-only in CafeLauncher.'
     $tip.ForeColor=$MUTED
     $tip.Dock='Fill'
     $tip.AutoEllipsis=$true
@@ -7860,17 +8289,11 @@ function Show-ProfileEditor {
     }
     $loadHistory.Add_Click({
         if($historyState.Worker -and $historyState.Worker.IsBusy){return}
-        if(-not $historyState.Loaded){
-            try{
-                $cachedHistory=Get-CachedProfileGraphicsHistory -ProfileName $ProfileName
-                if($cachedHistory.Found){Set-CafeGraphicsHistoryUi -Context $historyUiContext -Versions ([object[]]$cachedHistory.Versions);return}
-            }catch{Write-Log ('Could not read cached graphics history for '+$ProfileName+': '+$_.Exception.Message) 'WARN'}
-        }
-        $historyUri=New-CafeGraphicsHistoryRequestUri -Repo $historyRepo -Branch $historyBranch -ProfileName $ProfileName
+        $historyUri=$script:BackendBaseUrl+'/v1/graphics/'+$ProfileName+'/history?limit=4'
         $loadHistory.Enabled=$false
         $historyChoice.Enabled=$false
         $restoreHistory.Enabled=$false
-        $status.Text='Loading GitHub graphics history in the background. You can continue using the editor.'
+        $status.Text='Loading backend graphics history in the background. You can continue using the editor.'
         $status.ForeColor=$MUTED
         try{
             $worker=New-CafeGraphicsHistoryWorker
@@ -7892,18 +8315,18 @@ function Show-ProfileEditor {
                         Set-CafeGitHubRateLimitDisplay -Remaining ([string]$sender.RateLimitRemaining) `
                             -Limit ([string]$sender.RateLimitLimit)
                     }
-                    if([int]$sender.HttpStatusCode -eq 404){
-                        Write-Log ('GitHub returned 404 for graphics history for '+$profileForHistory+'; no prior versions are available from this path. uri='+[string]$sender.RequestUri) 'WARN'
-                        Set-CafeGraphicsHistoryUi -Context $request -NoHistory
-                    }elseif($sender.ErrorText){
-                        throw ([System.Exception]::new([string]$sender.ErrorText))
-                    }else{
-                        $versions=@(Get-ProfileGraphicsHistory -ProfileName $profileForHistory -ForceRefresh -ResponseJson ([string]$sender.ResultText))
-                        Set-CafeGraphicsHistoryUi -Context $request -Versions $versions
+                    try{
+                        if($sender.ErrorText){throw ([System.Exception]::new([string]$sender.ErrorText))}
+                        $versions=@(ConvertFrom-CafeBackendGraphicsHistory -ProfileName $profileForHistory -ResponseJson ([string]$sender.ResultText))
+                    }catch{
+                        Write-Log ('Backend graphics history unavailable for '+$profileForHistory+'; trying verified mirror: '+$_.Exception.Message) 'WARN'
+                        $mirrorJson=Get-CafeMirrorGraphicsHistoryJson -ProfileName $profileForHistory
+                        $versions=@(ConvertFrom-CafeBackendGraphicsHistory -ProfileName $profileForHistory -ResponseJson $mirrorJson)
                     }
+                    Set-CafeGraphicsHistoryUi -Context $request -Versions $versions
                 }catch{
                     $message=$_.Exception.Message
-                    Write-Log ('Could not load GitHub graphics history for '+$profileForHistory+': '+$message+'; httpStatus='+[string]$sender.HttpStatusCode+'; uri='+[string]$sender.RequestUri) 'WARN'
+                    Write-Log ('Could not load graphics history for '+$profileForHistory+': '+$message+'; httpStatus='+[string]$sender.HttpStatusCode+'; uri='+[string]$sender.RequestUri) 'WARN'
                     try{
                         Set-CafeGraphicsHistoryUi -Context $request -ErrorMessage $message
                     }catch{Write-Log ('Could not update graphics history error state for '+$profileForHistory+': '+$_.Exception.Message) 'WARN'}
@@ -7936,13 +8359,13 @@ function Show-ProfileEditor {
             if($selectedIndex -lt 0 -or $selectedIndex -ge $versions.Count){throw 'Select an earlier graphics version first.'}
             $dialog.Cursor=[System.Windows.Forms.Cursors]::WaitCursor
             $version=$versions[$selectedIndex]
-            $preset=Get-ProfileGraphicsVersion -ProfileName $ProfileName -Version $version
+            $preset=Get-CafeGraphicsHistoryPreset -ProfileName $ProfileName -Version $version
             [void](& $applyGraphicsPresetToEditor $preset)
             $status.Text=('Loaded '+$version.Message+' into the editor only. Not saved or applied. Use Save Locally or Save & Sync, then Apply Graphics to change CS2.')
             $status.ForeColor=[System.Drawing.Color]::FromArgb(255,190,105)
-            Write-Log ('Loaded earlier GitHub graphics version '+$version.Sha+' for '+$ProfileName+' into the editor; no save or game settings were changed.')
+            Write-Log ('Loaded earlier backend graphics revision '+$version.Revision+' for '+$ProfileName+' into the editor; no save or game settings were changed.')
         }catch{
-            Write-Log ('Could not restore GitHub graphics version for '+$ProfileName+': '+$_.Exception.Message) 'WARN'
+            Write-Log ('Could not restore graphics version for '+$ProfileName+': '+$_.Exception.Message) 'WARN'
             $null=[System.Windows.Forms.MessageBox]::Show(
                 ('Could not load the selected graphics version:`n'+$_.Exception.Message),
                 'Restore Graphics Version','OK','Warning')
@@ -7991,7 +8414,7 @@ function Show-ProfileEditor {
         try{
             $dialog.Cursor=[System.Windows.Forms.Cursors]::WaitCursor
             $cfgName=[string]$p.ConfigFile
-            try{$profileCfg=(Get-GitHubCfgFromContentsApi -Repo $script:GithubRepo -Branch $script:GithubBranch -Path $cfgName).Content}
+            try{$profileCfg=(Get-CafeCloudSnapshot -ProfileName $ProfileName).Cfg}
             catch{
                 $cachePath=Join-Path (Join-Path $env:LOCALAPPDATA 'CafeLauncher\cfg-cache') $cfgName
                 if(-not (Test-Path -LiteralPath $cachePath -PathType Leaf)){throw ('Could not load the profile CFG for Extras. '+$_.Exception.Message)}
@@ -8063,13 +8486,13 @@ function Show-ProfileEditor {
     $editorFooter.Controls.Add($saveLocal,0,2)
 
     $saveSync=New-Object System.Windows.Forms.Button
-    $saveSync.Text='Save & Sync to GitHub'
+    $saveSync.Text='Save & Sync to Backend'
     $saveSync.BackColor=[System.Drawing.Color]::FromArgb(38,132,102)
     $saveSync.ForeColor=$WHITE
     $saveSync.FlatStyle='Flat'
     $saveSync.Dock='Fill'
     $editorFooter.Controls.Add($saveSync,1,2)
-    $saveSync.Tag='Sync profile, graphics, voice push-to-talk, sensitivity and selected CS2 Extras to the matching GitHub CFG.'
+    $saveSync.Tag='Sync profile, graphics, voice push-to-talk, sensitivity and selected CS2 Extras to the backend.'
 
     $cancel=New-Object System.Windows.Forms.Button
     $cancel.Text='Cancel'
@@ -8141,6 +8564,9 @@ function Show-ProfileEditor {
         }
         # Use the captured shared dictionary, not script: scope in this closure.
         $pendingSyncState[$ProfileName] = $true
+        $pendingTargetState[$ProfileName]='Backend'
+        Clear-CafeBackendQueue -ProfileName $ProfileName
+        [void]$script:BackendRetryBlocked.Remove($ProfileName)
         Save-ProfileSettings
         Write-Log "$ProfileName edited locally: pointer=$($p.PointerSpeed), acceleration enabled=$(-not $p.DisableAcceleration), display=$($p.Width)x$($p.Height)@$($p.RefreshHz), CS2=$($graphicsPreset.Settings.Width)x$($graphicsPreset.Settings.Height) refresh=$refreshPolicy scaling=$scalingMode, vibrance=$($p.Vibrance)%, hue=$($p.Hue) degrees, LogitechDPI=$($p.LogitechDPI), sensitivity=$sensValue."
     }.GetNewClosure()
@@ -8148,7 +8574,7 @@ function Show-ProfileEditor {
     $saveLocal.Add_Click({
         try {
             & $saveEditorValues
-            [System.Windows.Forms.MessageBox]::Show("$ProfileName saved locally. No GitHub login required.`nChanges on a Deep Freeze PC may disappear after restart.", 'Saved locally', 'OK', 'Information') | Out-Null
+            [System.Windows.Forms.MessageBox]::Show("$ProfileName saved locally and waiting to sync.`nChanges on a Deep Freeze PC may disappear after restart.", 'Saved locally', 'OK', 'Information') | Out-Null
             $dialog.DialogResult=[System.Windows.Forms.DialogResult]::OK
             $dialog.Close()
         } catch {
@@ -8157,85 +8583,54 @@ function Show-ProfileEditor {
         }
     }.GetNewClosure())
 
-    $syncTargetBranch=[string]$script:GithubBranch
     $saveSync.Add_Click({
-        try {
+        try{
             & $saveEditorValues
-            $changes=if($p.VoicePushToTalkKey){
-                "profiles/$ProfileName.json, graphics/$ProfileName.json AND $($p.ConfigFile) (profile sensitivity, voice key and selected settings)"
-            }elseif($capturedCS2ConvarsState.ContainsKey($ProfileName) -or $capturedCS2BindsState.ContainsKey($ProfileName)){
-                "profiles/$ProfileName.json, graphics/$ProfileName.json AND $($p.ConfigFile) (profile sensitivity and captured CS2 settings)"
-            }else{
-                "profiles/$ProfileName.json, graphics/$ProfileName.json AND $($p.ConfigFile) (profile sensitivity)"
-            }
             $newline=[Environment]::NewLine
-            $message="Save these files to GitHub branch $syncTargetBranch?"+$newline+
-                $changes+$newline+$newline+
-                'Only these profile files will be changed. Binds shown as Will replace will update that key; unrelated CFG binds remain untouched.'
-            $confirm=[System.Windows.Forms.MessageBox]::Show(
-                $message,'Confirm GitHub sync','YesNo','Question')
+            $message=('Sync '+$ProfileName+' profile, graphics, and selected CFG changes to the backend?'+$newline+
+                'The edit is already saved locally. If the backend is unavailable, it stays pending and will never be written directly to GitHub.')
+            $confirm=[System.Windows.Forms.MessageBox]::Show($message,'Confirm backend sync','YesNo','Question')
             if($confirm -ne [System.Windows.Forms.DialogResult]::Yes){
-                $status.Text='Saved locally; GitHub sync canceled.'
+                $status.Text='Waiting to sync; local edit kept.'
                 $status.ForeColor=[System.Drawing.Color]::FromArgb(255,190,105)
-                Write-Log "$ProfileName GitHub sync canceled; local edits preserved."
                 return
             }
-            $authorization = Get-GitHubSyncAuthorization -OwnerWindow $dialog
-            if ($null -eq $authorization -or [string]::IsNullOrWhiteSpace([string]$authorization.Token)) {
-                $status.Text='Saved locally. GitHub sync canceled; local edits preserved.'
+            $token=Get-CafeBackendSyncToken -OwnerWindow $dialog
+            if([string]::IsNullOrWhiteSpace([string]$token)){
+                $status.Text='Waiting to sync; authorization canceled.'
                 $status.ForeColor=[System.Drawing.Color]::FromArgb(255,190,105)
-                Write-Log "$ProfileName GitHub sync canceled; local changes preserved."
                 return
             }
-            if($authorization.Method -eq 'GitHub device sign-in'){
-                $accountConfirm=[System.Windows.Forms.MessageBox]::Show(
-                    ('Sync these settings using GitHub account @'+$authorization.Login+'?'),
-                    'Confirm GitHub account','YesNo','Question')
-                if($accountConfirm -ne [System.Windows.Forms.DialogResult]::Yes){
-                    $authorization.Token=$null
-                    $status.Text='Saved locally. GitHub sync canceled; local edits preserved.'
-                    $status.ForeColor=[System.Drawing.Color]::FromArgb(255,190,105)
-                    Write-Log "$ProfileName GitHub sync canceled after account verification; local changes preserved."
-                    return
-                }
-            }
-            $token = [string]$authorization.Token
-            $authorization.Token=$null
-            try {
+            try{
                 $saveSync.Enabled=$false
                 $dialog.Cursor=[System.Windows.Forms.Cursors]::WaitCursor
                 $confirmCfgChanges={
                     param($cfgPreview)
                     $icon=if($cfgPreview.HasWarnings){'Warning'}else{'Question'}
-                    $reviewText=[string]$cfgPreview.Text+[Environment]::NewLine+[Environment]::NewLine+'Sync this CFG together with the profile and graphics settings?'
+                    $reviewText=[string]$cfgPreview.Text+[Environment]::NewLine+[Environment]::NewLine+'Sync this CFG with the profile and graphics settings to the backend?'
                     $review=[System.Windows.Forms.MessageBox]::Show($reviewText,'Review CFG changes','YesNo',$icon)
                     return ($review -eq [System.Windows.Forms.DialogResult]::Yes)
                 }.GetNewClosure()
-                $syncResult=Sync-ProfileToGitHub -ProfileName $ProfileName -Token $token -ConfirmCfgChanges $confirmCfgChanges
+                $syncResult=Sync-ProfileToBackend -ProfileName $ProfileName -Token $token -ConfirmCfgChanges $confirmCfgChanges
                 if($syncResult -and $syncResult.Canceled){
-                    $status.Text='GitHub sync canceled after CFG review; local edits remain saved.'
+                    $status.Text='Waiting to sync; CFG review canceled.'
                     $status.ForeColor=[System.Drawing.Color]::FromArgb(255,190,105)
-                    Write-Log "$ProfileName GitHub sync canceled after CFG review; local edits preserved."
                     return
                 }
-                $pendingSyncState[$ProfileName] = $false
-                Save-ProfileSettings
-                [System.Windows.Forms.MessageBox]::Show("$ProfileName settings saved locally and synced to GitHub. The CS2 graphics preset was updated or already matched GitHub.`nOther PCs can now download the settings without signing in.`nSensitivity is stored in the profile CFG; the profile JSON does not control it. Selected Extras settings are updated when staged, and unrelated binds remain unchanged.", 'GitHub sync complete', 'OK', 'Information') | Out-Null
+                [void][System.Windows.Forms.MessageBox]::Show(($ProfileName+' synced to backend revision '+$syncResult.Revision+'. The backend will update the public GitHub mirror.'),
+                    'Backend sync complete','OK','Information')
                 $dialog.DialogResult=[System.Windows.Forms.DialogResult]::OK
                 $dialog.Close()
-            } finally {
-                $token = $null
-                $authorization = $null
-                if (-not $dialog.IsDisposed) {
-                    $saveSync.Enabled=$true
-                    $dialog.Cursor=[System.Windows.Forms.Cursors]::Default
-                }
+            }finally{
+                $token=$null
+                if(-not $dialog.IsDisposed){$saveSync.Enabled=$true;$dialog.Cursor=[System.Windows.Forms.Cursors]::Default}
             }
-        } catch {
-            Write-Log -Message "$ProfileName GitHub sync failed; local settings kept. $($_.Exception.Message)" -Level 'WARN' -FileDetail ([string]$_.ScriptStackTrace)
-            $status.Text='Cloud sync failed; settings are saved locally. Retry Save & Sync.'
+        }catch{
+            Write-Log -Message ($ProfileName+' backend sync failed; local edit remains pending: '+$_.Exception.Message) -Level 'WARN' -FileDetail ([string]$_.ScriptStackTrace)
+            $status.Text='Waiting to sync; local edit kept. Retry Save & Sync.'
             $status.ForeColor=[System.Drawing.Color]::FromArgb(255,190,105)
-            [System.Windows.Forms.MessageBox]::Show("$ProfileName saved locally, but GitHub sync failed:`n$($_.Exception.Message)", 'GitHub sync', 'OK', 'Warning') | Out-Null
+            [void][System.Windows.Forms.MessageBox]::Show(($ProfileName+' is saved locally and waiting to sync.'+[Environment]::NewLine+$_.Exception.Message),
+                'Backend sync pending','OK','Warning')
         }
     }.GetNewClosure())
 
@@ -8630,7 +9025,7 @@ function Invoke-GamingProfile {
         return
     }
     if(-not (Resolve-PendingProfileChanges -ProfileName $ProfileName)){return}
-    $profileSource=Refresh-ProfileFromGitHub -ProfileName $ProfileName
+    $profileSource=Refresh-ProfileFromBackend -ProfileName $ProfileName
     if(-not (Confirm-LocalProfileApply -ProfileName $ProfileName -Source $profileSource)){return}
     if([bool]$script:GamingProfiles[$ProfileName].ApplyNvidia){
         try{
@@ -8777,7 +9172,7 @@ function Start-CS2WithProfileCfg {
     if (-not $script:GamingProfiles.Contains($ProfileName)) { throw "Unknown CS2 profile: $ProfileName" }
     $cs2Running=[bool](Get-Process -Name 'cs2' -ErrorAction SilentlyContinue)
     if(-not (Resolve-PendingProfileChanges -ProfileName $ProfileName)){return}
-    $profileSource=Refresh-ProfileFromGitHub -ProfileName $ProfileName
+    $profileSource=Refresh-ProfileFromBackend -ProfileName $ProfileName
     if(-not (Confirm-LocalProfileApply -ProfileName $ProfileName -Source $profileSource)){return}
     $profile = $script:GamingProfiles[$ProfileName]
     $cfgName = [string]$profile.ConfigFile
@@ -8836,7 +9231,7 @@ function Invoke-GraphicsOnly {
     Start-StepScope -Run $graphicsRun -Step 'Apply Graphics'
     try {
     if(-not (Resolve-PendingProfileChanges -ProfileName $ModeName)){return}
-    $expected='aa0be83b36410198bcf1dc39d9fe6bea9bc8189d'
+    $expected='73d8a67e2cf950997624d3294bcc70ab48f795dc'
     $source=Add-CafeCacheBust -Uri 'https://raw.githubusercontent.com/fabjoncela/Cs-script/main/graphics/ApplyGraphics.ps1'
     $cache=Join-Path $env:LOCALAPPDATA 'CafeLauncher\graphics-module.ps1'
     $parent=Split-Path -Parent $cache
@@ -8876,7 +9271,15 @@ function Invoke-GraphicsOnly {
         throw 'Cached graphics module failed signature/hash validation. Graphics not applied.'
     }
     . $cache
-    Apply-CS2ModeGraphics -ModeName $ModeName
+    try{
+        $preset=Get-ProfileGraphicsPreset -ProfileName $ModeName -Canonical -RequireGitHub
+    }catch{
+        Write-Log ('Current backend and mirror graphics are unavailable for '+$ModeName+': '+$_.Exception.Message) 'WARN'
+        $localPath=Join-Path $env:LOCALAPPDATA ('CafeLauncher\graphics-cache\'+$ModeName+'.json')
+        if(-not (Confirm-CS2GraphicsPresetUse -ModeName $ModeName -Path $localPath)){throw 'Apply Graphics canceled; current cloud preset could not be verified.'}
+        $preset=Get-ProfileGraphicsPreset -ProfileName $ModeName -Canonical
+    }
+    Apply-CS2ModeGraphics -ModeName $ModeName -Preset $preset
     } catch {
         Write-Log ('Graphics module could not complete: '+$_.Exception.Message) 'ERROR'
     } finally {
@@ -9030,7 +9433,7 @@ function Update-SelectedProfileCard {
 }
 function Refresh-SelectedProfileCard {
     param([Parameter(Mandatory=$true)][string]$Name,[ValidateSet('Startup','Later')][string]$TimingGroup='Later')
-    $source=Refresh-ProfileFromGitHub -ProfileName $Name -TimingGroup $TimingGroup
+    $source=Refresh-ProfileFromBackend -ProfileName $Name -TimingGroup $TimingGroup
     Update-SelectedProfileCard -Name $Name
     return $source
 }
@@ -9706,6 +10109,8 @@ $root.Controls.Add($footer,0,3)
 
 $form.Add_FormClosed({
     if($startupTimer){try{$startupTimer.Stop();$startupTimer.Dispose()}catch{}}
+    if($script:BackendRetryTimer){$script:BackendRetryTimer.Stop();$script:BackendRetryTimer.Dispose();$script:BackendRetryTimer=$null}
+    $script:BackendSyncToken=$null
     if($script:LogihubDownloadTimer){$script:LogihubDownloadTimer.Stop();$script:LogihubDownloadTimer.Dispose();$script:LogihubDownloadTimer=$null}
     if($script:LiveDpiVerificationTimer){$script:LiveDpiVerificationTimer.Stop();$script:LiveDpiVerificationTimer.Dispose();$script:LiveDpiVerificationTimer=$null}
     $script:LogihubRequestedDPI=$null
@@ -9720,6 +10125,9 @@ $script:StartupInventoryRunning=$false
 $script:StartupOverlay=$null
 $script:StartupOverlayLabel=$null
 $script:CafeLauncherUpdateWorker=$null
+$script:BackendRetryTimer=New-Object System.Windows.Forms.Timer
+$script:BackendRetryTimer.Interval=60000
+$script:BackendRetryTimer.Add_Tick({Start-CafeBackendRetryHealthCheck})
 $startupTimer=New-Object System.Windows.Forms.Timer
 $startupTimer.Interval=350
 $startupTimer.Add_Tick({
@@ -9732,6 +10140,7 @@ $form.Add_Shown({
     [CafeTimingTrace]::MarkDashboardReady()
     Complete-CafeTimingOperation -Id $script:DashboardConstructionTimingId -Outcome 'Success'
     $startupTimer.Start()
+    $script:BackendRetryTimer.Start()
 })
 Complete-CafeTimingOperation -Id $script:DashboardFinalizationTimingId -Outcome 'Success'
 [void]$form.ShowDialog()
