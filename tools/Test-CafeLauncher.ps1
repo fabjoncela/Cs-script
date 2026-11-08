@@ -100,7 +100,7 @@ foreach($requiredEditorFeature in @(
     '$pointer.add_SelectionChangeCommitted',
     '$pointerSpeedSelectionState.UserChanged',
     '$cs2Page.Text=''CS2 / Apps''',
-    '$cs2Grid=New-EditorTabGrid -Page $cs2Page -Rows 31',
+    '$cs2Grid=New-EditorTabGrid -Page $cs2Page -Rows 35',
     'function Add-EditorTabFullRowField',
     'function New-EditorTabFullRowChoice',
     '$captureGraphics.Text=''Capture from CS2''',

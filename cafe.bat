@@ -3634,6 +3634,7 @@ $script:PendingTarget = @{}
 $script:ProfileSettingsPath = Join-Path $env:LOCALAPPDATA 'CafeLauncher\profiles.json'
 $script:PendingSync = @{}
 $script:PendingCfgSensitivity = @{}
+$script:PendingProfileCfgRestore = @{}
 $script:VerifiedProfileState = @{}
 $script:ProfileRefreshStatus = @{}
 $script:GraphicsPresets = [ordered]@{}
@@ -5731,6 +5732,46 @@ function ConvertFrom-CafeBackendGraphicsHistory {
     }
     return @($versions.ToArray())
 }
+function ConvertFrom-CafeBackendProfileHistory {
+    param([Parameter(Mandatory=$true)][string]$ProfileName,[Parameter(Mandatory=$true)][string]$ResponseJson)
+    if(-not $script:GamingProfiles.Contains($ProfileName) -or [string]::IsNullOrWhiteSpace($ResponseJson)){
+        throw 'Profile history response or profile name is invalid.'
+    }
+    $response=ConvertFrom-Json -InputObject $ResponseJson -ErrorAction Stop
+    if([string]$response.profile -cne $ProfileName){throw 'Profile history profile mismatch.'}
+    $revisions=@($response.revisions)
+    if($revisions.Count -gt 50){throw 'Profile history contains too many revisions.'}
+    $versions=New-Object 'System.Collections.Generic.List[object]'
+    $previous=[int]::MaxValue
+    for($index=0;$index -lt $revisions.Count;$index++){
+        $item=$revisions[$index]
+        $revision=0
+        if(-not [int]::TryParse([string]$item.revision,[ref]$revision) -or $revision -lt 1 -or $revision -ge $previous){
+            throw 'Profile history revisions are invalid or out of order.'
+        }
+        $previous=$revision
+        $date=[DateTimeOffset]::MinValue
+        if(-not [DateTimeOffset]::TryParse([string]$item.createdUtc,[ref]$date)){throw 'Profile history date is invalid.'}
+        if($index -gt 0){
+            $versions.Add([pscustomobject]@{Revision=$revision;DateUtc=$date.ToUniversalTime().ToString('o');Message=('Backend revision '+$revision)})
+        }
+    }
+    return @($versions.ToArray())
+}
+function Get-CafeBackendProfileHistoryRevision {
+    param([Parameter(Mandatory=$true)][string]$ProfileName,[Parameter(Mandatory=$true)][int]$Revision)
+    if(-not $script:GamingProfiles.Contains($ProfileName) -or $Revision -lt 1){throw 'Profile history revision is invalid.'}
+    $uri=$script:BackendBaseUrl+'/v1/profiles/'+[Uri]::EscapeDataString($ProfileName)+'/history/'+$Revision
+    $response=Get-CafeHttpBytes -Uri $uri -MaxBytes 4194304
+    $payload=ConvertFrom-CafeCloudJson -Bytes $response.Bytes
+    if([int]$payload.revision -ne $Revision){throw 'Backend returned a different profile history revision.'}
+    $date=[DateTimeOffset]::MinValue
+    if(-not [DateTimeOffset]::TryParse([string]$payload.createdUtc,[ref]$date)){throw 'Profile history date is invalid.'}
+    $snapshot=Assert-CafeCloudSnapshot -ProfileName $ProfileName -Profile $payload.profile -Graphics $payload.graphics `
+        -Cfg ([string]$payload.cfg) -Revision $Revision -Source 'Backend'
+    $snapshot|Add-Member -NotePropertyName CreatedUtc -NotePropertyValue $date.ToUniversalTime().ToString('o')
+    return $snapshot
+}
 function Get-CafeGraphicsHistoryPreset {
     param([Parameter(Mandatory=$true)][string]$ProfileName,[Parameter(Mandatory=$true)]$Version)
     $revision=0
@@ -5860,6 +5901,35 @@ function Set-CafeGraphicsHistoryUi {
     $loadButton.Text='Refresh history'
     $loadButton.Enabled=$true
 }
+function Set-CafeProfileHistoryUi {
+    param([Parameter(Mandatory=$true)][System.Collections.IDictionary]$Context,[object[]]$Versions=@(),[string]$ErrorMessage='')
+    $choice=$Context['HistoryChoice'];$load=$Context['LoadButton'];$restore=$Context['RestoreButton'];$status=$Context['StatusLabel']
+    if($choice -isnot [System.Windows.Forms.ComboBox] -or $load -isnot [System.Windows.Forms.Button] -or
+       $restore -isnot [System.Windows.Forms.Button] -or $status -isnot [System.Windows.Forms.Label]){
+        throw 'Profile history UI context is invalid.'
+    }
+    if($ErrorMessage){
+        $status.Text=('Profile/CFG history load failed: '+$ErrorMessage)
+        $available=@($choice.Tag);$choice.Enabled=($available.Count -gt 0);$restore.Enabled=($available.Count -gt 0)
+    }else{
+        $choice.Items.Clear();$choice.Tag=[object[]]$Versions
+        if($Versions.Count -eq 0){
+            [void]$choice.Items.Add('No earlier profile/CFG saves found')
+            $choice.Enabled=$false;$restore.Enabled=$false;$choice.SelectedIndex=0
+            $status.Text='No earlier profile and CFG saves were found for this profile.'
+        }else{
+            foreach($version in $Versions){
+                $dateLabel=[string]$version.DateUtc
+                try{$dateLabel=([DateTimeOffset]::Parse([string]$version.DateUtc)).ToLocalTime().ToString('yyyy-MM-dd HH:mm')}catch{}
+                [void]$choice.Items.Add(($dateLabel+' — '+[string]$version.Message))
+            }
+            $choice.Enabled=$true;$choice.SelectedIndex=0;$restore.Enabled=$true
+            $status.Text=('Loaded '+$Versions.Count+' earlier profile/CFG save(s). Select one to stage it in the editor.')
+        }
+    }
+    $status.ForeColor=[System.Drawing.Color]::FromArgb(255,190,105)
+    $load.Text='Refresh history';$load.Enabled=$true
+}
 function New-CafeGraphicsHistoryWorker {
     if(-not ('CafeGraphicsHistoryBackgroundWorker' -as [type])){
         Add-Type -Language CSharp -TypeDefinition @'
@@ -5926,6 +5996,57 @@ public sealed class CafeGraphicsHistoryBackgroundWorker : BackgroundWorker {
     }
     $timing=Get-CafeTimingDelegates
     return (New-Object CafeGraphicsHistoryBackgroundWorker($timing.Start,$timing.Complete))
+}
+function New-CafeProfileHistoryWorker {
+    if(-not ('CafeProfileHistoryBackgroundWorker' -as [type])){
+        Add-Type -Language CSharp -TypeDefinition @'
+using System;
+using System.ComponentModel;
+using System.IO;
+using System.Net;
+using System.Text;
+public sealed class CafeProfileHistoryBackgroundWorker : BackgroundWorker {
+    public string ResultText { get; private set; }
+    public string ErrorText { get; private set; }
+    public string RequestUri { get; private set; }
+    public int HttpStatusCode { get; private set; }
+    public object RequestContext { get; set; }
+    private readonly Func<string, string, string, long> timingStart;
+    private readonly Action<long, string, int> timingComplete;
+    public CafeProfileHistoryBackgroundWorker(Func<string, string, string, long> start, Action<long, string, int> complete) {
+        timingStart=start; timingComplete=complete;
+        DoWork += delegate(object sender, DoWorkEventArgs e) {
+            RequestUri=e.Argument as string;
+            if(String.IsNullOrWhiteSpace(RequestUri)) throw new ArgumentException("Profile history URL is missing.");
+            long id=timingStart("HTTP","Backend profile history",RequestUri); int status=0;
+            try {
+                var request=(HttpWebRequest)WebRequest.Create(RequestUri); request.Method="GET";
+                request.UserAgent="CafeLauncher-ProfileHistory"; request.Accept="application/json";
+                request.Timeout=15000; request.ReadWriteTimeout=15000;
+                request.Headers[HttpRequestHeader.CacheControl]="no-cache";
+                using(var response=(HttpWebResponse)request.GetResponse())
+                using(var stream=response.GetResponseStream())
+                using(var memory=new MemoryStream()) {
+                    status=(int)response.StatusCode; HttpStatusCode=status; byte[] buffer=new byte[8192]; int read;
+                    while((read=stream.Read(buffer,0,buffer.Length))>0) {
+                        if(memory.Length+read>1048576) throw new InvalidDataException("Profile history exceeds the response size limit.");
+                        memory.Write(buffer,0,read);
+                    }
+                    ResultText=new UTF8Encoding(false,true).GetString(memory.ToArray());
+                }
+                timingComplete(id,"Success",status);
+            } catch(Exception error) {
+                var web=error as WebException; var response=web==null?null:web.Response as HttpWebResponse;
+                if(response!=null) using(response) { status=(int)response.StatusCode; HttpStatusCode=status; }
+                timingComplete(id,"Failed",status); ErrorText=error.Message;
+            }
+        };
+    }
+}
+'@
+    }
+    $timing=Get-CafeTimingDelegates
+    return (New-Object CafeProfileHistoryBackgroundWorker($timing.Start,$timing.Complete))
 }
 function Get-ProfileGraphicsVersion {
     param([Parameter(Mandatory=$true)][string]$ProfileName,[Parameter(Mandatory=$true)]$Version)
@@ -6025,6 +6146,15 @@ function Load-ProfileSettings {
                     $script:PendingCfgSensitivity[$name]=$draftNumber.ToString('0.####',[Globalization.CultureInfo]::InvariantCulture)
                 }else{Write-Log "Ignored invalid local $name pending CFG sensitivity." 'WARN'}
             }
+            $pendingCfgRestore=$savedProfile.Value.PSObject.Properties['PendingProfileCfgRestore']
+            if($pendingCfgRestore -and $script:PendingSync[$name]){
+                $cfgText=[string]$pendingCfgRestore.Value
+                try{
+                    if($cfgText -match "`0" -or [Text.Encoding]::UTF8.GetByteCount($cfgText) -gt 2097152){throw 'CFG is invalid or too large'}
+                    [void](Get-CafeCS2CfgSensitivity -Content $cfgText)
+                    $script:PendingProfileCfgRestore[$name]=$cfgText
+                }catch{Write-Log "Ignored invalid local $name pending profile-history CFG restore." 'WARN'}
+            }
             if($script:PendingSync[$name]){
                 $savedConvars=$savedProfile.Value.PSObject.Properties['PendingCapturedCS2Convars']
                 if($savedConvars -and $savedConvars.Value){
@@ -6088,6 +6218,9 @@ function Save-ProfileSettings {
         foreach ($key in @($values.Keys)) { $snapshot[$key] = $values[$key] }
         if($script:PendingSync[$name] -and $script:PendingCfgSensitivity.ContainsKey($name)){
             $snapshot['PendingCfgSensitivity']=[string]$script:PendingCfgSensitivity[$name]
+        }
+        if($script:PendingSync[$name] -and $script:PendingProfileCfgRestore.ContainsKey($name)){
+            $snapshot['PendingProfileCfgRestore']=[string]$script:PendingProfileCfgRestore[$name]
         }
         if($script:PendingSync[$name] -and $script:CapturedCS2Convars.ContainsKey($name)){
             $snapshot['PendingCapturedCS2Convars']=$script:CapturedCS2Convars[$name]
@@ -6573,6 +6706,7 @@ function Resolve-PendingProfileChanges {
         $script:PendingSync[$ProfileName]=$false
         Save-ProfileSettings
         [void]$script:PendingCfgSensitivity.Remove($ProfileName)
+        [void]$script:PendingProfileCfgRestore.Remove($ProfileName)
         [void]$script:CapturedCS2Convars.Remove($ProfileName)
         [void]$script:CapturedCS2Binds.Remove($ProfileName)
         [void]$script:PendingTarget.Remove($ProfileName)
@@ -7228,6 +7362,14 @@ function Clear-CafeBackendQueue {
     $path=Get-CafeBackendQueuePath -ProfileName $ProfileName
     if(Test-Path -LiteralPath $path -PathType Leaf){Remove-Item -LiteralPath $path -Force -ErrorAction Stop}
 }
+function Get-CafeBackendCfgBase {
+    param([Parameter(Mandatory=$true)][string]$ProfileName,[Parameter(Mandatory=$true)]$Snapshot)
+    $cfg=[string]$Snapshot.Cfg
+    if($script:PendingProfileCfgRestore.ContainsKey($ProfileName)){$cfg=[string]$script:PendingProfileCfgRestore[$ProfileName]}
+    if($cfg -match "`0" -or [Text.Encoding]::UTF8.GetByteCount($cfg) -gt 2097152){throw 'Profile CFG restore is invalid or exceeds the size limit.'}
+    [void](Get-CafeCS2CfgSensitivity -Content $cfg)
+    return $cfg
+}
 function New-CafeBackendPayload {
     param([Parameter(Mandatory=$true)][string]$ProfileName,[scriptblock]$ConfirmCfgChanges)
     if(-not $script:BackendRevisions.ContainsKey($ProfileName)){
@@ -7245,7 +7387,7 @@ function New-CafeBackendPayload {
     if(-not $script:GraphicsPresets.Contains($ProfileName)){throw 'No local graphics preset is available.'}
     $preset=ConvertTo-CafeGraphicsPreset -ProfileName $ProfileName -Preset $script:GraphicsPresets[$ProfileName]
     $graphics=[ordered]@{SchemaVersion=1;ProfileName=$ProfileName;DisplayPolicy='ApplyPreset';RefreshPolicy=[string]$preset.RefreshPolicy;ScalingMode=[int]$preset.ScalingMode;Settings=$preset.Settings}
-    $cfg=[string]$snapshot.Cfg
+    $cfg=Get-CafeBackendCfgBase -ProfileName $ProfileName -Snapshot $snapshot
     $convars=$script:CapturedCS2Convars[$ProfileName]
     $binds=$script:CapturedCS2Binds[$ProfileName]
     if($convars -and $convars.Count){$cfg=Set-CafeCapturedConvarsInCfg -Content $cfg -Values $convars}
@@ -7293,6 +7435,7 @@ function Complete-CafeBackendSync {
     $script:PendingSync[$ProfileName]=$false
     try{Save-ProfileSettings}catch{$script:PendingSync[$ProfileName]=$true;throw}
     [void]$script:PendingCfgSensitivity.Remove($ProfileName)
+    [void]$script:PendingProfileCfgRestore.Remove($ProfileName)
     [void]$script:CapturedCS2Convars.Remove($ProfileName)
     [void]$script:CapturedCS2Binds.Remove($ProfileName)
     [void]$script:PendingTarget.Remove($ProfileName)
@@ -7935,11 +8078,13 @@ function Show-ProfileEditor {
     $capturedCS2ConvarsState = $script:CapturedCS2Convars
     $capturedCS2BindsState=$script:CapturedCS2Binds
     $pendingCfgSensitivityState=$script:PendingCfgSensitivity
+    $pendingProfileCfgRestoreState=$script:PendingProfileCfgRestore
     $backendRetryBlockedState=$script:BackendRetryBlocked
     if ($null -eq $pendingSyncState -or $pendingSyncState -isnot [System.Collections.IDictionary] -or
         $null -eq $capturedCS2ConvarsState -or $capturedCS2ConvarsState -isnot [System.Collections.IDictionary] -or
         $null -eq $capturedCS2BindsState -or $capturedCS2BindsState -isnot [System.Collections.IDictionary] -or
         $null -eq $pendingCfgSensitivityState -or $pendingCfgSensitivityState -isnot [System.Collections.IDictionary] -or
+        $null -eq $pendingProfileCfgRestoreState -or $pendingProfileCfgRestoreState -isnot [System.Collections.IDictionary] -or
         $null -eq $backendRetryBlockedState -or $backendRetryBlockedState -isnot [System.Collections.IDictionary]) {
         throw 'Profile editor shared state is missing; cannot safely edit this profile.'
     }
@@ -8022,7 +8167,7 @@ function Show-ProfileEditor {
         }
     }
     $pointer=New-EditorTabChoice -Grid $mouseGrid -Title 'Windows pointer speed (11 levels)' -Column 0 -Row 0 -Labels $pointerSpeedLabels -Values $pointerSpeedValues -SelectedValue $pointerSpeedValues[$pointerSpeedSelectedIndex]
-    $pointerSpeedSelectionState=@{UserChanged=$false}
+    $pointerSpeedSelectionState=@{UserChanged=$false;OriginalValue=$pointerSpeedOriginalValue;OriginalIndex=$pointerSpeedSelectedIndex}
     $pointer.add_SelectionChangeCommitted({$pointerSpeedSelectionState.UserChanged=$true}.GetNewClosure())
     $logitechDpi=New-EditorTabNumber -Grid $mouseGrid -Title 'Logitech DPI (live, per profile)' -Column 1 -Row 0 -Min 100 -Max 25600 -Value ([int]$p.LogitechDPI)
     $logitechDpi.Increment=50
@@ -8067,7 +8212,7 @@ function Show-ProfileEditor {
     $nv.Checked=[bool]$p.ApplyNvidia
     Add-EditorTabWide -Grid $displayGrid -Control $nv -Row 4
 
-    $cs2Grid=New-EditorTabGrid -Page $cs2Page -Rows 31
+    $cs2Grid=New-EditorTabGrid -Page $cs2Page -Rows 35
     $cfgFile=New-Object CafeEditorScrollTextBox
     $cfgFile.Text=[string]$p.ConfigFile
     $cfgFile.ReadOnly=$true
@@ -8144,15 +8289,15 @@ function Show-ProfileEditor {
     $websiteEnabled=New-Object System.Windows.Forms.CheckBox
     $websiteEnabled.Text='Open custom website after FACEIT'
     $websiteEnabled.Checked=[bool]$p.LaunchWebsiteEnabled
-    Add-EditorTabWide -Grid $cs2Grid -Control $websiteEnabled -Row 29
+    Add-EditorTabWide -Grid $cs2Grid -Control $websiteEnabled -Row 33
     $websiteUrl=New-Object System.Windows.Forms.TextBox
     $websiteUrl.Text=[string]$p.LaunchWebsiteUrl
     $websiteUrl.MaxLength=2048
-    [void](Add-EditorTabField -Grid $cs2Grid -Title 'Second website URL (FACEIT always stays)' -Control $websiteUrl -Column 0 -Row 30)
+    [void](Add-EditorTabField -Grid $cs2Grid -Title 'Second website URL (FACEIT always stays)' -Control $websiteUrl -Column 0 -Row 34)
     $websiteReset=New-Object System.Windows.Forms.Button
     $websiteReset.Text='Reset to Metastack'
     $websiteReset.Add_Click({$websiteUrl.Text='https://metastack.gg/'}.GetNewClosure())
-    [void](Add-EditorTabField -Grid $cs2Grid -Title 'Restore default website' -Control $websiteReset -Column 1 -Row 30)
+    [void](Add-EditorTabField -Grid $cs2Grid -Title 'Restore default website' -Control $websiteReset -Column 1 -Row 34)
     $cs2Hint=New-Object System.Windows.Forms.Label
     $cs2Hint.Text='Apply Graphics and Play + Exec remain separate actions on the dashboard.'
     $cs2Hint.ForeColor=$MUTED
@@ -8277,7 +8422,7 @@ function Show-ProfileEditor {
         $status.Text='Unsynced local edits - cloud refresh will not overwrite them.'
         $status.ForeColor=[System.Drawing.Color]::FromArgb(255,190,105)
     } else {
-        $status.Text='GitHub settings enabled; cached for offline use.'
+        $status.Text='Backend API settings; GitHub mirror is read-only fallback.'
         $status.ForeColor=$MUTED
     }
     $editorFooter.Controls.Add($status,0,1)
@@ -8550,6 +8695,138 @@ function Show-ProfileEditor {
             [void][System.Windows.Forms.MessageBox]::Show(('Could not stage viewmodel commands:`n'+$_.Exception.Message),'Viewmodel commands','OK','Warning')
         }
     }.GetNewClosure())
+    [void](Add-EditorTabSectionHeading -Grid $cs2Grid -Title 'Profile + CFG history' -Row 29)
+    $profileHistoryHint=New-Object System.Windows.Forms.Label
+    $profileHistoryHint.Text='Restore stages profile settings and the CFG from one backend revision. CS2 graphics stay separate.'
+    $profileHistoryHint.ForeColor=$MUTED
+    Add-EditorTabWide -Grid $cs2Grid -Control $profileHistoryHint -Row 30
+    $profileHistoryChoice=New-Object CafeEditorScrollComboBox
+    $profileHistoryChoice.DropDownStyle='DropDownList'
+    $profileHistoryChoice.Tag=[object[]]@()
+    [void]$profileHistoryChoice.Items.Add('Load history first')
+    $profileHistoryChoice.SelectedIndex=0
+    $profileHistoryChoice.Enabled=$false
+    [void](Add-EditorTabField -Grid $cs2Grid -Title 'Earlier profile + CFG saves' -Control $profileHistoryChoice -Column 0 -Row 31)
+    $loadProfileHistory=New-Object System.Windows.Forms.Button
+    $loadProfileHistory.Text='Load history'
+    $loadProfileHistory.BackColor=[System.Drawing.Color]::FromArgb(58,67,83)
+    $loadProfileHistory.ForeColor=$WHITE
+    $loadProfileHistory.FlatStyle='Flat'
+    [void](Add-EditorTabField -Grid $cs2Grid -Title 'Reads backend history' -Control $loadProfileHistory -Column 1 -Row 31)
+    $restoreProfileHistory=New-Object System.Windows.Forms.Button
+    $restoreProfileHistory.Text='Restore selected version'
+    $restoreProfileHistory.BackColor=[System.Drawing.Color]::FromArgb(58,67,83)
+    $restoreProfileHistory.ForeColor=$WHITE
+    $restoreProfileHistory.FlatStyle='Flat'
+    $restoreProfileHistory.Enabled=$false
+    [void](Add-EditorTabField -Grid $cs2Grid -Title 'Stages in editor; save to keep' -Control $restoreProfileHistory -Column 0 -Row 32)
+    $profileHistoryStatus=New-Object System.Windows.Forms.Label
+    $profileHistoryStatus.Text='History is loaded only when requested.'
+    $profileHistoryStatus.ForeColor=$MUTED
+    $profileHistoryStatus.Dock='Fill'
+    $profileHistoryStatus.AutoEllipsis=$true
+    [void](Add-EditorTabField -Grid $cs2Grid -Title 'History status' -Control $profileHistoryStatus -Column 1 -Row 32)
+    $profileHistoryState=@{Worker=$null}
+    $profileHistoryRestoreState=@{Applied=$false;Snapshot=$null}
+    $profileHistoryBackendBaseUrl=[string]$script:BackendBaseUrl
+    $profileHistoryUiContext=@{
+        ProfileName=$ProfileName;Dialog=$dialog;LoadButton=$loadProfileHistory
+        HistoryChoice=$profileHistoryChoice;RestoreButton=$restoreProfileHistory;StatusLabel=$profileHistoryStatus
+        HistoryState=$profileHistoryState
+    }
+    $loadProfileHistory.Add_Click({
+        if($profileHistoryState.Worker -and $profileHistoryState.Worker.IsBusy){return}
+        $historyUri=$profileHistoryBackendBaseUrl+'/v1/profiles/'+[Uri]::EscapeDataString($ProfileName)+'/history?limit=50'
+        $loadProfileHistory.Enabled=$false;$profileHistoryChoice.Enabled=$false;$restoreProfileHistory.Enabled=$false
+        $profileHistoryStatus.Text='Loading backend profile and CFG history in the background.'
+        $profileHistoryStatus.ForeColor=$MUTED
+        try{
+            $worker=New-CafeProfileHistoryWorker
+            $profileHistoryState.Worker=$worker
+            $worker.RequestContext=$profileHistoryUiContext
+            $worker.Add_RunWorkerCompleted({
+                param($sender,$eventArgs)
+                $request=$sender.RequestContext
+                if($request -isnot [System.Collections.IDictionary]){
+                    Write-Log 'Profile history completion is missing its UI request context.' 'ERROR'
+                    return
+                }
+                $historyDialog=$request['Dialog'];$profileForHistory=[string]$request['ProfileName']
+                try{
+                    if($null -eq $historyDialog -or $historyDialog.IsDisposed -or $historyDialog.Disposing){return}
+                    if($eventArgs.Error){throw $eventArgs.Error}
+                    if($sender.ErrorText){throw ([System.Exception]::new([string]$sender.ErrorText))}
+                    $versions=@(ConvertFrom-CafeBackendProfileHistory -ProfileName $profileForHistory -ResponseJson ([string]$sender.ResultText))
+                    Set-CafeProfileHistoryUi -Context $request -Versions $versions
+                }catch{
+                    $message=$_.Exception.Message
+                    Write-Log ('Could not load profile/CFG history for '+$profileForHistory+': '+$message+'; httpStatus='+[string]$sender.HttpStatusCode) 'WARN'
+                    try{Set-CafeProfileHistoryUi -Context $request -ErrorMessage $message}
+                    catch{Write-Log ('Could not update profile history error state for '+$profileForHistory+': '+$_.Exception.Message) 'WARN'}
+                }finally{
+                    if($historyDialog -and -not $historyDialog.IsDisposed -and -not $historyDialog.Disposing){
+                        try{$request['LoadButton'].Enabled=$true;$historyDialog.Cursor=[System.Windows.Forms.Cursors]::Default}
+                        catch{Write-Log ('Could not restore profile history UI for '+$profileForHistory+': '+$_.Exception.Message) 'WARN'}
+                    }
+                    $request['HistoryState'].Worker=$null;$sender.Dispose()
+                }
+            })
+            $worker.RunWorkerAsync($historyUri)
+        }catch{
+            $profileHistoryState.Worker=$null;$loadProfileHistory.Enabled=$true
+            $available=@($profileHistoryChoice.Tag);$profileHistoryChoice.Enabled=($available.Count -gt 0);$restoreProfileHistory.Enabled=($available.Count -gt 0)
+            $profileHistoryStatus.Text=('Could not start profile history load: '+$_.Exception.Message)
+            $profileHistoryStatus.ForeColor=[System.Drawing.Color]::FromArgb(255,190,105)
+        }
+    }.GetNewClosure())
+    $restoreProfileHistory.Add_Click({
+        try{
+            $versions=@($profileHistoryChoice.Tag);$selectedIndex=[int]$profileHistoryChoice.SelectedIndex
+            if($selectedIndex -lt 0 -or $selectedIndex -ge $versions.Count){throw 'Select an earlier profile/CFG save first.'}
+            $version=$versions[$selectedIndex];$revision=[int]$version.Revision
+            $confirm=[System.Windows.Forms.MessageBox]::Show(
+                ("Stage backend revision $revision for $ProfileName? This replaces the profile settings and CFG in the editor. CS2 graphics stay unchanged. Nothing is saved until you choose Save Locally or Save & Sync."),
+                'Restore Profile + CFG','YesNo','Warning','Button2')
+            if($confirm -ne [System.Windows.Forms.DialogResult]::Yes){return}
+            $dialog.Cursor=[System.Windows.Forms.Cursors]::WaitCursor
+            $snapshot=Get-CafeBackendProfileHistoryRevision -ProfileName $ProfileName -Revision $revision
+            $historicalProfile=$snapshot.Profile
+            foreach($required in @('PointerSpeed','LogitechDPI','DisableAcceleration','ApplyNvidia','Width','Height','RefreshHz','Vibrance','Hue','LaunchApps','LaunchWebsiteEnabled','LaunchWebsiteUrl','VoicePushToTalkKey')){
+                if(-not $historicalProfile.PSObject.Properties[$required]){throw ('Historical profile is missing '+$required+'.')}
+            }
+            $pointerValue=[int]$historicalProfile.PointerSpeed
+            $pointerIndex=[Array]::IndexOf([int[]]$pointerSpeedValues,$pointerValue)
+            if($pointerIndex -lt 0){
+                $pointerIndex=0;$pointerDistance=[Math]::Abs([int]$pointerSpeedValues[0]-$pointerValue)
+                for($index=1;$index -lt $pointerSpeedValues.Count;$index++){
+                    $distance=[Math]::Abs([int]$pointerSpeedValues[$index]-$pointerValue)
+                    if($distance -lt $pointerDistance){$pointerIndex=$index;$pointerDistance=$distance}
+                }
+            }
+            $pointerSpeedSelectionState.OriginalValue=$pointerValue;$pointerSpeedSelectionState.OriginalIndex=$pointerIndex;$pointerSpeedSelectionState.UserChanged=$false
+            Set-EditorTabChoiceValue $pointer ([string]$pointerSpeedValues[$pointerIndex])
+            $logitechDpi.Value=[decimal][int]$historicalProfile.LogitechDPI
+            $accel.Checked= -not [bool]$historicalProfile.DisableAcceleration
+            $width.Value=[decimal][int]$historicalProfile.Width;$height.Value=[decimal][int]$historicalProfile.Height
+            $hz.Value=[decimal][int]$historicalProfile.RefreshHz;$vibrance.Value=[decimal][int]$historicalProfile.Vibrance
+            $hue.Value=[decimal][int]$historicalProfile.Hue;$nv.Checked=[bool]$historicalProfile.ApplyNvidia
+            $apps.Checked=[bool]$historicalProfile.LaunchApps;$websiteEnabled.Checked=[bool]$historicalProfile.LaunchWebsiteEnabled
+            $websiteUrl.Text=[string]$historicalProfile.LaunchWebsiteUrl
+            $voiceFromCfg=Get-CafeVoiceBindingFromCfg -Content ([string]$snapshot.Cfg)
+            Set-EditorTabChoiceValue -Choice $voiceBox -Value ([string]$voiceFromCfg)
+            $sens.Text=[string]$snapshot.CfgSensitivity
+            $profileHistoryRestoreState.Snapshot=$snapshot;$profileHistoryRestoreState.Applied=$true
+            [void]$capturedCS2ConvarsState.Remove($ProfileName);[void]$capturedCS2BindsState.Remove($ProfileName)
+            $status.Text=('Staged profile settings and CFG from backend revision '+$revision+'. Graphics were not changed; choose Save Locally or Save & Sync to keep it.')
+            $status.ForeColor=[System.Drawing.Color]::FromArgb(255,190,105)
+            $profileHistoryStatus.Text=('Revision '+$revision+' is staged in the editor; nothing has been saved or synced.')
+            Write-Log ('Staged profile settings and CFG from backend revision '+$revision+' for '+$ProfileName+' in the editor; graphics were not changed.')
+        }catch{
+            Write-Log ('Could not stage profile/CFG history for '+$ProfileName+': '+$_.Exception.Message) 'WARN'
+            $null=[System.Windows.Forms.MessageBox]::Show(('Could not stage the selected profile/CFG save:`n'+$_.Exception.Message),'Restore Profile + CFG','OK','Warning')
+        }finally{$dialog.Cursor=[System.Windows.Forms.Cursors]::Default}
+    }.GetNewClosure())
+
     if($CaptureOnOpen){
         $editorTabs.SelectedTab=$cs2Page
         $dialog.Add_Shown({ & $invokeCS2Capture }.GetNewClosure())
@@ -8613,11 +8890,11 @@ function Show-ProfileEditor {
         $graphicsPresetState[$ProfileName]=$graphicsPreset
         $p.ScalingMode=$scalingMode
         $selectedPointerSpeed=[int](& $readChoiceValue $pointer)
-        $initialPointerChoice=[int]$pointerSpeedValues[$pointerSpeedSelectedIndex]
+        $initialPointerChoice=[int]$pointerSpeedValues[[int]$pointerSpeedSelectionState.OriginalIndex]
         if($pointerSpeedSelectionState.UserChanged -or $selectedPointerSpeed -ne $initialPointerChoice){
             $p.PointerSpeed=$selectedPointerSpeed
         }else{
-            $p.PointerSpeed=$pointerSpeedOriginalValue
+            $p.PointerSpeed=[int]$pointerSpeedSelectionState.OriginalValue
         }
         $p.LogitechDPI=[int]$logitechDpi.Value
         Assert-LogitechDPI $p.LogitechDPI
@@ -8633,6 +8910,9 @@ function Show-ProfileEditor {
         $p.LaunchWebsiteEnabled=[bool]$websiteEnabled.Checked
         $p.LaunchWebsiteUrl=$validatedWebsite
         $pendingCfgSensitivityState[$ProfileName]=$sensValue
+        if($profileHistoryRestoreState.Applied -and $profileHistoryRestoreState.Snapshot){
+            $pendingProfileCfgRestoreState[$ProfileName]=[string]$profileHistoryRestoreState.Snapshot.Cfg
+        }
         $p.VoicePushToTalkKey=[string]$voiceBox.Tag[$voiceBox.SelectedIndex]
         $stagedVoiceKeys=@()
         if($capturedCS2BindsState.ContainsKey($ProfileName)){$stagedVoiceKeys=@($capturedCS2BindsState[$ProfileName].Keys|Where-Object{[string]$capturedCS2BindsState[$ProfileName][$_] -ceq '+voicerecord'}|ForEach-Object{[string]$_})}

@@ -10,6 +10,7 @@ on:
       - 'tools/Test-StartupApiTimings.ps1'
       - 'tools/Test-GitHubRateLimit.ps1'
       - 'tools/Test-ProfileSave.ps1'
+      - 'tools/Test-ProfileHistory.ps1'
       - 'tools/Test-BackendRetry.ps1'
       - 'tools/Test-BackendMirrorFreshness.ps1'
       - 'tools/Test-CfgSensitivitySync.ps1'
@@ -53,6 +54,7 @@ on:
       - 'tools/Test-StartupApiTimings.ps1'
       - 'tools/Test-GitHubRateLimit.ps1'
       - 'tools/Test-ProfileSave.ps1'
+      - 'tools/Test-ProfileHistory.ps1'
       - 'tools/Test-BackendRetry.ps1'
       - 'tools/Test-BackendMirrorFreshness.ps1'
       - 'tools/Test-CfgSensitivitySync.ps1'
@@ -126,6 +128,10 @@ jobs:
         shell: powershell
         run: |
           & "$env:GITHUB_WORKSPACE\tools\Test-ProfileSave.ps1"
+      - name: Test profile and CFG history restore staging
+        shell: powershell
+        run: |
+          & "$env:GITHUB_WORKSPACE\tools\Test-ProfileHistory.ps1"
       - name: Test pending backend write retry with isolated mocks
         shell: powershell
         run: |

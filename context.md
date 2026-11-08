@@ -42,6 +42,7 @@ Main project files:
 | Area | Implementation | Focused verification |
 | --- | --- | --- |
 | Profile editor, persistence, and backend sync | `cafe.bat`: `Show-ProfileEditor`, `Refresh-ProfileFromBackend`, `Sync-ProfileToBackend`, `Start-CafeBackendRetryHealthCheck` | `Test-ProfileSave.ps1`, `Test-BackendRetry.ps1`, `Test-BackendMirrorFreshness.ps1`, `Test-GitHubSyncAuth.ps1`, `Test-ProfileCfgSensitivity.ps1` |
+| Profile and CFG history | `cafe.bat`: `Show-ProfileEditor`, `ConvertFrom-CafeBackendProfileHistory`, `Get-CafeBackendProfileHistoryRevision` | `Test-ProfileHistory.ps1` |
 | CS2 graphics apply and history | `graphics/ApplyGraphics.ps1`; `cafe.bat`: `Invoke-GraphicsOnly`, `Get-ProfileGraphicsHistory`, backend/mirror history adapter | `Test-Graphics.ps1`, `Test-GraphicsHistory.ps1`, `Test-GraphicsHistoryAsync.ps1`, `Test-GraphicsHistoryUI.ps1`, `Test-NvidiaCompatibility.ps1`, `Test-NvidiaDvcFallback.ps1` |
 | CS2 settings capture, Extras editor, and crosshair share-code import/preview | `cafe.bat`: `Get-CafeCS2GraphicsCapture`, `Get-CafeCS2UserConvarsCapture`, `Get-CafeCS2UserKeysCapture`, `ConvertFrom-CafeCS2UserConvarsText`, `ConvertFrom-CafeCS2UserKeysText`, `Show-CafeCS2CaptureOptionsDialog`, `Show-CafeCS2CaptureReviewDialog`, `Invoke-CafeCS2CaptureReview`, `Show-CafeCS2ExtrasDialog`, `ConvertFrom-CafeCS2CrosshairShareCode`, `ConvertTo-CafeCS2CrosshairPreviewModel`, `Draw-CafeCS2CrosshairPreview`, `Show-CafeCS2CrosshairPreviewDialog` | `Test-CS2GraphicsCapture.ps1`, `Test-CfgSensitivitySync.ps1`, `Test-CrosshairShareCode.ps1` |
 | Steam/CS2 discovery and Play + Exec | `cafe.bat`: `Get-SteamLibraryRoots`, `Get-CS2SteamLaunchArguments`, `Start-CS2WithProfileCfg` | `Test-SteamPathDiscovery.ps1`, `Test-SteamLaunchOptions.ps1` |
@@ -122,21 +123,11 @@ The **CS2 / Apps** editor can load earlier graphics revisions from the backend h
 - The background completion callback receives its profile and WinForms controls through the worker instance's `RequestContext` property; it does not depend on nested PowerShell closure captures. Empty history and HTTP 404 show the no-earlier-versions state, while other failures remain visible and retryable. The request URI and status are logged for diagnosis. `tools/Test-GraphicsHistoryUI.ps1` covers callback wiring and UI recovery. See [graphics history loading diagnosis](./GRAPHICS_HISTORY_LOADING_DIAGNOSIS.md).
 - Mirror history lookup and URI validation are covered by `Test-GraphicsHistory.ps1`; normal history reads use the backend API.
 
-### Planned: Profile graphics, settings, and crosshair history (not implemented)
+### Profile and CFG history
 
-The current **Load history** covers graphics revisions. It does not provide history for profile settings or the profile CFG that stores CS2 sensitivity and crosshair convars. The backend history endpoint is authoritative; the verified public mirror supplies fallback history. The graphics history tests use local fixtures and check the background worker separately; they do not exercise the full Windows UI flow. The editor handles background completion through `RunWorkerCompleted` and request context.
+The profile editor includes a **Profile + CFG history** section in the **CS2 / Apps** tab, beside the existing graphics controls. Its backend-only **Load history** / **Refresh history** request lists earlier saved revisions for the selected profile, omitting the current revision. If a refresh fails, the error remains visible and previously loaded choices remain available; the user can retry. There is no GitHub mirror history fallback for these bundle revisions.
 
-Plan:
-
-1. Reproduce the problem on the intended branch/build. Test loading, refreshing, selecting, and restoring history; record the visible message and relevant LIVE LOGS entry. Check whether the running build matches the current source.
-2. Trace the graphics history button from its click through the background request, cache, version selection, historical file fetch, validation, and editor staging. Make failures clear for empty history, offline/network errors, GitHub limits, and deleted commits.
-3. Add history sources for each profile:
-   - **Graphics:** `graphics/<ProfileName>.json`.
-   - **Profile settings:** `profiles/<ProfileName>.json`.
-   - **Sensitivity and crosshair:** the profile CFG (for example, `fab.cfg`), using only supported sensitivity and crosshair values.
-4. Add an explicit backend history contract for each selected source; use only the verified mirror as a read fallback. Keep histories separate by profile and file, show the revision date/message and identifier, skip the current version, and provide an explicit refresh. Scope cache entries and invalidation to the selected profile and file.
-5. Validate a selected historical file with the existing schema/CFG validators, then stage only that category in the editor. Restoring must not directly edit CS2 files, save locally, or sync to the backend. CFG history must preserve unrelated current CFG commands and use the existing diff confirmation when the user later saves or syncs.
-6. Add focused mocked tests for each source, history ordering, cache refresh/invalidation, invalid or mismatched files, deleted versions, and empty/offline responses. Verify cancel leaves drafts unchanged and restore stages values only. Add a Windows UI smoke test for the complete load-select-restore flow.
+**Restore selected version** fetches the chosen immutable backend revision, validates its profile, graphics, and CFG bundle, then stages the profile settings and CFG in the open editor. It leaves the CS2 graphics preset unchanged and does not directly write the local game CFG or backend. **Save Locally** persists the staged values as pending; **Save & Sync to Backend** reviews the CFG diff and creates a new backend revision. The staged CFG is persisted with pending local edits so it survives closing and reopening the launcher. `tools/Test-ProfileHistory.ps1` covers history validation, backend detail loading with a mock, CFG staging, and retry UI behavior.
 
 
 Dashboard **Apply Graphics** is a separate action from the normal profile Apply and **Play + Exec** buttons. Saving in the editor does not apply the settings immediately.
