@@ -1946,6 +1946,7 @@ public static class FabNvApi {
         // Performance slider equivalent: NVIDIA's official slider table lists
         // Texture filtering = Quality, AA/AF = application-controlled, VSync =
         // force off, Trilinear + Anisotropic optimizations = On.
+        // Power management request: prefer maximum performance globally.
         // G-SYNC request: disable globally through driver profile. This does
         // NOT guarantee that the Set up G-SYNC checkbox is visually unchecked.
         uint[] ids = new uint[] {
@@ -1959,7 +1960,8 @@ public static class FabNvApi {
             0x1194F158, // VRR_MODE_ID: disabled
             0x1094F1F7, // VRRREQUESTSTATE_ID: disabled
             0x10A879CF, // VRR_APP_OVERRIDE_ID: force off
-            0x10A879AC  // VRR_APP_OVERRIDE_REQUEST_STATE_ID: force off
+            0x10A879AC, // VRR_APP_OVERRIDE_REQUEST_STATE_ID: force off
+            0x1057EB71 // PREFERRED_PSTATE_ID
         };
         uint[] values = new uint[] {
             0x00000000, // QUALITY_ENHANCEMENTS_QUALITY - NVIDIA slider table
@@ -1972,7 +1974,8 @@ public static class FabNvApi {
             0x00000000, // VRR_MODE_DISABLED
             0x00000000, // VRRREQUESTSTATE_DISABLED
             0x00000001, // VRR_APP_OVERRIDE_FORCE_OFF
-            0x00000001  // VRR_APP_OVERRIDE_REQUEST_STATE_FORCE_OFF
+            0x00000001, // VRR_APP_OVERRIDE_REQUEST_STATE_FORCE_OFF
+            0x00000001  // PREFERRED_PSTATE_PREFER_MAX
         };
         string[] names = new string[] {
             "Texture filtering quality = Quality (NVIDIA Performance slider table)",
@@ -1985,7 +1988,8 @@ public static class FabNvApi {
             "G-SYNC global mode = off",
             "G-SYNC global requested state = disabled",
             "G-SYNC application override = force off",
-            "G-SYNC application requested state = force off"
+            "G-SYNC application requested state = force off",
+            "Power management mode = Prefer maximum performance"
         };
 
         try {
@@ -2070,7 +2074,7 @@ public static class FabNvApi {
             }
 
             bool allOk = verifiedCount == ids.Length;
-            messages.Insert(0, "INFO: DRS global 3D + G-SYNC-off settings verified " +
+            messages.Insert(0, "INFO: DRS global 3D + power + G-SYNC-off settings verified " +
                 verifiedCount + "/" + ids.Length + ".");
             if (!allOk) messages.Add("WARN: Not every global driver setting was verified; inspect NVIDIA Control Panel.");
             report = String.Join("\n", messages.ToArray());
@@ -2442,7 +2446,7 @@ function Get-NvidiaCompatibilityScan {
             $driverProfileReport=''
             $result.DriverProfile=[FabNvApi]::TryCheckDriverProfileSupport([ref]$driverProfileReport)
             if($result.DriverProfile){$report.Add('NVIDIA driver-profile capability: available. '+$driverProfileReport)}
-            else{$report.Add('NVIDIA driver-profile capability: unavailable; performance and G-SYNC profile values will be skipped. '+$driverProfileReport)}
+            else{$report.Add('NVIDIA driver-profile capability: unavailable; performance, power, and G-SYNC profile values will be skipped. '+$driverProfileReport)}
         }catch{$result.DriverProfile=$false;$report.Add('NVIDIA driver-profile capability check failed; settings will be skipped: '+$_.Exception.Message)}
         Set-CafeStartupStatus 'Checking NVIDIA scaling support...'
         try{
@@ -2528,7 +2532,7 @@ function Apply-NvidiaGamingSettings {
 
     if($null -eq $compat -or -not $compat.NVAPI -or -not ("FabNvApi" -as [type])){
         Write-Log "NVIDIA settings skipped because the NVAPI capability preflight did not succeed." "WARN"
-        foreach($setting in @('Digital Vibrance','Hue','NVIDIA performance/G-SYNC driver profile','GPU scaling mode')){
+        foreach($setting in @('Digital Vibrance','Hue','NVIDIA global 3D/power/G-SYNC profile','GPU scaling mode')){
             Set-RunOutcome -Run $runName -Setting $setting -Requested 'Profile value' -Target 'NVIDIA display/driver' -Status SKIPPED -Detail 'NVAPI capability preflight did not succeed.'
         }
     }else{
@@ -2570,13 +2574,13 @@ function Apply-NvidiaGamingSettings {
         }
 
         if(-not $compat.DriverProfile){
-            Write-Log "Performance and G-SYNC driver-profile settings skipped: DRS profile read/save capability is unavailable." "WARN"
-            Set-RunOutcome -Run $runName -Setting 'NVIDIA performance/G-SYNC driver profile' -Requested 'Performance values; G-SYNC driver flags off' -Target 'Global NVIDIA driver profile' -Status SKIPPED -Detail 'DRS read/save capability is unavailable.'
+            Write-Log "Global 3D, power, and G-SYNC driver-profile settings skipped: DRS profile read/save capability is unavailable." "WARN"
+            Set-RunOutcome -Run $runName -Setting 'NVIDIA global 3D/power/G-SYNC profile' -Requested 'Performance values; Prefer maximum performance; G-SYNC flags off' -Target 'Global NVIDIA driver profile' -Status SKIPPED -Detail 'DRS read/save capability is unavailable.'
         }else{
             try {
                 $performanceReport = ""
                 $performanceOk = [FabNvApi]::TryApplyPerformanceProfile([ref]$performanceReport)
-                Set-RunOutcome -Run $runName -Setting 'NVIDIA performance/G-SYNC driver profile' -Requested 'Performance values; G-SYNC driver flags off' -Target 'Global NVIDIA driver profile' -Status $(if($performanceOk){'APPLIED'}else{'FALLBACK'}) -Actual $performanceReport -Detail 'Individual verified and skipped driver flags are included in the detailed result.'
+                Set-RunOutcome -Run $runName -Setting 'NVIDIA global 3D/power/G-SYNC profile' -Requested 'Performance values; Prefer maximum performance; G-SYNC flags off' -Target 'Global NVIDIA driver profile' -Status $(if($performanceOk){'APPLIED'}else{'FALLBACK'}) -Actual $performanceReport -Detail 'Individual verified and skipped driver flags are included in the detailed result.'
                 foreach ($performanceLine in ($performanceReport -split "\r?\n")) {
                     if (-not [string]::IsNullOrWhiteSpace($performanceLine)) {
                         if ($performanceLine.StartsWith("ERROR:")) {
@@ -2589,11 +2593,11 @@ function Apply-NvidiaGamingSettings {
                     }
                 }
                 if (-not $performanceOk) {
-                    Write-Log "Some NVIDIA Performance/G-SYNC-off driver profile settings were unavailable or not verified. See DRS lines." "WARN"
+                    Write-Log "Some NVIDIA global 3D/power/G-SYNC-off driver profile settings were unavailable or not verified. See DRS lines." "WARN"
                 }
             } catch {
-                Set-RunOutcome -Run $runName -Setting 'NVIDIA performance/G-SYNC driver profile' -Requested 'Performance values; G-SYNC driver flags off' -Target 'Global NVIDIA driver profile' -Status FAILED -Detail $_.Exception.Message
-                Write-Log "Performance/G-SYNC driver-profile settings were not applied: $($_.Exception.Message)" "WARN"
+                Set-RunOutcome -Run $runName -Setting 'NVIDIA global 3D/power/G-SYNC profile' -Requested 'Performance values; Prefer maximum performance; G-SYNC flags off' -Target 'Global NVIDIA driver profile' -Status FAILED -Detail $_.Exception.Message
+                Write-Log "Global 3D/power/G-SYNC driver-profile settings were not applied: $($_.Exception.Message)" "WARN"
             }
         }
 
