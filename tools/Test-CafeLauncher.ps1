@@ -643,6 +643,12 @@ if($startupSource -match 'Get-PCDiagnostics' -or
    $startupInventoryAt -ge 0){
     throw 'Startup must defer PC diagnostics and dispatch the launcher update check asynchronously.'
 }
+if($definitions['Check-CafeLauncherUpdates'] -match "Update Installed.*Click OK to restart" -or
+   $definitions['Check-CafeLauncherUpdates'] -notmatch 'restart automatically after the update is verified' -or
+   $definitions['Check-CafeLauncherUpdates'] -notmatch 'Restart-CafeLauncherAfterUpdate -Path \$source'){
+    throw 'A confirmed verified update must restart without a success acknowledgment dialog.'
+}
+
 if($definitions['Show-PCDiagnostics'] -notmatch "Name 'PC diagnostics inventory' -Group Later" -or
    $definitions['Check-CafeLauncherUpdates'] -notmatch 'CafeLauncher is up to date \(\$runningRelease\)' -or
    $definitions['Check-CafeLauncherUpdates'] -notmatch 'if \(\$Manual\).*CafeLauncher is up to date'){

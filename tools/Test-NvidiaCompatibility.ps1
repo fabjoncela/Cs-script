@@ -96,10 +96,12 @@ if($functions['Set-CafePhysxAutoSelect'] -notmatch 'NvCplPhysxAuto' -or
     throw 'PhysX Auto-select must elevate only its helper, set and verify the Auto flag, and leave the GPU identifier unchanged.'
 }
 $physxHelperCode=$functions['Set-CafePhysxAutoSelect']
-$preferredPhysxPath=$physxHelperCode.IndexOf('SYSTEM\CurrentControlSet\Services\nvlddmkm\Global\NVTweak',[StringComparison]::Ordinal)
-$fallbackPhysxPath=$physxHelperCode.IndexOf('SYSTEM\CurrentControlSet\Services\nvlddmkm\Parameters\Global\NVTweak',[StringComparison]::Ordinal)
-if($preferredPhysxPath -lt 0 -or $fallbackPhysxPath -le $preferredPhysxPath){
-    throw 'PhysX Auto-select must prefer the NVIDIA Control Panel Global\\NVTweak key before the Parameters fallback.'
+if($physxHelperCode -notmatch '\$families=@\(' -or
+   $physxHelperCode -notmatch 'Nvapi=''SYSTEM\\CurrentControlSet\\Services\\nvlddmkm\\Parameters\\NVAPI''' -or
+   $physxHelperCode -notmatch '\$nvapiKey\.GetValueNames\(\).*physxGpuId' -or
+   $physxHelperCode -notmatch '\$activeFamilies\.Count -eq 1' -or
+   $physxHelperCode -notmatch 'More than one NVIDIA PhysX registry family'){
+    throw 'PhysX Auto-select must choose the NVIDIA registry family associated with the existing GPU-selection entry and refuse ambiguous matches.'
 }
 $helperMatch=[regex]::Match($functions['Set-CafePhysxAutoSelect'], '(?s)\$helper=@''\r?\n(?<script>.*?)\r?\n''@')
 if(-not $helperMatch.Success){throw 'PhysX helper script could not be extracted for syntax validation.'}

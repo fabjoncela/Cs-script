@@ -11,7 +11,7 @@ del /q "%CAFE_RESTART_SIGNAL%" >nul 2>&1
 exit /b
 
 # POWERSHELL_GUI
-# CAFE_RELEASE=2026.11.09.5
+# CAFE_RELEASE=2026.11.09.6
 
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
@@ -2676,12 +2676,26 @@ function Set-CafePhysxAutoSelect {
 param([Parameter(Mandatory=$true)][string]$ResultPath)
 $ErrorActionPreference='Stop'
 try {
-    $paths=@(
-        'SYSTEM\CurrentControlSet\Services\nvlddmkm\Global\NVTweak',
-        'SYSTEM\CurrentControlSet\Services\nvlddmkm\Parameters\Global\NVTweak'
+    $families=@(
+        [pscustomobject]@{Nvtweak='SYSTEM\CurrentControlSet\Services\nvlddmkm\Global\NVTweak'; Nvapi='SYSTEM\CurrentControlSet\Services\nvlddmkm\NVAPI'},
+        [pscustomobject]@{Nvtweak='SYSTEM\CurrentControlSet\Services\nvlddmkm\Parameters\Global\NVTweak'; Nvapi='SYSTEM\CurrentControlSet\Services\nvlddmkm\Parameters\NVAPI'}
     )
-    $subPath=$paths | Where-Object { Test-Path -LiteralPath ('Registry::HKEY_LOCAL_MACHINE\'+$_) } | Select-Object -First 1
-    if(-not $subPath){throw 'NVIDIA PhysX settings registry key was not found.'}
+    $activeFamilies=@()
+    foreach($family in $families){
+        $nvapiKey=$null
+        try {
+            $nvapiKey=[Microsoft.Win32.Registry]::LocalMachine.OpenSubKey($family.Nvapi,$false)
+            if($nvapiKey -and @($nvapiKey.GetValueNames()) -contains 'physxGpuId'){$activeFamilies+=,$family}
+        } finally { if($nvapiKey){$nvapiKey.Dispose()} }
+    }
+    if($activeFamilies.Count -eq 1){$subPath=$activeFamilies[0].Nvtweak}
+    elseif($activeFamilies.Count -gt 1){throw 'More than one NVIDIA PhysX registry family has a GPU selection value; refusing to guess.'}
+    else {
+        $existingFamilies=@($families | Where-Object { Test-Path -LiteralPath ('Registry::HKEY_LOCAL_MACHINE\'+$_.Nvtweak) })
+        if($existingFamilies.Count -ne 1){throw 'Could not identify the active NVIDIA PhysX registry family from its physxGpuId value.'}
+        $subPath=$existingFamilies[0].Nvtweak
+    }
+    if(-not (Test-Path -LiteralPath ('Registry::HKEY_LOCAL_MACHINE\'+$subPath))){throw 'The active NVIDIA PhysX settings registry key was not found.'}
     $key=[Microsoft.Win32.Registry]::LocalMachine.OpenSubKey($subPath,$true)
     if($null -eq $key){throw 'NVIDIA PhysX settings registry key could not be opened for writing.'}
     try {
@@ -2697,7 +2711,7 @@ try {
             $key.Flush()
             throw ('NVIDIA PhysX Auto-select registry value read back as '+$actual+', expected 1.')
         }
-        $message='Auto-select requested and verified in '+$subPath+'\'+$name+' (DWORD=1); the NVIDIA GPU ID was left unchanged.'
+        $message='Auto-select requested and verified in '+$subPath+'\'+$name+' (DWORD=1); registry family matched the existing physxGpuId entry; the NVIDIA GPU ID was left unchanged.'
     } finally { $key.Dispose() }
     [IO.File]::WriteAllText($ResultPath,"APPLIED`r`n$message",[Text.Encoding]::UTF8)
     exit 0
@@ -3679,7 +3693,7 @@ function Check-CafeLauncherUpdates {
         }
         Write-Log 'A newer/different cafe.bat is available on GitHub main.' 'INFO'
         $reply=[System.Windows.Forms.MessageBox]::Show(
-            "GitHub has a different CafeLauncher build.`n`nDownload and replace your local BAT?`n`nYour currently open launcher will keep running. Reopen it to use the update.`n`nNo GitHub login required.",
+            "GitHub has a different CafeLauncher build.`n`nDownload and replace your local BAT? If you choose Yes, CafeLauncher will restart automatically after the update is verified.`n`nNo GitHub login required.",
             'CafeLauncher Update Available',
             [System.Windows.Forms.MessageBoxButtons]::YesNo,
             [System.Windows.Forms.MessageBoxIcon]::Question)
@@ -3745,7 +3759,6 @@ function Check-CafeLauncherUpdates {
                     Remove-Item -LiteralPath $staged -Force -ErrorAction SilentlyContinue
                 }
                 Write-Log "Update downloaded, syntax-checked, CRLF-normalized and installed at $source; backup: $backup"
-                [System.Windows.Forms.MessageBox]::Show("CafeLauncher updated successfully at:`n$source`n`nClick OK to restart and use the latest version.", 'Update Installed', 'OK', 'Information') | Out-Null
                 Restart-CafeLauncherAfterUpdate -Path $source
             } catch {
                 $dest=Join-Path $env:USERPROFILE 'Downloads\CafeLauncher_latest.bat'
