@@ -3327,31 +3327,66 @@ function Assert-ConfigUrl {
     }
 }
 
+function Confirm-LocalProfileCfgFallback {
+    param([Parameter(Mandatory=$true)][string]$CfgName,[Parameter(Mandatory=$true)][string]$Path,
+        [string]$Reason='Backend and GitHub mirror are unavailable.',[int]$Revision=0)
+    $hash=(Get-FileHash -LiteralPath $Path -Algorithm SHA256 -ErrorAction Stop).Hash.ToLowerInvariant()
+    $revisionText=if($Revision -gt 0){[string]$Revision}else{'unknown'}
+    $message=($Reason+"`r`n`r`nUse this local CFG for this action? It may be older than the cloud copy.`r`n`r`n"+
+        'File: '+$Path+"`r`nLast verified revision: "+$revisionText+"`r`nSHA-256: "+$hash+"`r`n`r`n"+
+        'Choose Yes to continue, or No to cancel.')
+    $answer=[System.Windows.Forms.MessageBox]::Show($message,'Confirm local CFG','YesNo','Warning','Button2')
+    if($answer -ne [System.Windows.Forms.DialogResult]::Yes){return $false}
+    Write-Log ($CfgName+' local CFG fallback explicitly confirmed; path='+$Path+'; revision='+$revisionText+'; sha256='+$hash) 'WARN'
+    return $true
+}
+
 function Get-ProfileCfgSource {
-    param([Parameter(Mandatory=$true)][string]$CfgName,[string]$DownloadUrl='',[switch]$CloudPreferred)
+    param([Parameter(Mandatory=$true)][string]$CfgName,[string]$DownloadUrl='',[switch]$CloudPreferred,$CloudSnapshot,[switch]$UseSnapshotOnly)
     if($CfgName -notmatch '^[a-z0-9_-]+\.cfg$'){throw 'Invalid profile CFG filename.'}
     $launcherDir = Split-Path -Parent $env:CAFE_SCRIPT
     if($CloudPreferred){
         $profileName=($script:GamingProfiles.Keys|Where-Object{[string]$script:GamingProfiles[$_].ConfigFile -ceq $CfgName}|Select-Object -First 1)
         if(-not $profileName){throw ('No profile owns CFG '+$CfgName+'.')}
         $cached=Join-Path $env:LOCALAPPDATA ('CafeLauncher\cfg-cache\'+$CfgName)
-        try{
-            $snapshot=Get-CafeCloudSnapshot -ProfileName ([string]$profileName)
-            $cacheDir=Split-Path -Parent $cached
-            if(-not(Test-Path -LiteralPath $cacheDir)){[void](New-Item -ItemType Directory -Path $cacheDir -Force -ErrorAction Stop)}
-            $temporary=Join-Path $cacheDir ($CfgName+'.'+[Guid]::NewGuid().ToString('N')+'.tmp')
-            try{
-                [IO.File]::WriteAllText($temporary,[string]$snapshot.Cfg,(New-Object Text.UTF8Encoding($false)))
-                Move-Item -LiteralPath $temporary -Destination $cached -Force -ErrorAction Stop
-            }finally{if(Test-Path -LiteralPath $temporary){Remove-Item -LiteralPath $temporary -Force -ErrorAction SilentlyContinue}}
-            Write-Log ($CfgName+' loaded from '+$snapshot.Source+' for installation.')
-            return [pscustomobject]@{Type='File';Value=$cached;RememberUrl=$false}
-        }catch{
-            Write-Log ('Backend and GitHub mirror CFG read failed: '+$_.Exception.Message) 'WARN'
-            if(Test-Path -LiteralPath $cached -PathType Leaf){return [pscustomobject]@{Type='File';Value=$cached;RememberUrl=$false}}
-            if($launcherDir){$localCfg=Join-Path $launcherDir $CfgName;if(Test-Path -LiteralPath $localCfg -PathType Leaf){return [pscustomobject]@{Type='File';Value=$localCfg;RememberUrl=$false}}}
-            throw ('No verified cloud or local '+$CfgName+' is available.')
+        $snapshot=$CloudSnapshot
+        $cloudError=''
+        if(-not $snapshot -and -not $UseSnapshotOnly){
+            try{$snapshot=Get-CafeCloudSnapshot -ProfileName ([string]$profileName)}
+            catch{$cloudError=$_.Exception.Message}
         }
+        if(-not $snapshot -and $UseSnapshotOnly){$cloudError='No verified profile snapshot is available for this action.'}
+        if($snapshot){
+            if([int]$snapshot.Revision -lt 1 -or [string]$snapshot.Profile.ProfileName -cne [string]$profileName){
+                throw 'The supplied cloud snapshot does not match the selected profile.'
+            }
+            [void](Get-CafeCS2CfgSensitivity -Content ([string]$snapshot.Cfg))
+            try{
+                $cacheDir=Split-Path -Parent $cached
+                if(-not(Test-Path -LiteralPath $cacheDir)){[void](New-Item -ItemType Directory -Path $cacheDir -Force -ErrorAction Stop)}
+                $temporary=Join-Path $cacheDir ($CfgName+'.'+[Guid]::NewGuid().ToString('N')+'.tmp')
+                try{
+                    [IO.File]::WriteAllText($temporary,[string]$snapshot.Cfg,(New-Object Text.UTF8Encoding($false)))
+                    Move-Item -LiteralPath $temporary -Destination $cached -Force -ErrorAction Stop
+                }finally{if(Test-Path -LiteralPath $temporary){Remove-Item -LiteralPath $temporary -Force -ErrorAction SilentlyContinue}}
+                Write-Log ($CfgName+' loaded from '+$snapshot.Source+' for installation.')
+                return [pscustomobject]@{Type='File';Value=$cached;RememberUrl=$false}
+            }catch{
+                Write-Log ('Could not cache verified '+$CfgName+'; installing from the same in-memory snapshot: '+$_.Exception.Message) 'WARN'
+                return [pscustomobject]@{Type='Content';Value=[string]$snapshot.Cfg;RememberUrl=$false}
+            }
+        }
+        Write-Log ('Backend and GitHub mirror CFG read failed: '+$cloudError) 'WARN'
+        $fallbackPath=$null
+        if(Test-Path -LiteralPath $cached -PathType Leaf){$fallbackPath=$cached}
+        if(-not $fallbackPath -and $launcherDir){$localCfg=Join-Path $launcherDir $CfgName;if(Test-Path -LiteralPath $localCfg -PathType Leaf){$fallbackPath=$localCfg}}
+        if($fallbackPath){
+            if(-not (Confirm-LocalProfileCfgFallback -CfgName $CfgName -Path $fallbackPath -Reason ('Latest cloud CFG could not be verified. '+$cloudError))){
+                throw ('Local '+$CfgName+' fallback was declined.')
+            }
+            return [pscustomobject]@{Type='File';Value=$fallbackPath;RememberUrl=$false}
+        }
+        throw ('No verified cloud or local '+$CfgName+' is available. '+$cloudError)
     }
     if ($CloudPreferred -and -not [string]::IsNullOrWhiteSpace($DownloadUrl)) {
         Assert-ConfigUrl $DownloadUrl
@@ -3398,7 +3433,9 @@ function Install-ProfileCfg {
         [switch]$Silent,
         [Parameter(Mandatory=$true)][string]$CfgName,
         [string]$DownloadUrl = '',
-        [switch]$CloudPreferred
+        [switch]$CloudPreferred,
+        $CloudSnapshot,
+        [switch]$UseSnapshotOnly
     )
     if ($CfgName -notmatch '^[A-Za-z0-9_-]+\.cfg$') {
         Write-Log "Unsafe config filename rejected: $CfgName" 'ERROR'
@@ -3409,7 +3446,7 @@ function Install-ProfileCfg {
     $cloudDownloaded = $false
     try {
         Write-Log "CS2 config installation started: $CfgName."
-        $source = Get-ProfileCfgSource -CfgName $CfgName -DownloadUrl $DownloadUrl -CloudPreferred:$CloudPreferred
+        $source = Get-ProfileCfgSource -CfgName $CfgName -DownloadUrl $DownloadUrl -CloudPreferred:$CloudPreferred -CloudSnapshot $CloudSnapshot -UseSnapshotOnly:$UseSnapshotOnly
         if (-not $source) {
             Write-Log "CS2 $CfgName installation cancelled; no file or URL selected." 'WARN'
             return $false
@@ -3421,7 +3458,12 @@ function Install-ProfileCfg {
             return $false
         }
 
-        if ($source.Type -eq 'Url') {
+        if ($source.Type -eq 'Content') {
+            $downloaded = Join-Path $env:TEMP ("CafeLauncher-{0}-{1}.cfg" -f [IO.Path]::GetFileNameWithoutExtension($CfgName), [Guid]::NewGuid().ToString('N'))
+            [IO.File]::WriteAllText($downloaded,[string]$source.Value,(New-Object Text.UTF8Encoding($false)))
+            $sourcePath = $downloaded
+            $cloudDownloaded = $true
+        } elseif ($source.Type -eq 'Url') {
             $downloaded = Join-Path $env:TEMP ("CafeLauncher-{0}-{1}.cfg" -f [IO.Path]::GetFileNameWithoutExtension($CfgName), [Guid]::NewGuid().ToString('N'))
             Write-Log "Downloading $CfgName from $($source.Value)"
             # Windows PowerShell 5.1 uses TLS 1.2 when supported by the system.
@@ -3489,7 +3531,7 @@ function Install-ProfileCfg {
                 $cacheDir = Join-Path $env:LOCALAPPDATA 'CafeLauncher\cfg-cache'
                 if (-not (Test-Path -LiteralPath $cacheDir)) { New-Item -ItemType Directory -Path $cacheDir -Force -ErrorAction Stop | Out-Null }
                 Copy-Item -LiteralPath $downloaded -Destination (Join-Path $cacheDir $CfgName) -Force -ErrorAction Stop
-                Write-Log "Latest GitHub $CfgName cached for offline use."
+                Write-Log "Verified cloud $CfgName cached for offline use."
             } catch {
                 Write-Log "Could not update offline CFG cache: $($_.Exception.Message)" 'WARN'
             }
@@ -4048,6 +4090,7 @@ $script:BackendBaseUrl = 'https://fabjon-hp.tail681ec9.ts.net:10000'
 $script:MirrorRawBase = 'https://raw.githubusercontent.com/fabjoncela/cafelauncher-backend-mirror/main'
 $script:BackendSnapshots = @{}
 $script:BackendRevisions = @{}
+$script:BackendRevisionRollbackApprovals = @{}
 $script:PendingTarget = @{}
 $script:ProfileSettingsPath = Join-Path $env:LOCALAPPDATA 'CafeLauncher\profiles.json'
 $script:PendingSync = @{}
@@ -6819,6 +6862,31 @@ function Assert-CafeCloudSnapshot {
     $sensitivity=Get-CafeCS2CfgSensitivity -Content $Cfg
     return [pscustomobject]@{Profile=$Profile;Graphics=$preset;Cfg=$Cfg;CfgSensitivity=$sensitivity;Revision=$Revision;Source=$Source}
 }
+function Confirm-CafeBackendRevisionRollback {
+    param([Parameter(Mandatory=$true)][string]$ProfileName,[Parameter(Mandatory=$true)]$Snapshot)
+    if(-not $script:BackendRevisions.ContainsKey($ProfileName)){return $true}
+    $lastVerifiedRevision=[int]$script:BackendRevisions[$ProfileName]
+    $revision=[int]$Snapshot.Revision
+    if($revision -ge $lastVerifiedRevision){return $true}
+    $approvedRevision=0
+    if($script:BackendRevisionRollbackApprovals.ContainsKey($ProfileName)){
+        $approvedRevision=[int]$script:BackendRevisionRollbackApprovals[$ProfileName]
+    }
+    if($approvedRevision -gt 0 -and $revision -ge $approvedRevision){return $true}
+    $message=($ProfileName+' backend data is at revision '+$revision+', but this PC previously verified revision '+$lastVerifiedRevision+'.'+"`r`n`r`n"+
+        'This can happen after restoring an older backend backup. Continuing may use older profile, graphics, or CFG settings.'+"`r`n`r`n"+
+        'Choose Yes only if you expect this restore. No keeps the existing local values and cancels this cloud read.')
+    $answer=[System.Windows.Forms.MessageBox]::Show($message,'Backend revision rollback warning','YesNo','Warning','Button2')
+    if($answer -ne [System.Windows.Forms.DialogResult]::Yes){
+        Set-CafeCloudReadSourceDisplay -Source 'LocalFallback'
+        Write-Log ($ProfileName+' backend revision rollback declined; local revision floor '+$lastVerifiedRevision+' was retained.') 'WARN'
+        return $false
+    }
+    $script:BackendRevisionRollbackApprovals[$ProfileName]=$revision
+    Write-Log ($ProfileName+' backend revision rollback explicitly accepted ('+$lastVerifiedRevision+' -> '+$revision+').') 'WARN'
+    return $true
+}
+
 function Get-CafeBackendSnapshot {
     param([Parameter(Mandatory=$true)][string]$ProfileName)
     if(-not $script:GamingProfiles.Contains($ProfileName)){throw 'Unknown backend profile.'}
@@ -6836,6 +6904,9 @@ function Get-CafeBackendSnapshot {
     $graphics=ConvertFrom-CafeCloudJson -Bytes $responses[1].Bytes
     $cfg=(New-Object Text.UTF8Encoding($false,$true)).GetString($responses[2].Bytes)
     $snapshot=Assert-CafeCloudSnapshot -ProfileName $ProfileName -Profile $profile -Graphics $graphics -Cfg $cfg -Revision $revision -Source 'Backend'
+    if(-not (Confirm-CafeBackendRevisionRollback -ProfileName $ProfileName -Snapshot $snapshot)){
+        throw ([System.OperationCanceledException]::new('Backend revision rollback was declined for '+$ProfileName+' ('+$revision+').'))
+    }
     Set-CafeCloudReadSourceDisplay -Source 'Backend'
     return $snapshot
 }
@@ -6873,13 +6944,18 @@ function Get-CafeCloudSnapshot {
     param([Parameter(Mandatory=$true)][string]$ProfileName,[switch]$ForceRefresh)
     try{$snapshot=Get-CafeBackendSnapshot -ProfileName $ProfileName}
     catch{
+        if($_.Exception -is [System.OperationCanceledException]){Set-CafeCloudReadSourceDisplay -Source 'LocalFallback';throw}
         Write-Log ('Backend read failed for '+$ProfileName+'; trying the GitHub mirror: '+$_.Exception.Message) 'WARN'
         try{
             $snapshot=Get-CafeMirrorSnapshot -ProfileName $ProfileName
             if($script:BackendRevisions.ContainsKey($ProfileName)){
                 $lastVerifiedRevision=[int]$script:BackendRevisions[$ProfileName]
+                if($script:BackendRevisionRollbackApprovals.ContainsKey($ProfileName)){
+                    $approvedRevision=[int]$script:BackendRevisionRollbackApprovals[$ProfileName]
+                    if($approvedRevision -lt $lastVerifiedRevision){$lastVerifiedRevision=$approvedRevision}
+                }
                 if([int]$snapshot.Revision -lt $lastVerifiedRevision){
-                    throw ('GitHub mirror revision '+$snapshot.Revision+' is older than the last verified revision '+$lastVerifiedRevision+'.')
+                    throw ('GitHub mirror revision '+$snapshot.Revision+' is older than the last accepted revision '+$lastVerifiedRevision+'.')
                 }
             }
         }
@@ -7043,6 +7119,10 @@ function Refresh-ProfileFromBackend {
         $script:GraphicsPresets[$ProfileName]=$snapshot.Graphics
         $script:GamingProfiles[$ProfileName].ScalingMode=[int]$snapshot.Graphics.ScalingMode
         $script:BackendRevisions[$ProfileName]=[int]$snapshot.Revision
+        if($script:BackendRevisionRollbackApprovals.ContainsKey($ProfileName) -and
+           [int]$snapshot.Revision -ge [int]$script:BackendRevisionRollbackApprovals[$ProfileName]){
+            [void]$script:BackendRevisionRollbackApprovals.Remove($ProfileName)
+        }
         $script:ProfileRefreshStatus[$ProfileName]=[string]$snapshot.Source
         if(-not $NoSave){try{Save-ProfileSettings}catch{Write-Log ('Could not cache backend profile: '+$_.Exception.Message) 'WARN'}}
         Write-Log ($ProfileName+' loaded from '+$snapshot.Source+' revision '+$snapshot.Revision+'.')
@@ -7080,6 +7160,13 @@ function Confirm-LocalProfileApply {
 
 function Resolve-PendingProfileChanges {
     param([Parameter(Mandatory=$true)][string]$ProfileName)
+    $queuePath=Get-CafeBackendQueuePath -ProfileName $ProfileName
+    $hasQueuedWrite=Test-Path -LiteralPath $queuePath -PathType Leaf
+    if($hasQueuedWrite -and -not $script:PendingSync[$ProfileName]){
+        $script:PendingSync[$ProfileName]=$true
+        $script:PendingTarget[$ProfileName]='Backend'
+        try{Save-ProfileSettings}catch{Write-Log ('Could not persist pending state for existing backend queue: '+$_.Exception.Message) 'WARN'}
+    }
     if(-not $script:PendingSync[$ProfileName]){return $true}
     if($script:PendingTarget[$ProfileName] -eq 'GitHubLegacy'){
         $message=($ProfileName+' has local edits saved by the older GitHub-based launcher. They will not be redirected or discarded automatically.'+
@@ -7088,11 +7175,20 @@ function Resolve-PendingProfileChanges {
         Write-Log ($ProfileName+' action blocked: old GitHub pending edits require explicit migration.') 'WARN'
         return $false
     }
-    $message=($ProfileName+' has local changes waiting to sync to the backend.'+"`r`n`r`n"+
-        'Yes = try backend sync now.'+"`r`n"+
-        'No = discard local changes after fetching the current backend version.'+"`r`n"+
-        'Cancel = keep local edits and stop this action.')
-    $choice=[System.Windows.Forms.MessageBox]::Show($message,'Resolve pending backend edits','YesNoCancel','Warning','Button3')
+    if($hasQueuedWrite){
+        $message=($ProfileName+' has a saved backend request whose result may be uncertain.'+"`r`n`r`n"+
+            'Yes = retry the exact saved request or recognize it if the backend already accepted it.'+"`r`n"+
+            'No = discard the pending edit after fetching the current backend version.'+"`r`n"+
+            'Cancel = keep the queue and local edits unchanged.')
+        $title='Resolve uncertain backend sync'
+    }else{
+        $message=($ProfileName+' has local changes waiting to sync to the backend.'+"`r`n`r`n"+
+            'Yes = try backend sync now.'+"`r`n"+
+            'No = discard local changes after fetching the current backend version.'+"`r`n"+
+            'Cancel = keep local edits and stop this action.')
+        $title='Resolve pending backend edits'
+    }
+    $choice=[System.Windows.Forms.MessageBox]::Show($message,$title,'YesNoCancel','Warning','Button3')
     if($choice -eq [System.Windows.Forms.DialogResult]::Cancel){return $false}
     if($choice -eq [System.Windows.Forms.DialogResult]::Yes){
         $token=Get-CafeBackendSyncToken -OwnerWindow $form
@@ -7128,6 +7224,10 @@ function Resolve-PendingProfileChanges {
         $script:GraphicsPresets[$ProfileName]=$snapshot.Graphics
         $script:GamingProfiles[$ProfileName].ScalingMode=[int]$snapshot.Graphics.ScalingMode
         $script:BackendRevisions[$ProfileName]=[int]$snapshot.Revision
+        if($script:BackendRevisionRollbackApprovals.ContainsKey($ProfileName) -and
+           [int]$snapshot.Revision -ge [int]$script:BackendRevisionRollbackApprovals[$ProfileName]){
+            [void]$script:BackendRevisionRollbackApprovals.Remove($ProfileName)
+        }
         $script:PendingSync[$ProfileName]=$false
         Save-ProfileSettings
         [void]$script:PendingCfgSensitivity.Remove($ProfileName)
@@ -7859,6 +7959,10 @@ function Complete-CafeBackendSync {
     $script:BackendSnapshots[$ProfileName]=$Snapshot
     $script:PendingSync[$ProfileName]=$false
     try{Save-ProfileSettings}catch{$script:PendingSync[$ProfileName]=$true;throw}
+    if($script:BackendRevisionRollbackApprovals.ContainsKey($ProfileName) -and
+       [int]$Snapshot.Revision -ge [int]$script:BackendRevisionRollbackApprovals[$ProfileName]){
+        [void]$script:BackendRevisionRollbackApprovals.Remove($ProfileName)
+    }
     [void]$script:PendingCfgSensitivity.Remove($ProfileName)
     [void]$script:PendingProfileCfgRestore.Remove($ProfileName)
     [void]$script:CapturedCS2Convars.Remove($ProfileName)
@@ -9282,6 +9386,18 @@ function Show-ProfileEditor {
     $editorFooter.Controls.Add($cancel,2,2)
     $dialog.CancelButton=$cancel
 
+    $resolveQueuedBackendWriteBeforeSave={
+        $queuePath=Get-CafeBackendQueuePath -ProfileName $ProfileName
+        if(-not (Test-Path -LiteralPath $queuePath -PathType Leaf)){return $false}
+        $pendingSyncState[$ProfileName]=$true
+        $pendingTargetState[$ProfileName]='Backend'
+        $resolved=Resolve-PendingProfileChanges -ProfileName $ProfileName
+        if($resolved){
+            $status.Text='The previous backend request was resolved. This click did not save the current editor values. Review them, then click Save again if you want to keep them.'
+            $status.ForeColor=[System.Drawing.Color]::FromArgb(255,190,105)
+        }
+        return $true
+    }.GetNewClosure()
     $saveEditorValues = {
         $sensValue=ConvertTo-CafeCS2Sensitivity -Value $sens.Text.Trim()
         $readChoiceValue={param($control)[string]$control.Tag[$control.SelectedIndex]}.GetNewClosure()
@@ -9349,7 +9465,6 @@ function Show-ProfileEditor {
         # Use the captured shared dictionary, not script: scope in this closure.
         $pendingSyncState[$ProfileName] = $true
         $pendingTargetState[$ProfileName]='Backend'
-        Clear-CafeBackendQueue -ProfileName $ProfileName
         [void]$backendRetryBlockedState.Remove($ProfileName)
         Save-ProfileSettings
         Write-Log "$ProfileName edited locally: pointer=$($p.PointerSpeed), acceleration enabled=$(-not $p.DisableAcceleration), display=$($p.Width)x$($p.Height)@$($p.RefreshHz), CS2=$($graphicsPreset.Settings.Width)x$($graphicsPreset.Settings.Height) refresh=$refreshPolicy scaling=$scalingMode, vibrance=$($p.Vibrance)%, hue=$($p.Hue) degrees, LogitechDPI=$($p.LogitechDPI), sensitivity=$sensValue."
@@ -9357,6 +9472,7 @@ function Show-ProfileEditor {
 
     $saveLocal.Add_Click({
         try {
+            if(& $resolveQueuedBackendWriteBeforeSave){return}
             & $saveEditorValues
             [System.Windows.Forms.MessageBox]::Show("$ProfileName saved locally and waiting to sync.`nChanges on a Deep Freeze PC may disappear after restart.", 'Saved locally', 'OK', 'Information') | Out-Null
             $dialog.DialogResult=[System.Windows.Forms.DialogResult]::OK
@@ -9369,6 +9485,7 @@ function Show-ProfileEditor {
 
     $saveSync.Add_Click({
         try{
+            if(& $resolveQueuedBackendWriteBeforeSave){return}
             & $saveEditorValues
             $newline=[Environment]::NewLine
             $message=('Sync '+$ProfileName+' profile, graphics, and selected CFG changes to the backend?'+$newline+
@@ -9813,7 +9930,12 @@ function Invoke-GamingProfile {
         return
     }
     if(-not (Resolve-PendingProfileChanges -ProfileName $ProfileName)){return}
-    $profileSource=Refresh-ProfileFromBackend -ProfileName $ProfileName
+    $refreshResult=Refresh-ProfileFromBackend -ProfileName $ProfileName -PassThruSnapshot
+    $profileSnapshot=$null
+    if($refreshResult -and $refreshResult.PSObject.Properties['Profile'] -and $refreshResult.PSObject.Properties['Graphics'] -and $refreshResult.PSObject.Properties['Cfg']){
+        $profileSnapshot=$refreshResult
+        $profileSource=[string]$profileSnapshot.Source
+    }else{$profileSource=[string]$refreshResult}
     if(-not (Confirm-LocalProfileApply -ProfileName $ProfileName -Source $profileSource)){return}
     if([bool]$script:GamingProfiles[$ProfileName].ApplyNvidia){
         try{
@@ -9821,7 +9943,8 @@ function Invoke-GamingProfile {
             # compatibility, but graphics/<Profile>.json is authoritative.
             # Refresh and validate it before any profile action so Apply
             # Profile and Apply Graphics cannot choose different scaling.
-            $graphicsPreset=Get-ProfileGraphicsPreset -ProfileName $ProfileName -RequireVerifiedCloud
+            if($profileSnapshot){$graphicsPreset=Get-ProfileGraphicsPreset -ProfileName $ProfileName -CloudSnapshot $profileSnapshot}
+            else{$graphicsPreset=Get-ProfileGraphicsPreset -ProfileName $ProfileName -RequireVerifiedCloud}
             $script:GamingProfiles[$ProfileName].ScalingMode=[int]$graphicsPreset.ScalingMode
             Write-Log ("$ProfileName profile apply verified graphics/$ProfileName.json from the backend or mirror; authoritative ScalingMode="+$graphicsPreset.ScalingMode+'.')
             try{Save-ProfileSettings}catch{Write-Log ("Unable to cache the verified $ProfileName scaling mode locally: "+$_.Exception.Message) 'WARN'}
@@ -9847,6 +9970,7 @@ function Invoke-GamingProfile {
         $steps += @{ Name = 'NVIDIA settings'; Action = { Apply-NvidiaGamingSettings -Width ([int]$profile.Width) -Height ([int]$profile.Height) -RefreshHz ([int]$profile.RefreshHz) -Vibrance ([int]$profile.Vibrance) -Hue ([int]$profile.Hue) -ScalingMode ([int]$profile.ScalingMode) } }
     }
     $profileCfgName = [string]$profile.ConfigFile
+    $profileCfgSnapshot=$profileSnapshot
     if (-not [string]::IsNullOrWhiteSpace($profileCfgName)) {
         $profileCfgUrl = [string]$profile.CfgDownloadUrl
         if ($ProfileName -eq 'FabMode' -and [string]::IsNullOrWhiteSpace($profileCfgUrl)) {
@@ -9854,7 +9978,7 @@ function Invoke-GamingProfile {
         }
         # Profile Apply installs its CFG without editing any Steam launch options.
         $steps += @{ Name = "Install CS2 $profileCfgName"; Action = {
-            $cfgInstalled=Install-ProfileCfg -Silent -CfgName $profileCfgName -DownloadUrl $profileCfgUrl -CloudPreferred:([bool]$profileCfgUrl)
+            $cfgInstalled=Install-ProfileCfg -Silent -CfgName $profileCfgName -DownloadUrl $profileCfgUrl -CloudPreferred:([bool]$profileCfgUrl) -CloudSnapshot $profileCfgSnapshot -UseSnapshotOnly
             Set-RunOutcome -Run $ProfileName -Setting 'CS2 profile CFG' -Requested $profileCfgName -Target 'Active Steam CS2 cfg folder' -Status $(if($cfgInstalled){'APPLIED'}else{'FAILED'}) -Actual $(if($cfgInstalled){'SHA-256 verified'}else{'not installed'}) -Detail $(if($cfgInstalled){'Selected source copied and verified.'}else{'Install-ProfileCfg did not confirm installation.'})
             if(-not $cfgInstalled){throw ('CS2 CFG install was not verified: '+$profileCfgName)}
         } }
@@ -9960,7 +10084,12 @@ function Start-CS2WithProfileCfg {
     if (-not $script:GamingProfiles.Contains($ProfileName)) { throw "Unknown CS2 profile: $ProfileName" }
     $cs2Running=[bool](Get-Process -Name 'cs2' -ErrorAction SilentlyContinue)
     if(-not (Resolve-PendingProfileChanges -ProfileName $ProfileName)){return}
-    $profileSource=Refresh-ProfileFromBackend -ProfileName $ProfileName
+    $refreshResult=Refresh-ProfileFromBackend -ProfileName $ProfileName -PassThruSnapshot
+    $profileSnapshot=$null
+    if($refreshResult -and $refreshResult.PSObject.Properties['Profile'] -and $refreshResult.PSObject.Properties['Graphics'] -and $refreshResult.PSObject.Properties['Cfg']){
+        $profileSnapshot=$refreshResult
+        $profileSource=[string]$profileSnapshot.Source
+    }else{$profileSource=[string]$refreshResult}
     if(-not (Confirm-LocalProfileApply -ProfileName $ProfileName -Source $profileSource)){return}
     $profile = $script:GamingProfiles[$ProfileName]
     $cfgName = [string]$profile.ConfigFile
@@ -9977,7 +10106,7 @@ function Start-CS2WithProfileCfg {
         $url = $script:FabCfgCloudUrl
     }
     Write-Log "$ProfileName Play + Exec: installing $cfgName before starting CS2."
-    $installed = Install-ProfileCfg -Silent -CfgName $cfgName -DownloadUrl $url -CloudPreferred:([bool]$url)
+    $installed = Install-ProfileCfg -Silent -CfgName $cfgName -DownloadUrl $url -CloudPreferred:([bool]$url) -CloudSnapshot $profileSnapshot -UseSnapshotOnly
     if ($installed -ne $true) {
         Write-Log "$ProfileName Play + Exec cancelled: $cfgName installation did not succeed." 'ERROR'
         [System.Windows.Forms.MessageBox]::Show(

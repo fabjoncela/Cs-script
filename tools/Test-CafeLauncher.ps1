@@ -569,10 +569,37 @@ if($editorSource -notmatch 'Refresh-ProfileFromBackend -ProfileName \$ProfileNam
    $editorSource -notmatch '\[void\]\$dialog\.ShowDialog\(\$form\)'){
     throw 'Opening the profile editor must refresh its profile and graphics from the backend/mirror and require explicit local fallback confirmation.'
 }
+$queuedSaveGuard='$resolveQueuedBackendWriteBeforeSave'
+$saveLocalStart=$editorSource.IndexOf('$saveLocal.Add_Click(',[StringComparison]::Ordinal)
+$saveSyncStart=$editorSource.IndexOf('$saveSync.Add_Click(',[StringComparison]::Ordinal)
+$saveLocalBlock=if($saveLocalStart -ge 0 -and $saveSyncStart -gt $saveLocalStart){$editorSource.Substring($saveLocalStart,$saveSyncStart-$saveLocalStart)}else{''}
+$saveSyncBlock=if($saveSyncStart -ge 0){$editorSource.Substring($saveSyncStart)}else{''}
+$localGuardAt=$saveLocalBlock.IndexOf("if(& $queuedSaveGuard){return}",[StringComparison]::Ordinal)
+$localSaveAt=$saveLocalBlock.IndexOf('& $saveEditorValues',[StringComparison]::Ordinal)
+$syncGuardAt=$saveSyncBlock.IndexOf("if(& $queuedSaveGuard){return}",[StringComparison]::Ordinal)
+$syncSaveAt=$saveSyncBlock.IndexOf('& $saveEditorValues',[StringComparison]::Ordinal)
+$saveEditorBlock=[regex]::Match($editorSource,'(?s)\$saveEditorValues\s*=\s*\{.*?(?=\r?\n\s*\$saveLocal\.Add_Click)')
+if($editorSource -notmatch '\$resolveQueuedBackendWriteBeforeSave\s*=\s*\{' -or
+   $localGuardAt -lt 0 -or $localSaveAt -lt $localGuardAt -or
+   $syncGuardAt -lt 0 -or $syncSaveAt -lt $syncGuardAt -or
+   -not $saveEditorBlock.Success -or $saveEditorBlock.Value -match 'Clear-CafeBackendQueue'){
+    throw 'A durable ambiguous backend request must be resolved before a new editor save and must not be cleared by local save staging.'
+}
 $graphicsReader=@($psAst.FindAll({param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Get-ProfileGraphicsPreset'},$true))
 if($graphicsReader.Count -ne 1 -or $graphicsReader[0].Extent.Text -notmatch '\[switch\]\$RequireVerifiedCloud' -or
    $graphicsReader[0].Extent.Text -notmatch 'if\(\$RequireVerifiedCloud\)\{throw'){
     throw 'Editor cloud graphics refresh must fail closed so local fallback requires a separate user confirmation.'
+}
+$cfgSourceFunction=@($psAst.FindAll({param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Get-ProfileCfgSource'},$true))
+$cfgFallbackFunction=@($psAst.FindAll({param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Confirm-LocalProfileCfgFallback'},$true))
+if($cfgSourceFunction.Count -ne 1 -or
+   $cfgSourceFunction[0].Extent.Text -notmatch '\[switch\]\$UseSnapshotOnly' -or
+   $cfgSourceFunction[0].Extent.Text -notmatch 'Confirm-LocalProfileCfgFallback' -or
+   $cfgSourceFunction[0].Extent.Text -notmatch '\$CloudSnapshot' -or
+   $cfgFallbackFunction.Count -ne 1 -or
+   $cfgFallbackFunction[0].Extent.Text -notmatch 'Get-FileHash' -or
+   $cfgFallbackFunction[0].Extent.Text -notmatch 'Button2'){
+    throw 'Apply CFG source must reuse its verified snapshot or require default-cancel confirmation with local path/hash.'
 }
 $startupTimerMatch=[regex]::Match($dashboardSource,'\$startupTimer\s*=\s*New-Object System\.Windows\.Forms\.Timer')
 if(-not $startupTimerMatch.Success){throw 'Startup update timer is missing.'}
@@ -593,11 +620,20 @@ if($pendingResolver.Count -ne 1 -or
 }
 $profileApply=@($psAst.FindAll({param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Invoke-GamingProfile'},$true))
 $graphicsApply=@($psAst.FindAll({param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Invoke-GraphicsOnly'},$true))
+$playExec=@($psAst.FindAll({param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Start-CS2WithProfileCfg'},$true))
 if($profileApply.Count -ne 1 -or $profileApply[0].Extent.Text -notmatch 'Resolve-PendingProfileChanges' -or
-   $graphicsApply.Count -ne 1 -or $graphicsApply[0].Extent.Text -notmatch 'Resolve-PendingProfileChanges'){
+   $graphicsApply.Count -ne 1 -or $graphicsApply[0].Extent.Text -notmatch 'Resolve-PendingProfileChanges' -or
+   $playExec.Count -ne 1 -or $playExec[0].Extent.Text -notmatch 'Resolve-PendingProfileChanges'){
     throw 'Profile and graphics apply actions must resolve unsynced edits before using cloud settings.'
 }
 $profileApplyBody=$profileApply[0].Extent.Text
+if($profileApplyBody -notmatch 'Refresh-ProfileFromBackend -ProfileName \$ProfileName -PassThruSnapshot' -or
+   $profileApplyBody -notmatch 'Get-ProfileGraphicsPreset -ProfileName \$ProfileName -CloudSnapshot \$profileSnapshot' -or
+   $profileApplyBody -notmatch 'Install-ProfileCfg .* -CloudSnapshot \$profileCfgSnapshot -UseSnapshotOnly' -or
+   $playExec[0].Extent.Text -notmatch 'Refresh-ProfileFromBackend -ProfileName \$ProfileName -PassThruSnapshot' -or
+   $playExec[0].Extent.Text -notmatch 'Install-ProfileCfg .* -CloudSnapshot \$profileSnapshot -UseSnapshotOnly'){
+    throw 'Apply and Play + Exec must install their CFG from the same verified profile snapshot used for refresh.'
+}
 $graphicsRefreshAt=$profileApplyBody.IndexOf('Get-ProfileGraphicsPreset -ProfileName $ProfileName -RequireVerifiedCloud',[StringComparison]::Ordinal)
 $routineStartAt=$profileApplyBody.IndexOf('full routine started',[StringComparison]::Ordinal)
 if($graphicsRefreshAt -lt 0 -or $routineStartAt -le $graphicsRefreshAt -or
