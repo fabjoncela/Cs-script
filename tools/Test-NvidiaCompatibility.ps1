@@ -24,6 +24,12 @@ $nvapiSource=$cafeSource.Substring($nvapiStart,$nvapiEnd-$nvapiStart)
 if($nvapiSource -notmatch 'TryCheckNvApiSupport'){
     throw 'NVAPI wrapper must expose a real initialization probe.'
 }
+if($nvapiSource -notmatch '0x1057EB71' -or $nvapiSource -notmatch '0x00000001  // PREFERRED_PSTATE_PREFER_MAX' -or $nvapiSource -notmatch 'Power management mode = Prefer maximum performance'){
+    throw 'Global DRS profile must request and verify Prefer maximum performance.'
+}
+if($nvapiSource -match '0x10835000|0x0005F543'){
+    throw 'Unsupported legacy Low Latency settings must not be retained in the NVAPI apply path.'
+}
 if($nvapiSource -notmatch 'Initialize\(out unload\)' -or
    $nvapiSource -notmatch 'finally\s*\{\s*if\s*\(initialized\s*&&\s*unload\s*!=\s*null\)' -or
    $nvapiSource -notmatch 'NvAPI_Initialize and NvAPI_Unload succeeded'){
