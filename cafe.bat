@@ -11,7 +11,7 @@ del /q "%CAFE_RESTART_SIGNAL%" >nul 2>&1
 exit /b
 
 # POWERSHELL_GUI
-# CAFE_RELEASE=2026.11.09.8
+# CAFE_RELEASE=2026.11.09.9
 
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
@@ -2769,8 +2769,20 @@ public static class CafePhysxNvApi {
         if($previousGpuId -isnot [byte[]] -or $previousGpuId.Length -ne 4){throw 'The active NVIDIA PhysX GPU ID has an unexpected size.'}
     } finally { $nvapiReadKey.Dispose() }
     $nvapiReport=''
-    $recommendedGpuId=[CafePhysxNvApi]::GetRecommendedPhysxGpuId([ref]$nvapiReport)
-    $gpuIdBytes=[BitConverter]::GetBytes([uint32]$recommendedGpuId)
+    $nvapiRoute='recommended GPU'
+    try {
+        $recommendedGpuId=[CafePhysxNvApi]::GetRecommendedPhysxGpuId([ref]$nvapiReport)
+        $gpuIdBytes=[BitConverter]::GetBytes([uint32]$recommendedGpuId)
+    } catch {
+        $lookupError=$_.Exception.Message
+        if($lookupError -match 'refusing to guess|invalid PhysX GPU count|GPU ID 0') { throw }
+        $existingGpuId=[BitConverter]::ToUInt32($previousGpuId,0)
+        if($existingGpuId -eq 0){throw ('NVAPI could not identify the recommended PhysX GPU and the existing GPU ID is zero; refusing to guess. '+$lookupError)}
+        $recommendedGpuId=$existingGpuId
+        $gpuIdBytes=$previousGpuId
+        $nvapiRoute='existing GPU ID fallback'
+        $nvapiReport='NVAPI recommended-GPU lookup unavailable; retaining existing nonzero GPU ID='+$existingGpuId+'. '+$lookupError
+    }
     $key=[Microsoft.Win32.Registry]::LocalMachine.OpenSubKey($subPath,$true)
     if($null -eq $key){throw 'NVIDIA PhysX settings registry key could not be opened for writing.'}
     $nvapiWriteKey=[Microsoft.Win32.Registry]::LocalMachine.OpenSubKey($nvapiPath,$true)
@@ -2781,7 +2793,7 @@ public static class CafePhysxNvApi {
         $previous=if($hadValue){$key.GetValue($name,$null,[Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)}else{$null}
         $previousKind=if($hadValue){$key.GetValueKind($name)}else{$null}
         try {
-            $nvapiWriteKey.SetValue('physxGpuId',$gpuIdBytes,[Microsoft.Win32.RegistryValueKind]::Binary)
+            if($nvapiRoute -eq 'recommended GPU'){$nvapiWriteKey.SetValue('physxGpuId',$gpuIdBytes,[Microsoft.Win32.RegistryValueKind]::Binary)}
             $key.SetValue($name,[int]1,[Microsoft.Win32.RegistryValueKind]::DWord)
             $nvapiWriteKey.Flush();$key.Flush()
             $actualGpuId=$nvapiWriteKey.GetValue('physxGpuId',$null,[Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
@@ -2789,12 +2801,12 @@ public static class CafePhysxNvApi {
             if($actualGpuId -isnot [byte[]] -or [BitConverter]::ToUInt32($actualGpuId,0) -ne $recommendedGpuId){throw 'NVIDIA PhysX GPU ID did not match the recommended NVAPI GPU ID after write.'}
             if($actualAuto -ne 1){throw 'NVIDIA PhysX Auto-select flag did not read back as 1.'}
         } catch {
-            $nvapiWriteKey.SetValue('physxGpuId',$previousGpuId,[Microsoft.Win32.RegistryValueKind]::Binary)
+            if($nvapiRoute -eq 'recommended GPU'){$nvapiWriteKey.SetValue('physxGpuId',$previousGpuId,[Microsoft.Win32.RegistryValueKind]::Binary)}
             if($hadValue){$key.SetValue($name,$previous,$previousKind)}else{$key.DeleteValue($name,$false)}
             $nvapiWriteKey.Flush();$key.Flush()
             throw
         }
-        $message='Recommended PhysX GPU ID='+$recommendedGpuId+' written and read back at '+$nvapiPath+'\physxGpuId; Auto-select flag=1 written and read back at '+$subPath+'\'+$name+'. '+$nvapiReport
+        $message='PhysX GPU ID='+$recommendedGpuId+' verified at '+$nvapiPath+'\physxGpuId via '+$nvapiRoute+'; Auto-select flag=1 written and read back at '+$subPath+'\'+$name+'. '+$nvapiReport
     } finally { $nvapiWriteKey.Dispose();$key.Dispose() }
     [IO.File]::WriteAllText($ResultPath,"APPLIED`r`n$message",[Text.Encoding]::UTF8)
     exit 0
@@ -2988,7 +3000,7 @@ function Apply-NvidiaGamingSettings {
         $physxReport=Set-CafePhysxAutoSelect
         $physxDetail=$physxReport+' Registry read-back confirms the request was written, but does not confirm the active NVIDIA Control Panel selection.'
         Write-Log ("NVIDIA PhysX | profile=$runName | requested=Auto-select | target=NVIDIA Control Panel > Configure Surround, PhysX | status=UNVERIFIED | result=$physxDetail") 'WARN'
-        Set-RunOutcome -Run $runName -Setting 'PhysX processor' -Requested 'Auto-select (recommended)' -Target 'NVIDIA Control Panel > Configure Surround, PhysX' -Status UNVERIFIED -Actual 'Recommended PhysX GPU ID and Auto-select flag read back; active selection unknown' -Detail $physxDetail
+        Set-RunOutcome -Run $runName -Setting 'PhysX processor' -Requested 'Auto-select (recommended)' -Target 'NVIDIA Control Panel > Configure Surround, PhysX' -Status UNVERIFIED -Actual 'PhysX GPU ID and Auto-select flag read back; active selection unknown' -Detail $physxDetail
     } catch {
         $physxDetail=$_.Exception.Message
         Write-Log ("NVIDIA PhysX | profile=$runName | requested=Auto-select | target=NVIDIA driver PhysX configuration | status=FAILED | detail=$physxDetail") 'WARN'

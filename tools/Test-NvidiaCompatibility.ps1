@@ -97,8 +97,13 @@ if($functions['Set-CafePhysxAutoSelect'] -notmatch 'NvCplPhysxAuto' -or
    $functions['Set-CafePhysxAutoSelect'] -notmatch 'recommendedCount!=1' -or
    $functions['Set-CafePhysxAutoSelect'] -notmatch 'SetValue\(''physxGpuId''' -or
    $functions['Set-CafePhysxAutoSelect'] -notmatch 'actualGpuId.*recommendedGpuId' -or
+   $functions['Set-CafePhysxAutoSelect'] -notmatch 'existing GPU ID fallback' -or
+   $functions['Set-CafePhysxAutoSelect'] -notmatch 'ToUInt32\(\$previousGpuId,0\)' -or
+   $functions['Set-CafePhysxAutoSelect'] -notmatch 'if\(\$existingGpuId -eq 0\)' -or
+   $functions['Set-CafePhysxAutoSelect'] -notmatch '\$lookupError -match .*refusing to guess' -or
+   $functions['Set-CafePhysxAutoSelect'] -notmatch 'if\(\$nvapiRoute -eq ''recommended GPU''\).*SetValue' -or
    $functions['Set-CafePhysxAutoSelect'] -notmatch 'refusing to guess'){
-    throw 'PhysX Auto-select must derive a unique recommended GPU ID through NVAPI, write it with the Auto flag, and verify both values.'
+    throw 'PhysX Auto-select must prefer the recommended NVAPI GPU, safely retain only a valid nonzero existing ID when lookup is unavailable, reject ambiguous data, and verify both registry values.'
 }
 $physxHelperCode=$functions['Set-CafePhysxAutoSelect']
 if($physxHelperCode -notmatch '\$families=@\(' -or
