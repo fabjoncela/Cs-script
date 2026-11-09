@@ -27,6 +27,9 @@ if($nvapiSource -notmatch 'TryCheckNvApiSupport'){
 if($nvapiSource -notmatch '0x1057EB71' -or $nvapiSource -notmatch '0x00000001  // PREFERRED_PSTATE_PREFER_MAX' -or $nvapiSource -notmatch 'Power management mode = Prefer maximum performance'){
     throw 'Global DRS profile must request and verify Prefer maximum performance.'
 }
+foreach($required in @('0x1094F157','VRR_GLOBAL_FEATURE_DISABLED','G-SYNC global feature = off')){
+    if(-not $nvapiSource.Contains($required)){throw ('Global DRS profile must disable and verify G-SYNC feature: '+$required)}
+}
 if($nvapiSource -match '0x10835000|0x0005F543'){
     throw 'Unsupported legacy Low Latency settings must not be retained in the NVAPI apply path.'
 }
@@ -50,6 +53,12 @@ foreach($required in @('TryCheckDigitalVibranceSupport','TryCheckDriverProfileSu
     if(-not $scanCode.Contains($required)){throw ('NVIDIA capability scan missing '+$required)}
 }
 $apply=$functions['Apply-NvidiaGamingSettings']
+if(-not $apply.Contains('$gSyncFeatureVerified=$performanceReport -match') -or
+   -not $apply.Contains("-Setting 'G-SYNC Control Panel checkbox'") -or
+   -not $apply.Contains("-Status APPLIED -Actual 'Off; global G-SYNC feature flag persisted and verified'") -or
+   -not $apply.Contains("-Status SKIPPED -Detail 'The global G-SYNC feature flag did not read back as Off")){
+    throw 'G-SYNC result must report APPLIED after persisted read-back, and SKIPPED when unverified.'
+}
 if($apply -notmatch 'Write-NvidiaCompatibilityScan' -or
    $apply -notmatch '\$compat\.DisplayHelper' -or
    $apply -notmatch '\$compat\.NVAPI'){

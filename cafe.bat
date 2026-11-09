@@ -1959,6 +1959,7 @@ public static class FabNvApi {
             0x002ECAF2, // PS_TEXFILTER_DISABLE_TRILIN_SLOPE_ID
             0x1194F158, // VRR_MODE_ID: disabled
             0x1094F1F7, // VRRREQUESTSTATE_ID: disabled
+            0x1094F157, // VRR_GLOBAL_FEATURE_ID: disabled
             0x10A879CF, // VRR_APP_OVERRIDE_ID: force off
             0x10A879AC, // VRR_APP_OVERRIDE_REQUEST_STATE_ID: force off
             0x1057EB71 // PREFERRED_PSTATE_ID
@@ -1973,6 +1974,7 @@ public static class FabNvApi {
             0x00000000, // leave disable-trilinear-slope OFF
             0x00000000, // VRR_MODE_DISABLED
             0x00000000, // VRRREQUESTSTATE_DISABLED
+            0x00000000, // VRR_GLOBAL_FEATURE_DISABLED
             0x00000001, // VRR_APP_OVERRIDE_FORCE_OFF
             0x00000001, // VRR_APP_OVERRIDE_REQUEST_STATE_FORCE_OFF
             0x00000001  // PREFERRED_PSTATE_PREFER_MAX
@@ -1987,6 +1989,7 @@ public static class FabNvApi {
             "Trilinear optimization related driver flag = off",
             "G-SYNC global mode = off",
             "G-SYNC global requested state = disabled",
+            "G-SYNC global feature = off",
             "G-SYNC application override = force off",
             "G-SYNC application requested state = force off",
             "Power management mode = Prefer maximum performance"
@@ -2713,6 +2716,7 @@ function Apply-NvidiaGamingSettings {
         Set-RunOutcome -Run $runName -Setting 'Windows display mode' -Requested "${Width}x${Height} @ highest advertised Hz" -Target 'DISPLAY1' -Status SKIPPED -Detail 'Display-mode helper is unavailable.'
     }
 
+    $gSyncFeatureVerified=$false
     if($null -eq $compat -or -not $compat.NVAPI -or -not ("FabNvApi" -as [type])){
         Write-Log "NVIDIA settings skipped because the NVAPI capability preflight did not succeed." "WARN"
         foreach($setting in @('Digital Vibrance','Hue','NVIDIA global 3D/power/G-SYNC profile','CS2 Low Latency Mode','GPU scaling mode')){
@@ -2764,6 +2768,7 @@ function Apply-NvidiaGamingSettings {
             try {
                 $performanceReport = ""
                 $performanceOk = [FabNvApi]::TryApplyPerformanceProfile([ref]$performanceReport)
+                $gSyncFeatureVerified=$performanceReport -match '(?m)^INFO: Verified G-SYNC global feature = off\.$'
                 Set-RunOutcome -Run $runName -Setting 'NVIDIA global 3D/power/G-SYNC profile' -Requested 'Performance values; Prefer maximum performance; G-SYNC flags off' -Target 'Global NVIDIA driver profile' -Status $(if($performanceOk){'APPLIED'}else{'FALLBACK'}) -Actual $performanceReport -Detail 'Individual verified and skipped driver flags are included in the detailed result.'
                 foreach ($performanceLine in ($performanceReport -split "\r?\n")) {
                     if (-not [string]::IsNullOrWhiteSpace($performanceLine)) {
@@ -2822,8 +2827,13 @@ function Apply-NvidiaGamingSettings {
     Set-RunOutcome -Run $runName -Setting 'PhysX processor' -Requested 'NVIDIA GPU or Auto-select' -Target 'NVIDIA Control Panel > Configure Surround, PhysX' -Status SKIPPED -Detail 'No supported launcher setter; manual selection remains required.'
     Write-Log "Still manual: Adjust desktop size and position -> enable override scaling mode set by games and programs."
     Set-RunOutcome -Run $runName -Setting 'Scaling override checkbox' -Requested 'Enabled' -Target 'NVIDIA Control Panel > Adjust desktop size and position' -Status SKIPPED -Detail 'No reliable supported launcher setter; manual change remains required.'
-    Write-Log "G-SYNC-off driver profile values were requested globally; confirm Set up G-SYNC checkbox is OFF on display 1 (this GUI checkbox itself was not toggled)."
-    Set-RunOutcome -Run $runName -Setting 'G-SYNC Control Panel checkbox' -Requested 'Off' -Target 'NVIDIA Control Panel > Set up G-SYNC' -Status SKIPPED -Detail 'Driver profile flags were requested, but the GUI checkbox was not changed.'
+    if($gSyncFeatureVerified){
+        Write-Log "G-SYNC is Off in the NVIDIA driver profile and its saved value was verified."
+        Set-RunOutcome -Run $runName -Setting 'G-SYNC Control Panel checkbox' -Requested 'Off' -Target 'NVIDIA Control Panel > Set up G-SYNC' -Status APPLIED -Actual 'Off; global G-SYNC feature flag persisted and verified' -Detail 'The driver flag was read back Off; on this workstation that controls the Control Panel G-SYNC state. The checkbox UI is not automated.'
+    }else{
+        Write-Log "G-SYNC global driver-profile feature was not verified Off; the Control Panel checkbox state is unknown." "WARN"
+        Set-RunOutcome -Run $runName -Setting 'G-SYNC Control Panel checkbox' -Requested 'Off' -Target 'NVIDIA Control Panel > Set up G-SYNC' -Status SKIPPED -Detail 'The global G-SYNC feature flag did not read back as Off; Control Panel state was not confirmed.'
+    }
     Write-Log "Opening NVIDIA Control Panel. Check the scaling override checkbox and PhysX GPU choice manually." "INFO"
     Open-NvidiaControlPanel
 }
