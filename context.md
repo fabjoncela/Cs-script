@@ -161,6 +161,7 @@ Dashboard **Apply Graphics** is a separate action from the normal profile Apply 
 ## Runtime behavior and safety boundaries
 
 - Startup PC detection is informational. It must not change monitor settings.
+- The startup update check asks before downloading a different verified GitHub build. Choosing Yes verifies the downloaded BAT, saves a backup, replaces the launcher, and restarts automatically without a success acknowledgment dialog; installation or restart failures still show guidance.
 - A normal profile Apply refreshes the selected profile immediately before applying mouse/NVIDIA settings, installing its CFG, and optionally launching configured apps. Play + Exec also refreshes the selected profile before installing its CFG. Neither starts CS2 with normal profile Apply nor writes persistent Steam launch options.
 - `Launch-ProfileApps` is the shared app-launch routine. When Launch Apps is enabled, applying any profile (FabMode, ArliMode, BrileMode, ArmlMode, OliMode, or Provmode) passes its name and opens `https://metastack.gg/` instead of Spotify. The standalone Launch All action calls the routine without a profile name and still opens Spotify; the separate Spotify tile is unchanged. Profile Apply continues to skip G HUB.
 - **Launch All** and the manual **Change DPI** input/button are in **Tools & Apps**. The DPI panel matches the other tool tiles at 198×58 px, with a compact input beside its action button. Manual DPI still validates the entered value and applies it through the existing Logitech action.
