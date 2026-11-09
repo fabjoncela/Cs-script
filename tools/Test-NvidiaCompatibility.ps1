@@ -91,9 +91,14 @@ if($functions['Set-CafePhysxAutoSelect'] -notmatch 'NvCplPhysxAuto' -or
    $functions['Set-CafePhysxAutoSelect'] -notmatch 'SetValue\(\$name,\[int\]1' -or
    $functions['Set-CafePhysxAutoSelect'] -notmatch 'GetValue\(\$name' -or
    $functions['Set-CafePhysxAutoSelect'] -notmatch 'RunAs' -or
-   $functions['Set-CafePhysxAutoSelect'] -match 'SetValue\([^\r\n]*physxGpuId' -or
-   $functions['Set-CafePhysxAutoSelect'] -notmatch 'GPU ID.*left unchanged'){
-    throw 'PhysX Auto-select must elevate only its helper, set and verify the Auto flag, and leave the GPU identifier unchanged.'
+   $functions['Set-CafePhysxAutoSelect'] -notmatch 'GetRecommendedPhysxGpuId' -or
+   $functions['Set-CafePhysxAutoSelect'] -notmatch 'NvAPI_GPU_CudaEnumComputeCapableGpus' -or
+   $functions['Set-CafePhysxAutoSelect'] -notmatch 'NvAPI_GetGPUIDfromPhysicalGPU' -or
+   $functions['Set-CafePhysxAutoSelect'] -notmatch 'recommendedCount!=1' -or
+   $functions['Set-CafePhysxAutoSelect'] -notmatch 'SetValue\(''physxGpuId''' -or
+   $functions['Set-CafePhysxAutoSelect'] -notmatch 'actualGpuId.*recommendedGpuId' -or
+   $functions['Set-CafePhysxAutoSelect'] -notmatch 'refusing to guess'){
+    throw 'PhysX Auto-select must derive a unique recommended GPU ID through NVAPI, write it with the Auto flag, and verify both values.'
 }
 $physxHelperCode=$functions['Set-CafePhysxAutoSelect']
 if($physxHelperCode -notmatch '\$families=@\(' -or
@@ -109,10 +114,14 @@ $helperTokens=$null;$helperErrors=$null
 [void][Management.Automation.Language.Parser]::ParseInput($helperMatch.Groups['script'].Value,[ref]$helperTokens,[ref]$helperErrors)
 if(@($helperErrors).Count){throw 'PhysX elevated helper script has PowerShell syntax errors.'}
 if($apply -notmatch 'Set-CafePhysxAutoSelect' -or
-   $apply -notmatch "-Setting 'PhysX processor'.*-Requested 'Auto-select \(recommended\)'.*-Status APPLIED" -or
+   $apply -notmatch "-Setting 'PhysX processor'.*-Requested 'Auto-select \(recommended\)'.*-Status UNVERIFIED" -or
    $apply -notmatch "-Setting 'PhysX processor'.*-Status FAILED" -or
    $apply -match "-Setting 'PhysX processor'.*-Status SKIPPED"){
-    throw 'Profile Apply must report PhysX Auto-select as APPLIED after registry read-back or FAILED when it could not be verified.'
+    throw 'Profile Apply must report the registry write as UNVERIFIED for the active Control Panel selection, or FAILED when the registry write itself fails.'
+}
+if($apply -notmatch 'Opening NVIDIA Control Panel.*Confirm the PhysX processor dropdown shows Auto-select' -or
+   $apply -notmatch 'active NVIDIA Control Panel selection'){
+    throw 'PhysX Apply must explain the verification limit and open NVIDIA Control Panel for a manual selection check.'
 }
 if($apply -notmatch 'Write-NvidiaCompatibilityScan' -or
    $apply -notmatch '\$compat\.DisplayHelper' -or

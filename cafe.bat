@@ -11,7 +11,7 @@ del /q "%CAFE_RESTART_SIGNAL%" >nul 2>&1
 exit /b
 
 # POWERSHELL_GUI
-# CAFE_RELEASE=2026.11.09.6
+# CAFE_RELEASE=2026.11.09.8
 
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
@@ -411,6 +411,7 @@ function Add-LiveLogLine {
         ERROR=[System.Drawing.Color]::FromArgb(255,115,115)
         PARTIAL=[System.Drawing.Color]::FromArgb(255,190,105)
         FALLBACK=[System.Drawing.Color]::FromArgb(255,190,105)
+        UNVERIFIED=[System.Drawing.Color]::FromArgb(255,190,105)
         WARN=[System.Drawing.Color]::FromArgb(255,190,105)
         SKIPPED=[System.Drawing.Color]::FromArgb(150,180,220)
         PENDING=[System.Drawing.Color]::FromArgb(150,180,220)
@@ -738,7 +739,7 @@ $script:StepScopeWarning=$false
 $script:ActiveRunName=''
 function Set-RunOutcome {
     param([string]$Run,[string]$Setting,[string]$Requested,[string]$Target,
-          [ValidateSet('APPLIED','FALLBACK','SKIPPED','FAILED','PENDING')][string]$Status,
+          [ValidateSet('APPLIED','FALLBACK','UNVERIFIED','SKIPPED','FAILED','PENDING')][string]$Status,
           [string]$Actual='',[string]$Detail='')
     if([string]::IsNullOrWhiteSpace($Run)){ $Run='Manual action' }
     foreach($old in @($script:RunOutcomes | Where-Object {$_.Run -eq $Run -and $_.Setting -eq $Setting})){
@@ -825,10 +826,10 @@ function Write-RunSummary {
         Write-Log -Message ($parts -join ' | ') -Level 'INFO' -LiveMessage ($liveParts -join ' | ')
     }
     $outcomeCounts=@{}
-    foreach($state in @('APPLIED','FALLBACK','SKIPPED','FAILED','PENDING')){
+    foreach($state in @('APPLIED','FALLBACK','UNVERIFIED','SKIPPED','FAILED','PENDING')){
         $outcomeCounts[$state]=@($outcomes | Where-Object {$_.Status -eq $state}).Count
     }
-    Write-Log ($Run+' settings: '+$outcomeCounts.APPLIED+' APPLIED, '+$outcomeCounts.FALLBACK+' FALLBACK, '+$outcomeCounts.SKIPPED+' SKIPPED, '+$outcomeCounts.FAILED+' FAILED, '+$outcomeCounts.PENDING+' PENDING') 'SUMMARY'
+    Write-Log ($Run+' settings: '+$outcomeCounts.APPLIED+' APPLIED, '+$outcomeCounts.FALLBACK+' FALLBACK, '+$outcomeCounts.UNVERIFIED+' UNVERIFIED, '+$outcomeCounts.SKIPPED+' SKIPPED, '+$outcomeCounts.FAILED+' FAILED, '+$outcomeCounts.PENDING+' PENDING') 'SUMMARY'
 }
 
 Write-Log "Launcher starting."
@@ -2676,6 +2677,68 @@ function Set-CafePhysxAutoSelect {
 param([Parameter(Mandatory=$true)][string]$ResultPath)
 $ErrorActionPreference='Stop'
 try {
+    Add-Type -TypeDefinition @"
+using System;
+using System.Runtime.InteropServices;
+
+public static class CafePhysxNvApi {
+    [DllImport("nvapi64.dll", EntryPoint="nvapi_QueryInterface", CallingConvention=CallingConvention.Cdecl)]
+    private static extern IntPtr QueryInterface(uint id);
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate int InitializeFn();
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate int UnloadFn();
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate int EnumComputeGpusFn(IntPtr topology);
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate int GetGpuIdFn(IntPtr physicalGpu, out uint gpuId);
+
+    private static T Resolve<T>(uint id) where T:class {
+        IntPtr p=QueryInterface(id);
+        if(p==IntPtr.Zero) throw new Exception("NVAPI function 0x"+id.ToString("X8")+" is unavailable.");
+        return (T)(object)Marshal.GetDelegateForFunctionPointer(p,typeof(T));
+    }
+
+    public static uint GetRecommendedPhysxGpuId(out string report) {
+        InitializeFn initialize=Resolve<InitializeFn>(0x0150E828);
+        UnloadFn unload=Resolve<UnloadFn>(0xD22BDD7E);
+        int initStatus=initialize();
+        if(initStatus!=0) throw new Exception("NvAPI_Initialize returned status "+initStatus+".");
+        try {
+            // NVIDIA's public topology enumeration is deprecated but still present in current drivers.
+            // Fail closed if it is removed, ambiguous, or returns no recommended PhysX GPU.
+            EnumComputeGpusFn enumerate=Resolve<EnumComputeGpusFn>(0x5786CC6E);
+            int entrySize=IntPtr.Size+8;
+            int countMax=8;
+            int size=8+(entrySize*countMax);
+            IntPtr topology=Marshal.AllocHGlobal(size);
+            try {
+                for(int i=0;i<size;i++) Marshal.WriteByte(topology,i,0);
+                Marshal.WriteInt32(topology,0,size | (1<<16));
+                int status=enumerate(topology);
+                if(status!=0) throw new Exception("NvAPI_GPU_CudaEnumComputeCapableGpus returned status "+status+".");
+                int count=Marshal.ReadInt32(topology,4);
+                if(count<1 || count>countMax) throw new Exception("NVAPI returned an invalid PhysX GPU count: "+count+".");
+                GetGpuIdFn getGpuId=Resolve<GetGpuIdFn>(0x6533EA3E);
+                uint recommendedId=0;
+                int recommendedCount=0;
+                for(int i=0;i<count;i++) {
+                    int offset=8+(i*entrySize);
+                    IntPtr physicalGpu=Marshal.ReadIntPtr(topology,offset);
+                    uint flags=unchecked((uint)Marshal.ReadInt32(topology,offset+IntPtr.Size));
+                    if((flags & 0x8)==0) continue;
+                    uint gpuId;
+                    int idStatus=getGpuId(physicalGpu,out gpuId);
+                    if(idStatus!=0) throw new Exception("NvAPI_GetGPUIDfromPhysicalGPU returned status "+idStatus+".");
+                    if(gpuId==0) throw new Exception("NVAPI returned GPU ID 0 for the recommended PhysX GPU.");
+                    recommendedId=gpuId;
+                    recommendedCount++;
+                }
+                if(recommendedCount!=1) throw new Exception("NVAPI identified "+recommendedCount+" recommended PhysX GPUs; refusing to guess.");
+                report="NVAPI recommended PhysX GPU ID="+recommendedId+" (topology flags)";
+                return recommendedId;
+            } finally { Marshal.FreeHGlobal(topology); }
+        } finally { unload(); }
+    }
+}
+"@ -ErrorAction Stop
+    $nvapiPath=$null
     $families=@(
         [pscustomobject]@{Nvtweak='SYSTEM\CurrentControlSet\Services\nvlddmkm\Global\NVTweak'; Nvapi='SYSTEM\CurrentControlSet\Services\nvlddmkm\NVAPI'},
         [pscustomobject]@{Nvtweak='SYSTEM\CurrentControlSet\Services\nvlddmkm\Parameters\Global\NVTweak'; Nvapi='SYSTEM\CurrentControlSet\Services\nvlddmkm\Parameters\NVAPI'}
@@ -2688,31 +2751,51 @@ try {
             if($nvapiKey -and @($nvapiKey.GetValueNames()) -contains 'physxGpuId'){$activeFamilies+=,$family}
         } finally { if($nvapiKey){$nvapiKey.Dispose()} }
     }
-    if($activeFamilies.Count -eq 1){$subPath=$activeFamilies[0].Nvtweak}
+    if($activeFamilies.Count -eq 1){$subPath=$activeFamilies[0].Nvtweak;$nvapiPath=$activeFamilies[0].Nvapi}
     elseif($activeFamilies.Count -gt 1){throw 'More than one NVIDIA PhysX registry family has a GPU selection value; refusing to guess.'}
     else {
         $existingFamilies=@($families | Where-Object { Test-Path -LiteralPath ('Registry::HKEY_LOCAL_MACHINE\'+$_.Nvtweak) })
         if($existingFamilies.Count -ne 1){throw 'Could not identify the active NVIDIA PhysX registry family from its physxGpuId value.'}
-        $subPath=$existingFamilies[0].Nvtweak
+        $subPath=$existingFamilies[0].Nvtweak;$nvapiPath=$existingFamilies[0].Nvapi
     }
     if(-not (Test-Path -LiteralPath ('Registry::HKEY_LOCAL_MACHINE\'+$subPath))){throw 'The active NVIDIA PhysX settings registry key was not found.'}
+    if(-not $nvapiPath){throw 'Could not identify the NVIDIA PhysX GPU registry key.'}
+    $nvapiReadKey=[Microsoft.Win32.Registry]::LocalMachine.OpenSubKey($nvapiPath,$false)
+    if($null -eq $nvapiReadKey){throw 'The active NVIDIA PhysX GPU registry key could not be opened for reading.'}
+    try {
+        if(@($nvapiReadKey.GetValueNames()) -notcontains 'physxGpuId'){throw 'The active NVIDIA PhysX GPU ID value was not found.'}
+        if($nvapiReadKey.GetValueKind('physxGpuId') -ne [Microsoft.Win32.RegistryValueKind]::Binary){throw 'The active NVIDIA PhysX GPU ID has an unexpected registry type.'}
+        $previousGpuId=$nvapiReadKey.GetValue('physxGpuId',$null,[Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
+        if($previousGpuId -isnot [byte[]] -or $previousGpuId.Length -ne 4){throw 'The active NVIDIA PhysX GPU ID has an unexpected size.'}
+    } finally { $nvapiReadKey.Dispose() }
+    $nvapiReport=''
+    $recommendedGpuId=[CafePhysxNvApi]::GetRecommendedPhysxGpuId([ref]$nvapiReport)
+    $gpuIdBytes=[BitConverter]::GetBytes([uint32]$recommendedGpuId)
     $key=[Microsoft.Win32.Registry]::LocalMachine.OpenSubKey($subPath,$true)
     if($null -eq $key){throw 'NVIDIA PhysX settings registry key could not be opened for writing.'}
+    $nvapiWriteKey=[Microsoft.Win32.Registry]::LocalMachine.OpenSubKey($nvapiPath,$true)
+    if($null -eq $nvapiWriteKey){$key.Dispose();throw 'NVIDIA PhysX GPU registry key could not be opened for writing.'}
     try {
         $name='NvCplPhysxAuto'
         $hadValue=@($key.GetValueNames()) -contains $name
         $previous=if($hadValue){$key.GetValue($name,$null,[Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)}else{$null}
         $previousKind=if($hadValue){$key.GetValueKind($name)}else{$null}
-        $key.SetValue($name,[int]1,[Microsoft.Win32.RegistryValueKind]::DWord)
-        $key.Flush()
-        $actual=$key.GetValue($name,$null,[Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
-        if($actual -ne 1){
+        try {
+            $nvapiWriteKey.SetValue('physxGpuId',$gpuIdBytes,[Microsoft.Win32.RegistryValueKind]::Binary)
+            $key.SetValue($name,[int]1,[Microsoft.Win32.RegistryValueKind]::DWord)
+            $nvapiWriteKey.Flush();$key.Flush()
+            $actualGpuId=$nvapiWriteKey.GetValue('physxGpuId',$null,[Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
+            $actualAuto=$key.GetValue($name,$null,[Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
+            if($actualGpuId -isnot [byte[]] -or [BitConverter]::ToUInt32($actualGpuId,0) -ne $recommendedGpuId){throw 'NVIDIA PhysX GPU ID did not match the recommended NVAPI GPU ID after write.'}
+            if($actualAuto -ne 1){throw 'NVIDIA PhysX Auto-select flag did not read back as 1.'}
+        } catch {
+            $nvapiWriteKey.SetValue('physxGpuId',$previousGpuId,[Microsoft.Win32.RegistryValueKind]::Binary)
             if($hadValue){$key.SetValue($name,$previous,$previousKind)}else{$key.DeleteValue($name,$false)}
-            $key.Flush()
-            throw ('NVIDIA PhysX Auto-select registry value read back as '+$actual+', expected 1.')
+            $nvapiWriteKey.Flush();$key.Flush()
+            throw
         }
-        $message='Auto-select requested and verified in '+$subPath+'\'+$name+' (DWORD=1); registry family matched the existing physxGpuId entry; the NVIDIA GPU ID was left unchanged.'
-    } finally { $key.Dispose() }
+        $message='Recommended PhysX GPU ID='+$recommendedGpuId+' written and read back at '+$nvapiPath+'\physxGpuId; Auto-select flag=1 written and read back at '+$subPath+'\'+$name+'. '+$nvapiReport
+    } finally { $nvapiWriteKey.Dispose();$key.Dispose() }
     [IO.File]::WriteAllText($ResultPath,"APPLIED`r`n$message",[Text.Encoding]::UTF8)
     exit 0
 } catch {
@@ -2727,9 +2810,9 @@ try {
         $start=@{FilePath='powershell.exe';ArgumentList=$arguments;PassThru=$true;WindowStyle='Hidden';ErrorAction='Stop'}
         if(-not $isAdmin){$start.Verb='RunAs'}
         $process=Start-Process @start
-        if(-not $process.WaitForExit(15000)){
+        if(-not $process.WaitForExit(30000)){
             try{$process.Kill()}catch{}
-            throw 'The elevated NVIDIA PhysX helper timed out after 15 seconds.'
+            throw 'The elevated NVIDIA PhysX helper timed out after 30 seconds.'
         }
         if(-not (Test-Path -LiteralPath $resultPath -PathType Leaf)){
             throw "The NVIDIA PhysX helper exited with code $($process.ExitCode) without a result."
@@ -2903,8 +2986,9 @@ function Apply-NvidiaGamingSettings {
     Write-Log "NVIDIA Performance-equivalent values were requested through the global driver profile; select the actual preview slider manually if the radio control must also show Performance."
     try {
         $physxReport=Set-CafePhysxAutoSelect
-        Write-Log ("NVIDIA PhysX | profile=$runName | requested=Auto-select | target=NVIDIA driver PhysX configuration | status=APPLIED | result=$physxReport")
-        Set-RunOutcome -Run $runName -Setting 'PhysX processor' -Requested 'Auto-select (recommended)' -Target 'NVIDIA Control Panel > Configure Surround, PhysX' -Status APPLIED -Actual 'Auto-select flag=1 (registry read-back)' -Detail $physxReport
+        $physxDetail=$physxReport+' Registry read-back confirms the request was written, but does not confirm the active NVIDIA Control Panel selection.'
+        Write-Log ("NVIDIA PhysX | profile=$runName | requested=Auto-select | target=NVIDIA Control Panel > Configure Surround, PhysX | status=UNVERIFIED | result=$physxDetail") 'WARN'
+        Set-RunOutcome -Run $runName -Setting 'PhysX processor' -Requested 'Auto-select (recommended)' -Target 'NVIDIA Control Panel > Configure Surround, PhysX' -Status UNVERIFIED -Actual 'Recommended PhysX GPU ID and Auto-select flag read back; active selection unknown' -Detail $physxDetail
     } catch {
         $physxDetail=$_.Exception.Message
         Write-Log ("NVIDIA PhysX | profile=$runName | requested=Auto-select | target=NVIDIA driver PhysX configuration | status=FAILED | detail=$physxDetail") 'WARN'
@@ -2919,7 +3003,7 @@ function Apply-NvidiaGamingSettings {
         Write-Log "G-SYNC global driver-profile feature was not verified Off; the Control Panel checkbox state is unknown." "WARN"
         Set-RunOutcome -Run $runName -Setting 'G-SYNC Control Panel checkbox' -Requested 'Off' -Target 'NVIDIA Control Panel > Set up G-SYNC' -Status SKIPPED -Detail 'The global G-SYNC feature flag did not read back as Off; Control Panel state was not confirmed.'
     }
-    Write-Log "Opening NVIDIA Control Panel. Check the scaling override checkbox manually." "INFO"
+    Write-Log "Opening NVIDIA Control Panel. Confirm the PhysX processor dropdown shows Auto-select; the launcher cannot verify that selection. Also check the scaling override checkbox manually." "INFO"
     Open-NvidiaControlPanel
 }
 

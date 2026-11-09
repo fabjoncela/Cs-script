@@ -36,6 +36,7 @@ Set-StepResult -Run FabMode -Step DPI -Status SUCCESS
 Set-RunOutcome -Run FabMode -Setting 'Display mode' -Requested '1920x1080 @ highest Hz' -Target 'DISPLAY1' -Status APPLIED -Actual '1920x1080 @ 360Hz' -Detail 'Read-back verified.'
 Set-RunOutcome -Run FabMode -Setting 'Digital Vibrance' -Requested '75%' -Target 'NVIDIA display' -Status FALLBACK -Actual 'legacy 47/63' -Detail 'Mapped to the queried legacy range.'
 Set-RunOutcome -Run FabMode -Setting 'Hue' -Requested 'driver default' -Target 'DISPLAY1' -Status SKIPPED -Detail 'Unsupported by this driver.'
+Set-RunOutcome -Run FabMode -Setting 'PhysX processor' -Requested 'Auto-select' -Target 'NVIDIA Control Panel' -Status UNVERIFIED -Actual 'Registry flag read back; live selection unknown' -Detail 'Check NVIDIA Control Panel.'
 Write-RunSummary -Run FabMode
 $statuses=@{}
 foreach($entry in $script:StepResults){$statuses[$entry.Step]=$entry.Status}
@@ -58,7 +59,10 @@ if(-not ($script:messages | Where-Object {$_ -match '\[INFO\] FabMode \| Digital
 if(-not ($script:messages | Where-Object {$_ -match '\[INFO\] FabMode \| Hue \| SKIPPED'})){
     throw 'Run summary must include skipped settings.'
 }
-if(-not ($script:messages | Where-Object {$_ -match '\[SUMMARY\] FabMode settings: 1 APPLIED, 1 FALLBACK, 1 SKIPPED'})){
+if(-not ($script:messages | Where-Object {$_ -match '\[INFO\] FabMode \| PhysX processor \| UNVERIFIED.*live selection unknown'})){
+    throw 'Run summary must surface PhysX settings whose registry write does not verify the active selection.'
+}
+if(-not ($script:messages | Where-Object {$_ -match '\[SUMMARY\] FabMode settings: 1 APPLIED, 1 FALLBACK, 1 UNVERIFIED, 1 SKIPPED'})){
     throw 'Run summary must count per-setting outcomes.'
 }
 if((Get-StepRecoveryAdvice -Step 'Install CS2 fab.cfg' -Status 'FAILED') -notmatch 'CS2 cfg folder'){
