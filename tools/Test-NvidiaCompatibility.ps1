@@ -12,7 +12,7 @@ $functions=@{}
 foreach($f in $ast.FindAll({param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst]},$true)){
     $functions[$f.Name]=$f.Extent.Text
 }
-foreach($name in @('Set-CafeStartupStatus','Get-NvidiaCompatibilityScan','Write-NvidiaCompatibilityScan','Apply-NvidiaGamingSettings','Set-CafePhysxAutoSelect','Get-PCDiagnostics','Invoke-GamingProfile')){
+foreach($name in @('Set-CafeStartupStatus','Get-NvidiaCompatibilityScan','Write-NvidiaCompatibilityScan','Apply-NvidiaGamingSettings','Set-CafePhysxAutoSelect','Get-PCDiagnostics','Invoke-GamingProfile','Import-ProfileValues')){
     if(-not $functions.ContainsKey($name)){throw ('Missing '+$name)}
 }
 $scanCode=$functions['Get-NvidiaCompatibilityScan']
@@ -53,6 +53,33 @@ foreach($required in @('TryCheckDigitalVibranceSupport','TryCheckDriverProfileSu
     if(-not $scanCode.Contains($required)){throw ('NVIDIA capability scan missing '+$required)}
 }
 $apply=$functions['Apply-NvidiaGamingSettings']
+if($apply -notmatch '\[ValidateRange\(0,359\)\]\[int\]\$Hue = 359' -or
+   $apply -notmatch 'TrySetHueAngle\(\$Hue' -or
+   $functions['Invoke-GamingProfile'] -notmatch 'Apply-NvidiaGamingSettings -Width.*?-Hue \(\[int\]\$profile\.Hue\)'){
+    throw 'Profile Apply must pass a valid 0-359 Hue value to the verified NVAPI setter, with a 359-degree default.'
+}
+$profileDefaultsStart=$cafeSource.IndexOf('$script:GamingProfiles = [ordered]@{',[StringComparison]::Ordinal)
+$profileDefaultsEnd=$cafeSource.IndexOf('$script:BackendBaseUrl =',[Math]::Max(0,$profileDefaultsStart),[StringComparison]::Ordinal)
+if($profileDefaultsStart -lt 0 -or $profileDefaultsEnd -le $profileDefaultsStart -or
+   [regex]::Matches($cafeSource.Substring($profileDefaultsStart,$profileDefaultsEnd-$profileDefaultsStart),'Vibrance=75; Hue=359').Count -ne 6 -or
+   $cafeSource.Substring($profileDefaultsStart,$profileDefaultsEnd-$profileDefaultsStart) -notmatch 'RefreshHz=300; Vibrance=75; Hue=359'){
+    throw 'All built-in profile defaults must request Hue 359 degrees.'
+}
+if($functions['Import-ProfileValues'] -notmatch '(?s)if\(\$value -eq -1\).*?\$value=359' -or
+   $functions['Import-ProfileValues'] -notmatch 'if \(\$value -lt 0 -or \$value -gt 359\)'){
+    throw 'Legacy profile Hue=-1 must migrate to 359 while other hue values remain limited to 0-359.'
+}
+Invoke-Expression $functions['Import-ProfileValues']
+function Write-Log { param([string]$Message,[string]$Level='INFO') }
+$script:GamingProfiles=[ordered]@{FabMode=@{Hue=0}}
+Import-ProfileValues -ProfileName 'FabMode' -SavedProfile ([pscustomobject]@{Hue=-1}) -SourceLabel 'test'
+if($script:GamingProfiles['FabMode'].Hue -ne 359){throw 'A legacy Hue=-1 profile was not migrated to 359.'}
+Import-ProfileValues -ProfileName 'FabMode' -SavedProfile ([pscustomobject]@{Hue=45}) -SourceLabel 'test'
+if($script:GamingProfiles['FabMode'].Hue -ne 45){throw 'A custom profile hue was changed during migration.'}
+if($code -notmatch "-Title 'NVIDIA Hue \(degrees\)'.*-Min 0 -Max 359" -or
+   $code -notmatch 'if\(\$historicalHue -eq -1\)\{\$historicalHue=359\}'){
+    throw 'The profile and history editors must display the migrated hue in their 0-359 degree range.'
+}
 if(-not $apply.Contains('$gSyncFeatureVerified=$performanceReport -match') -or
    -not $apply.Contains("-Setting 'G-SYNC Control Panel checkbox'") -or
    -not $apply.Contains("-Status APPLIED -Actual 'Off; global G-SYNC feature flag persisted and verified'") -or
@@ -67,6 +94,12 @@ if($functions['Set-CafePhysxAutoSelect'] -notmatch 'NvCplPhysxAuto' -or
    $functions['Set-CafePhysxAutoSelect'] -match 'SetValue\([^\r\n]*physxGpuId' -or
    $functions['Set-CafePhysxAutoSelect'] -notmatch 'GPU ID.*left unchanged'){
     throw 'PhysX Auto-select must elevate only its helper, set and verify the Auto flag, and leave the GPU identifier unchanged.'
+}
+$physxHelperCode=$functions['Set-CafePhysxAutoSelect']
+$preferredPhysxPath=$physxHelperCode.IndexOf('SYSTEM\CurrentControlSet\Services\nvlddmkm\Global\NVTweak',[StringComparison]::Ordinal)
+$fallbackPhysxPath=$physxHelperCode.IndexOf('SYSTEM\CurrentControlSet\Services\nvlddmkm\Parameters\Global\NVTweak',[StringComparison]::Ordinal)
+if($preferredPhysxPath -lt 0 -or $fallbackPhysxPath -le $preferredPhysxPath){
+    throw 'PhysX Auto-select must prefer the NVIDIA Control Panel Global\\NVTweak key before the Parameters fallback.'
 }
 $helperMatch=[regex]::Match($functions['Set-CafePhysxAutoSelect'], '(?s)\$helper=@''\r?\n(?<script>.*?)\r?\n''@')
 if(-not $helperMatch.Success){throw 'PhysX helper script could not be extracted for syntax validation.'}

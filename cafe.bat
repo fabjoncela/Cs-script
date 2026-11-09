@@ -2677,8 +2677,8 @@ param([Parameter(Mandatory=$true)][string]$ResultPath)
 $ErrorActionPreference='Stop'
 try {
     $paths=@(
-        'SYSTEM\CurrentControlSet\Services\nvlddmkm\Parameters\Global\NVTweak',
-        'SYSTEM\CurrentControlSet\Services\nvlddmkm\Global\NVTweak'
+        'SYSTEM\CurrentControlSet\Services\nvlddmkm\Global\NVTweak',
+        'SYSTEM\CurrentControlSet\Services\nvlddmkm\Parameters\Global\NVTweak'
     )
     $subPath=$paths | Where-Object { Test-Path -LiteralPath ('Registry::HKEY_LOCAL_MACHINE\'+$_) } | Select-Object -First 1
     if(-not $subPath){throw 'NVIDIA PhysX settings registry key was not found.'}
@@ -2738,7 +2738,7 @@ function Apply-NvidiaGamingSettings {
         [ValidateRange(480,4320)][int]$Height = 1080,
         [ValidateRange(30,600)][int]$RefreshHz = 360,
         [ValidateRange(0,100)][int]$Vibrance = 75,
-        [ValidateRange(-1,359)][int]$Hue = -1,
+        [ValidateRange(0,359)][int]$Hue = 359,
         [ValidateSet(2,3,5)][int]$ScalingMode = 2
     )
     $runName=if($script:StepScope){$script:StepScope.Run}elseif($script:ActiveRunName){$script:ActiveRunName}else{'Manual NVIDIA'}
@@ -3875,32 +3875,32 @@ $script:FabCfgCloudUrl = 'https://fabjon-hp.tail681ec9.ts.net:10000/v1/cfg/fab.c
 $script:GamingProfiles = [ordered]@{
     FabMode = @{
         PointerSpeed=10; LogitechDPI=800; DisableAcceleration=$true; ApplyNvidia=$true; ScalingMode=2
-        Width=1920; Height=1080; RefreshHz=360; Vibrance=75; Hue=-1
+        Width=1920; Height=1080; RefreshHz=360; Vibrance=75; Hue=359
         VoicePushToTalkKey=''; ConfigFile='fab.cfg'; CfgDownloadUrl=$script:FabCfgCloudUrl; LaunchApps=$true; LaunchWebsiteEnabled=$true; LaunchWebsiteUrl='https://metastack.gg/'
     }
     ArliMode = @{
         PointerSpeed=10; LogitechDPI=800; DisableAcceleration=$true; ApplyNvidia=$true; ScalingMode=2
-        Width=1920; Height=1080; RefreshHz=360; Vibrance=75; Hue=-1
+        Width=1920; Height=1080; RefreshHz=360; Vibrance=75; Hue=359
         VoicePushToTalkKey=''; ConfigFile='arli.cfg'; CfgDownloadUrl='https://fabjon-hp.tail681ec9.ts.net:10000/v1/cfg/arli.cfg'; LaunchApps=$true; LaunchWebsiteEnabled=$true; LaunchWebsiteUrl='https://metastack.gg/'
     }
     BrileMode = @{
         PointerSpeed=10; LogitechDPI=800; DisableAcceleration=$true; ApplyNvidia=$true; ScalingMode=2
-        Width=1920; Height=1080; RefreshHz=360; Vibrance=75; Hue=-1
+        Width=1920; Height=1080; RefreshHz=360; Vibrance=75; Hue=359
         VoicePushToTalkKey=''; ConfigFile='brile.cfg'; CfgDownloadUrl='https://fabjon-hp.tail681ec9.ts.net:10000/v1/cfg/brile.cfg'; LaunchApps=$true; LaunchWebsiteEnabled=$true; LaunchWebsiteUrl='https://metastack.gg/'
     }
     ArmlMode = @{
         PointerSpeed=10; LogitechDPI=800; DisableAcceleration=$true; ApplyNvidia=$true; ScalingMode=2
-        Width=1920; Height=1080; RefreshHz=360; Vibrance=75; Hue=-1
+        Width=1920; Height=1080; RefreshHz=360; Vibrance=75; Hue=359
         VoicePushToTalkKey=''; ConfigFile='arml.cfg'; CfgDownloadUrl='https://fabjon-hp.tail681ec9.ts.net:10000/v1/cfg/arml.cfg'; LaunchApps=$true; LaunchWebsiteEnabled=$true; LaunchWebsiteUrl='https://metastack.gg/'
     }
     OliMode = @{
         PointerSpeed=10; LogitechDPI=800; DisableAcceleration=$true; ApplyNvidia=$true; ScalingMode=2
-        Width=1920; Height=1080; RefreshHz=360; Vibrance=75; Hue=-1
+        Width=1920; Height=1080; RefreshHz=360; Vibrance=75; Hue=359
         VoicePushToTalkKey=''; ConfigFile='oli.cfg'; CfgDownloadUrl='https://fabjon-hp.tail681ec9.ts.net:10000/v1/cfg/oli.cfg'; LaunchApps=$true; LaunchWebsiteEnabled=$true; LaunchWebsiteUrl='https://metastack.gg/'
     }
     Provmode = @{
         PointerSpeed=8; LogitechDPI=350; DisableAcceleration=$true; ApplyNvidia=$true; ScalingMode=2
-        Width=1920; Height=1080; RefreshHz=300; Vibrance=75; Hue=-1
+        Width=1920; Height=1080; RefreshHz=300; Vibrance=75; Hue=359
         VoicePushToTalkKey=''; ConfigFile='prov.cfg'; CfgDownloadUrl='https://fabjon-hp.tail681ec9.ts.net:10000/v1/cfg/prov.cfg'; LaunchApps=$true; LaunchWebsiteEnabled=$true; LaunchWebsiteUrl='https://metastack.gg/'
     }
 }
@@ -6368,7 +6368,14 @@ function Import-ProfileValues {
                 'RefreshHz'    { $value=[int]$value; if ($value -lt 30 -or $value -gt 600) { throw 'range' } }
                 'ScalingMode'  { $value=[int]$value; if ($value -notin @(2,3,5)) { throw 'unsupported NVIDIA scaling mode' } }
                 'Vibrance'     { $value=[int]$value; if ($value -lt 0 -or $value -gt 100) { throw 'range' } }
-                'Hue'           { $value=[int]$value; if ($value -lt -1 -or $value -gt 359) { throw 'range' } }
+                'Hue'           {
+                    $value=[int]$value
+                    if($value -eq -1){
+                        $value=359
+                        Write-Log "Migrated legacy $SourceLabel $ProfileName Hue=-1 (driver default) to the new 359 degree Apply default."
+                    }
+                    if ($value -lt 0 -or $value -gt 359) { throw 'range' }
+                }
                 'VoicePushToTalkKey' {
                     $value=[string]$value
                     if($value -and $value -notmatch '^(?:[A-Z]|[0-9]|F(?:[1-9]|1[0-2])|MOUSE[1-5]|CAPSLOCK|ALT|SHIFT|CTRL|SPACE|TAB)$'){throw 'invalid voice key'}
@@ -8480,7 +8487,7 @@ function Show-ProfileEditor {
     $height=New-EditorTabNumber -Grid $displayGrid -Title 'Resolution height' -Column 1 -Row 0 -Min 480 -Max 4320 -Value ([int]$p.Height)
     $hz=New-EditorTabNumber -Grid $displayGrid -Title 'Refresh rate (Hz)' -Column 0 -Row 1 -Min 30 -Max 600 -Value ([int]$p.RefreshHz)
     $vibrance=New-EditorTabNumber -Grid $displayGrid -Title 'NVIDIA Digital Vibrance (%)' -Column 1 -Row 1 -Min 0 -Max 100 -Value ([int]$p.Vibrance)
-    $hue=New-EditorTabNumber -Grid $displayGrid -Title 'NVIDIA Hue (-1 = driver default)' -Column 0 -Row 2 -Min -1 -Max 359 -Value ([int]$p.Hue)
+    $hue=New-EditorTabNumber -Grid $displayGrid -Title 'NVIDIA Hue (degrees)' -Column 0 -Row 2 -Min 0 -Max 359 -Value ([int]$p.Hue)
     $brightnessHint=New-Object System.Windows.Forms.Label
     $brightnessHint.Text='Brightness is not changed by the profile; NVIDIA Control Panel default is 50%.'
     $brightnessHint.ForeColor=$MUTED
@@ -9087,7 +9094,9 @@ function Show-ProfileEditor {
             $accel.Checked= -not [bool]$historicalProfile.DisableAcceleration
             $width.Value=[decimal][int]$historicalProfile.Width;$height.Value=[decimal][int]$historicalProfile.Height
             $hz.Value=[decimal][int]$historicalProfile.RefreshHz;$vibrance.Value=[decimal][int]$historicalProfile.Vibrance
-            $hue.Value=[decimal][int]$historicalProfile.Hue;$nv.Checked=[bool]$historicalProfile.ApplyNvidia
+            $historicalHue=[int]$historicalProfile.Hue
+            if($historicalHue -eq -1){$historicalHue=359}
+            $hue.Value=[decimal]$historicalHue;$nv.Checked=[bool]$historicalProfile.ApplyNvidia
             $apps.Checked=[bool]$historicalProfile.LaunchApps;$websiteEnabled.Checked=[bool]$historicalProfile.LaunchWebsiteEnabled
             $websiteUrl.Text=[string]$historicalProfile.LaunchWebsiteUrl
             $voiceFromCfg=Get-CafeVoiceBindingFromCfg -Content ([string]$snapshot.Cfg)
