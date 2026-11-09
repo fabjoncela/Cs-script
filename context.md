@@ -28,6 +28,8 @@ The dashboard's top-right read-source label shows the most recent cloud source: 
 
 This backend client ships on `main` through the existing Google Drive launcher file. Google Drive remains a launcher distribution mirror; it does not store profile data or proxy backend API requests. The updater and graphics module download still use the original `Cs-script` repository. The pinned graphics module can accept a preset supplied by the launcher, so Apply Graphics uses the backend or verified mirror preset. Keep backend deployment and launcher distribution as separate workflows.
 
+The read-only profile viewer in the sibling `CafeLauncherBackend` repository loads its profile list, sections, field labels/groups, and enum labels from `/v1/viewer-schema`; ordinary profile and graphics values are rendered from the API response. When changing launcher profile fields, the profile roster, graphics schema, or profile/graphics/CFG API contract, run the cross-repository profile schema parity check. Backend CI checks against current `Cs-script` main, and this repository's `.github/workflows/profile-schema-parity.yml` checks launcher changes against backend main. New launcher fields/profiles must be added to backend validation and viewer metadata first; the backend can safely expose additions before the corresponding launcher change merges. Do not deploy the backend unless deployment was requested.
+
 Main project files:
 
 - `AGENTS.md` — entry-point instructions Codex automatically reads; directs it to this context file.

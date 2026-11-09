@@ -1,0 +1,41 @@
+name: Profile schema parity
+
+on:
+  push:
+    branches: ['**']
+    paths:
+      - 'cafe.bat'
+      - 'graphics/**'
+      - 'profiles/**'
+      - '.github/workflows/profile-schema-parity.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'cafe.bat'
+      - 'graphics/**'
+      - 'profiles/**'
+      - '.github/workflows/profile-schema-parity.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  schema-parity:
+    name: Check backend viewer contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check out CafeLauncher
+        uses: actions/checkout@v7
+      - name: Check out backend schema checker
+        uses: actions/checkout@v7
+        with:
+          repository: fabjoncela/cafelauncher-backend
+          path: backend
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.10'
+      - name: Check viewer and launcher schema parity
+        run: python backend/tools/check_launcher_schema.py --launcher-root .
