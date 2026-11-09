@@ -2482,6 +2482,189 @@ function Write-NvidiaCompatibilityScan {
     return $scan
 }
 
+# Set NVIDIA's driver-level Low Latency Mode for CS2 only. NVIDIA's DRS setter
+# for this setting is unsupported by the public NVAPI SDK and currently needs
+# an elevated process, so run a narrowly scoped helper and verify persisted
+# values before reporting success. This does not change other game profiles.
+function Set-CafeCs2DriverLowLatencyUltra {
+    $helperPath=Join-Path $env:TEMP ('CafeLauncher-LowLatency-'+[guid]::NewGuid().ToString('N')+'.ps1')
+    $resultPath=[IO.Path]::ChangeExtension($helperPath,'.result')
+    $helper=@'
+param([Parameter(Mandatory=$true)][string]$ResultPath)
+$ErrorActionPreference='Stop'
+try {
+    Add-Type -TypeDefinition @"
+using System;
+using System.Runtime.InteropServices;
+
+public static class CafeLowLatencyNvApi {
+    [DllImport("nvapi64.dll", EntryPoint="nvapi_QueryInterface", CallingConvention=CallingConvention.Cdecl)]
+    private static extern IntPtr QueryInterface(uint id);
+
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate int InitializeFn();
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate int UnloadFn();
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate int CreateSessionFn(out IntPtr session);
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate int LoadSettingsFn(IntPtr session);
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate int SaveSettingsFn(IntPtr session);
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate int DestroySessionFn(IntPtr session);
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate int FindApplicationFn(IntPtr session, [MarshalAs(UnmanagedType.LPWStr)] string appName, out IntPtr profile, ref DrsApplicationV4 app);
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate int SetSettingNewFn(IntPtr session, IntPtr profile, IntPtr setting, uint reserved1, uint reserved2);
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate int SetSettingLegacyFn(IntPtr session, IntPtr profile, IntPtr setting);
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate int GetSettingNewFn(IntPtr session, IntPtr profile, uint settingId, IntPtr setting, ref uint reserved);
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate int GetSettingLegacyFn(IntPtr session, IntPtr profile, uint settingId, IntPtr setting);
+
+    [StructLayout(LayoutKind.Sequential, CharSet=CharSet.Unicode, Pack=4)]
+    private struct DrsApplicationV4 {
+        public uint version;
+        public uint isPredefined;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst=2048)] public string appName;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst=2048)] public string userFriendlyName;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst=2048)] public string launcher;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst=2048)] public string fileInFolder;
+        public uint flags;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst=2048)] public string commandLine;
+    }
+
+    private const int SettingSize=12320;
+    private const int SettingIdOffset=4100;
+    private const int SettingTypeOffset=4104;
+    private const int SettingValueOffset=8220;
+    private const uint PreRenderedFramesId=0x007BA09E;
+    private const uint UltraLowLatencyEnableId=0x10835000;
+    private const uint UltraLowLatencyModeId=0x0005F543;
+
+    private static T Resolve<T>(uint id) where T:class {
+        IntPtr pointer=QueryInterface(id);
+        if(pointer==IntPtr.Zero) throw new Exception("NVAPI function 0x"+id.ToString("X8")+" is unavailable.");
+        return (T)(object)Marshal.GetDelegateForFunctionPointer(pointer,typeof(T));
+    }
+
+    private static IntPtr NewSetting(uint id, uint value) {
+        IntPtr p=Marshal.AllocHGlobal(SettingSize);
+        Marshal.Copy(new byte[SettingSize],0,p,SettingSize);
+        Marshal.WriteInt32(p,0,SettingSize | (1 << 16));
+        Marshal.WriteInt32(p,SettingIdOffset,unchecked((int)id));
+        Marshal.WriteInt32(p,SettingTypeOffset,0);
+        Marshal.WriteInt32(p,SettingValueOffset,unchecked((int)value));
+        return p;
+    }
+
+    private static int Set(IntPtr session, IntPtr profile, uint id, uint value) {
+        IntPtr p=NewSetting(id,value);
+        try {
+            IntPtr newer=QueryInterface(0x8A2CF5F5);
+            if(newer!=IntPtr.Zero) return ((SetSettingNewFn)Marshal.GetDelegateForFunctionPointer(newer,typeof(SetSettingNewFn)))(session,profile,p,0,0);
+            return Resolve<SetSettingLegacyFn>(0x577DD202)(session,profile,p);
+        } finally { Marshal.FreeHGlobal(p); }
+    }
+
+    private static uint Read(IntPtr session, IntPtr profile, uint id) {
+        IntPtr p=NewSetting(id,0);
+        try {
+            IntPtr newer=QueryInterface(0xEA99498D);
+            int status;
+            if(newer!=IntPtr.Zero) {
+                uint reserved=0;
+                status=((GetSettingNewFn)Marshal.GetDelegateForFunctionPointer(newer,typeof(GetSettingNewFn)))(session,profile,id,p,ref reserved);
+            } else {
+                status=Resolve<GetSettingLegacyFn>(0x73BF8338)(session,profile,id,p);
+            }
+            if(status!=0) throw new Exception("DRS_GetSetting(0x"+id.ToString("X8")+") returned NVAPI status "+status+".");
+            return unchecked((uint)Marshal.ReadInt32(p,SettingValueOffset));
+        } finally { Marshal.FreeHGlobal(p); }
+    }
+
+    private static IntPtr FindCs2Profile(IntPtr session) {
+        DrsApplicationV4 app=new DrsApplicationV4();
+        app.version=(uint)(Marshal.SizeOf(typeof(DrsApplicationV4)) | (4 << 16));
+        app.appName="cs2.exe";
+        app.userFriendlyName=""; app.launcher=""; app.fileInFolder=""; app.commandLine="";
+        IntPtr profile;
+        int status=Resolve<FindApplicationFn>(0xEEE566B2)(session,"cs2.exe",out profile,ref app);
+        if(status!=0 || profile==IntPtr.Zero) throw new Exception("Could not find the NVIDIA driver profile associated with cs2.exe (NVAPI status "+status+").");
+        return profile;
+    }
+
+    private static IntPtr OpenLoadedSession(out DestroySessionFn destroy) {
+        IntPtr session=IntPtr.Zero;
+        CreateSessionFn create=Resolve<CreateSessionFn>(0x0694D52E);
+        destroy=Resolve<DestroySessionFn>(0xDAD9CFF8);
+        int status=create(out session);
+        if(status!=0 || session==IntPtr.Zero) throw new Exception("DRS_CreateSession returned NVAPI status "+status+".");
+        status=Resolve<LoadSettingsFn>(0x375DBD6B)(session);
+        if(status!=0) { destroy(session); throw new Exception("DRS_LoadSettings returned NVAPI status "+status+"."); }
+        return session;
+    }
+
+    public static string ApplyUltraAndVerify() {
+        UnloadFn unload=null;
+        bool initialized=false;
+        IntPtr session=IntPtr.Zero;
+        DestroySessionFn destroy=null;
+        try {
+            int status=Resolve<InitializeFn>(0x0150E828)();
+            if(status!=0) throw new Exception("NvAPI_Initialize returned status "+status+".");
+            initialized=true;
+            unload=Resolve<UnloadFn>(0xD22BDD7E);
+            session=OpenLoadedSession(out destroy);
+            IntPtr profile=FindCs2Profile(session);
+            uint[] ids={PreRenderedFramesId,UltraLowLatencyEnableId,UltraLowLatencyModeId};
+            uint[] values={1,1,2};
+            for(int i=0;i<ids.Length;i++) {
+                status=Set(session,profile,ids[i],values[i]);
+                if(status!=0) throw new Exception("DRS_SetSetting(0x"+ids[i].ToString("X8")+") returned NVAPI status "+status+".");
+            }
+            status=Resolve<SaveSettingsFn>(0xFCBC7E14)(session);
+            if(status!=0) throw new Exception("DRS_SaveSettings returned NVAPI status "+status+".");
+            destroy(session); session=IntPtr.Zero;
+            session=OpenLoadedSession(out destroy);
+            profile=FindCs2Profile(session);
+            for(int i=0;i<ids.Length;i++) {
+                uint actual=Read(session,profile,ids[i]);
+                if(actual!=values[i]) throw new Exception("Saved setting 0x"+ids[i].ToString("X8")+" read back as "+actual+", expected "+values[i]+".");
+            }
+            return "CS2 NVIDIA driver profile Low Latency Mode is set to Ultra and persisted values were verified (pre-rendered frames=1, Ultra Low Latency enabled=1, mode=2).";
+        } finally {
+            if(session!=IntPtr.Zero && destroy!=null) { try { destroy(session); } catch {} }
+            if(initialized && unload!=null) { try { unload(); } catch {} }
+        }
+    }
+}
+"@ -ErrorAction Stop
+    $result=[CafeLowLatencyNvApi]::ApplyUltraAndVerify()
+    [IO.File]::WriteAllText($ResultPath,"APPLIED`r`n$result",[Text.Encoding]::UTF8)
+    exit 0
+} catch {
+    [IO.File]::WriteAllText($ResultPath,"FAILED`r`n$($_.Exception.Message)",[Text.Encoding]::UTF8)
+    exit 1
+}
+'@
+    try {
+        [IO.File]::WriteAllText($helperPath,$helper,[Text.Encoding]::UTF8)
+        $arguments='-NoProfile -ExecutionPolicy Bypass -File "'+$helperPath+'" -ResultPath "'+$resultPath+'"'
+        $isAdmin=([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+        $start=@{FilePath='powershell.exe';ArgumentList=$arguments;PassThru=$true;WindowStyle='Hidden';ErrorAction='Stop'}
+        if(-not $isAdmin){$start.Verb='RunAs'}
+        $process=Start-Process @start
+        if(-not $process.WaitForExit(30000)){
+            try{$process.Kill()}catch{}
+            throw 'The elevated NVIDIA Low Latency helper timed out after 30 seconds.'
+        }
+        if(-not (Test-Path -LiteralPath $resultPath -PathType Leaf)){
+            throw "The NVIDIA Low Latency helper exited with code $($process.ExitCode) without a result."
+        }
+        $result=[IO.File]::ReadAllText($resultPath,[Text.Encoding]::UTF8).Trim()
+        if($result -notmatch '^APPLIED\r?\n'){
+            throw (($result -replace '^FAILED\r?\n','') -replace '\s+$','')
+        }
+        return $result -replace '^APPLIED\r?\n',''
+    } catch {
+        throw ('CS2 Low Latency Mode Ultra was not applied: '+$_.Exception.Message)
+    } finally {
+        Remove-Item -LiteralPath $helperPath,$resultPath -Force -ErrorAction SilentlyContinue
+    }
+}
+
 function Apply-NvidiaGamingSettings {
     param(
         [ValidateRange(640,7680)][int]$Width = 1920,
@@ -2532,8 +2715,9 @@ function Apply-NvidiaGamingSettings {
 
     if($null -eq $compat -or -not $compat.NVAPI -or -not ("FabNvApi" -as [type])){
         Write-Log "NVIDIA settings skipped because the NVAPI capability preflight did not succeed." "WARN"
-        foreach($setting in @('Digital Vibrance','Hue','NVIDIA global 3D/power/G-SYNC profile','GPU scaling mode')){
-            Set-RunOutcome -Run $runName -Setting $setting -Requested 'Profile value' -Target 'NVIDIA display/driver' -Status SKIPPED -Detail 'NVAPI capability preflight did not succeed.'
+        foreach($setting in @('Digital Vibrance','Hue','NVIDIA global 3D/power/G-SYNC profile','CS2 Low Latency Mode','GPU scaling mode')){
+            $requested=if($setting -eq 'CS2 Low Latency Mode'){'Ultra'}else{'Profile value'}
+            Set-RunOutcome -Run $runName -Setting $setting -Requested $requested -Target 'NVIDIA display/driver' -Status SKIPPED -Detail 'NVAPI capability preflight did not succeed.'
         }
     }else{
         if(-not $compat.Vibrance){
@@ -2599,6 +2783,15 @@ function Apply-NvidiaGamingSettings {
                 Set-RunOutcome -Run $runName -Setting 'NVIDIA global 3D/power/G-SYNC profile' -Requested 'Performance values; Prefer maximum performance; G-SYNC flags off' -Target 'Global NVIDIA driver profile' -Status FAILED -Detail $_.Exception.Message
                 Write-Log "Global 3D/power/G-SYNC driver-profile settings were not applied: $($_.Exception.Message)" "WARN"
             }
+        }
+
+        try{
+            $lowLatencyReport=Set-CafeCs2DriverLowLatencyUltra
+            Write-Log $lowLatencyReport
+            Set-RunOutcome -Run $runName -Setting 'CS2 Low Latency Mode' -Requested 'Ultra' -Target 'NVIDIA profile associated with cs2.exe' -Status APPLIED -Actual 'Ultra; persisted NVAPI values read back' -Detail $lowLatencyReport
+        }catch{
+            Write-Log $_.Exception.Message 'WARN'
+            Set-RunOutcome -Run $runName -Setting 'CS2 Low Latency Mode' -Requested 'Ultra' -Target 'NVIDIA profile associated with cs2.exe' -Status FAILED -Detail $_.Exception.Message
         }
 
         $scalingName=switch($ScalingMode){2{'Stretch to fill'}3{'Center without scaling'}5{'Keep aspect ratio'}}
