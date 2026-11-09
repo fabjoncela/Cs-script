@@ -258,6 +258,8 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tools\Test-CrosshairSh
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tools\Test-Graphics.ps1
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tools\Test-GraphicsHistory.ps1
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tools\Test-GraphicsHistoryAsync.ps1
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tools\Test-GraphicsHistoryUI.ps1
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tools\Test-ProfileHistory.ps1
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tools\Test-NvidiaCompatibility.ps1
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tools\Test-NvidiaDvcFallback.ps1
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tools\Test-SteamPathDiscovery.ps1
