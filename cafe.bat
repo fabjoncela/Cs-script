@@ -2668,6 +2668,70 @@ public static class CafeLowLatencyNvApi {
     }
 }
 
+function Set-CafePhysxAutoSelect {
+    $suffix=[Guid]::NewGuid().ToString('N')
+    $helperPath=Join-Path $env:TEMP ('CafePhysxAuto-'+$suffix+'.ps1')
+    $resultPath=Join-Path $env:TEMP ('CafePhysxAuto-'+$suffix+'.result')
+    $helper=@'
+param([Parameter(Mandatory=$true)][string]$ResultPath)
+$ErrorActionPreference='Stop'
+try {
+    $paths=@(
+        'SYSTEM\CurrentControlSet\Services\nvlddmkm\Parameters\Global\NVTweak',
+        'SYSTEM\CurrentControlSet\Services\nvlddmkm\Global\NVTweak'
+    )
+    $subPath=$paths | Where-Object { Test-Path -LiteralPath ('Registry::HKEY_LOCAL_MACHINE\'+$_) } | Select-Object -First 1
+    if(-not $subPath){throw 'NVIDIA PhysX settings registry key was not found.'}
+    $key=[Microsoft.Win32.Registry]::LocalMachine.OpenSubKey($subPath,$true)
+    if($null -eq $key){throw 'NVIDIA PhysX settings registry key could not be opened for writing.'}
+    try {
+        $name='NvCplPhysxAuto'
+        $hadValue=@($key.GetValueNames()) -contains $name
+        $previous=if($hadValue){$key.GetValue($name,$null,[Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)}else{$null}
+        $previousKind=if($hadValue){$key.GetValueKind($name)}else{$null}
+        $key.SetValue($name,[int]1,[Microsoft.Win32.RegistryValueKind]::DWord)
+        $key.Flush()
+        $actual=$key.GetValue($name,$null,[Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
+        if($actual -ne 1){
+            if($hadValue){$key.SetValue($name,$previous,$previousKind)}else{$key.DeleteValue($name,$false)}
+            $key.Flush()
+            throw ('NVIDIA PhysX Auto-select registry value read back as '+$actual+', expected 1.')
+        }
+        $message='Auto-select requested and verified in '+$subPath+'\'+$name+' (DWORD=1); the NVIDIA GPU ID was left unchanged.'
+    } finally { $key.Dispose() }
+    [IO.File]::WriteAllText($ResultPath,"APPLIED`r`n$message",[Text.Encoding]::UTF8)
+    exit 0
+} catch {
+    [IO.File]::WriteAllText($ResultPath,"FAILED`r`n$($_.Exception.Message)",[Text.Encoding]::UTF8)
+    exit 1
+}
+'@
+    try {
+        [IO.File]::WriteAllText($helperPath,$helper,[Text.Encoding]::UTF8)
+        $arguments='-NoProfile -ExecutionPolicy Bypass -File "'+$helperPath+'" -ResultPath "'+$resultPath+'"'
+        $isAdmin=([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+        $start=@{FilePath='powershell.exe';ArgumentList=$arguments;PassThru=$true;WindowStyle='Hidden';ErrorAction='Stop'}
+        if(-not $isAdmin){$start.Verb='RunAs'}
+        $process=Start-Process @start
+        if(-not $process.WaitForExit(15000)){
+            try{$process.Kill()}catch{}
+            throw 'The elevated NVIDIA PhysX helper timed out after 15 seconds.'
+        }
+        if(-not (Test-Path -LiteralPath $resultPath -PathType Leaf)){
+            throw "The NVIDIA PhysX helper exited with code $($process.ExitCode) without a result."
+        }
+        $result=[IO.File]::ReadAllText($resultPath,[Text.Encoding]::UTF8).Trim()
+        if($result -notmatch '^APPLIED\r?\n'){
+            throw (($result -replace '^FAILED\r?\n','') -replace '\s+$','')
+        }
+        return $result -replace '^APPLIED\r?\n',''
+    } catch {
+        throw ('NVIDIA PhysX Auto-select was not applied: '+$_.Exception.Message)
+    } finally {
+        Remove-Item -LiteralPath $helperPath,$resultPath -Force -ErrorAction SilentlyContinue
+    }
+}
+
 function Apply-NvidiaGamingSettings {
     param(
         [ValidateRange(640,7680)][int]$Width = 1920,
@@ -2823,8 +2887,15 @@ function Apply-NvidiaGamingSettings {
     }
 
     Write-Log "NVIDIA Performance-equivalent values were requested through the global driver profile; select the actual preview slider manually if the radio control must also show Performance."
-    Write-Log "Still manual: Configure Surround, PhysX -> select the NVIDIA GPU."
-    Set-RunOutcome -Run $runName -Setting 'PhysX processor' -Requested 'NVIDIA GPU or Auto-select' -Target 'NVIDIA Control Panel > Configure Surround, PhysX' -Status SKIPPED -Detail 'No supported launcher setter; manual selection remains required.'
+    try {
+        $physxReport=Set-CafePhysxAutoSelect
+        Write-Log ("NVIDIA PhysX | profile=$runName | requested=Auto-select | target=NVIDIA driver PhysX configuration | status=APPLIED | result=$physxReport")
+        Set-RunOutcome -Run $runName -Setting 'PhysX processor' -Requested 'Auto-select (recommended)' -Target 'NVIDIA Control Panel > Configure Surround, PhysX' -Status APPLIED -Actual 'Auto-select flag=1 (registry read-back)' -Detail $physxReport
+    } catch {
+        $physxDetail=$_.Exception.Message
+        Write-Log ("NVIDIA PhysX | profile=$runName | requested=Auto-select | target=NVIDIA driver PhysX configuration | status=FAILED | detail=$physxDetail") 'WARN'
+        Set-RunOutcome -Run $runName -Setting 'PhysX processor' -Requested 'Auto-select (recommended)' -Target 'NVIDIA Control Panel > Configure Surround, PhysX' -Status FAILED -Detail $physxDetail
+    }
     Write-Log "Still manual: Adjust desktop size and position -> enable override scaling mode set by games and programs."
     Set-RunOutcome -Run $runName -Setting 'Scaling override checkbox' -Requested 'Enabled' -Target 'NVIDIA Control Panel > Adjust desktop size and position' -Status SKIPPED -Detail 'No reliable supported launcher setter; manual change remains required.'
     if($gSyncFeatureVerified){
@@ -2834,7 +2905,7 @@ function Apply-NvidiaGamingSettings {
         Write-Log "G-SYNC global driver-profile feature was not verified Off; the Control Panel checkbox state is unknown." "WARN"
         Set-RunOutcome -Run $runName -Setting 'G-SYNC Control Panel checkbox' -Requested 'Off' -Target 'NVIDIA Control Panel > Set up G-SYNC' -Status SKIPPED -Detail 'The global G-SYNC feature flag did not read back as Off; Control Panel state was not confirmed.'
     }
-    Write-Log "Opening NVIDIA Control Panel. Check the scaling override checkbox and PhysX GPU choice manually." "INFO"
+    Write-Log "Opening NVIDIA Control Panel. Check the scaling override checkbox manually." "INFO"
     Open-NvidiaControlPanel
 }
 

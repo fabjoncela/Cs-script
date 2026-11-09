@@ -12,7 +12,7 @@ $functions=@{}
 foreach($f in $ast.FindAll({param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst]},$true)){
     $functions[$f.Name]=$f.Extent.Text
 }
-foreach($name in @('Set-CafeStartupStatus','Get-NvidiaCompatibilityScan','Write-NvidiaCompatibilityScan','Apply-NvidiaGamingSettings','Get-PCDiagnostics','Invoke-GamingProfile')){
+foreach($name in @('Set-CafeStartupStatus','Get-NvidiaCompatibilityScan','Write-NvidiaCompatibilityScan','Apply-NvidiaGamingSettings','Set-CafePhysxAutoSelect','Get-PCDiagnostics','Invoke-GamingProfile')){
     if(-not $functions.ContainsKey($name)){throw ('Missing '+$name)}
 }
 $scanCode=$functions['Get-NvidiaCompatibilityScan']
@@ -58,6 +58,26 @@ if(-not $apply.Contains('$gSyncFeatureVerified=$performanceReport -match') -or
    -not $apply.Contains("-Status APPLIED -Actual 'Off; global G-SYNC feature flag persisted and verified'") -or
    -not $apply.Contains("-Status SKIPPED -Detail 'The global G-SYNC feature flag did not read back as Off")){
     throw 'G-SYNC result must report APPLIED after persisted read-back, and SKIPPED when unverified.'
+}
+if($functions['Set-CafePhysxAutoSelect'] -notmatch 'NvCplPhysxAuto' -or
+   $functions['Set-CafePhysxAutoSelect'] -notmatch 'RegistryValueKind\]::DWord' -or
+   $functions['Set-CafePhysxAutoSelect'] -notmatch 'SetValue\(\$name,\[int\]1' -or
+   $functions['Set-CafePhysxAutoSelect'] -notmatch 'GetValue\(\$name' -or
+   $functions['Set-CafePhysxAutoSelect'] -notmatch 'RunAs' -or
+   $functions['Set-CafePhysxAutoSelect'] -match 'SetValue\([^\r\n]*physxGpuId' -or
+   $functions['Set-CafePhysxAutoSelect'] -notmatch 'GPU ID.*left unchanged'){
+    throw 'PhysX Auto-select must elevate only its helper, set and verify the Auto flag, and leave the GPU identifier unchanged.'
+}
+$helperMatch=[regex]::Match($functions['Set-CafePhysxAutoSelect'], '(?s)\$helper=@''\r?\n(?<script>.*?)\r?\n''@')
+if(-not $helperMatch.Success){throw 'PhysX helper script could not be extracted for syntax validation.'}
+$helperTokens=$null;$helperErrors=$null
+[void][Management.Automation.Language.Parser]::ParseInput($helperMatch.Groups['script'].Value,[ref]$helperTokens,[ref]$helperErrors)
+if(@($helperErrors).Count){throw 'PhysX elevated helper script has PowerShell syntax errors.'}
+if($apply -notmatch 'Set-CafePhysxAutoSelect' -or
+   $apply -notmatch "-Setting 'PhysX processor'.*-Requested 'Auto-select \(recommended\)'.*-Status APPLIED" -or
+   $apply -notmatch "-Setting 'PhysX processor'.*-Status FAILED" -or
+   $apply -match "-Setting 'PhysX processor'.*-Status SKIPPED"){
+    throw 'Profile Apply must report PhysX Auto-select as APPLIED after registry read-back or FAILED when it could not be verified.'
 }
 if($apply -notmatch 'Write-NvidiaCompatibilityScan' -or
    $apply -notmatch '\$compat\.DisplayHelper' -or
