@@ -293,14 +293,14 @@ A real CS2/Steam account and monitor smoke test remains separate.
 
 Edit Profile > CS2 / Apps exposes a custom website URL and enable checkbox. Apply with Launch Apps opens FACEIT Matchmaking, then the validated per-profile URL only if enabled. The URL and enabled flag persist through the existing local/cloud profile JSON export/import. Old profiles default to Metastack with the second website enabled. Standalone Launch All retains Spotify. Invalid imported URLs are ignored, and launch-time validation falls back to Metastack. The release number is generated from cafe.bat.
 
-## CS2 update watch
+## Compatibility update watch
 
-`.github/workflows/cs2-update-watch.yml` runs the standalone Python watch on a GitHub-hosted runner at 07:17, 15:17, and 23:17 Europe/Tirane. It checks Valve's release-note feed and Steam announcement RSS, matches their announcement IDs, and uses rules to identify changes that may affect the launcher. Each run logs the count from each source before deduplicating. The rules cover profile CFG execution and settings, graphics apply and capture, Steam launch and install discovery, and Workshop Cleanup dependencies. Only qualifying changes produce email. It does not run on café PCs or use GitHub REST/GraphQL or an AI API.
+`.github/workflows/cs2-update-watch.yml` runs the standalone Python watch on a GitHub-hosted runner at 07:17, 15:17, and 23:17 Europe/Tirane. It continues to check Valve's release-note feed and Steam announcement RSS for launcher dependencies. It also checks NVIDIA's GeForce RSS and detail pages for driver releases, NVIDIA's official NVAPI SDK commit stream, and NVIDIA Profile Inspector releases. NVIDIA findings are filtered to driver-profile/DRS settings, display modes and scaling, vibrance/hue, Low Latency, PhysX, G-SYNC, and profile-setting metadata. General GeForce articles do not alert unless they mention a relevant setting and behavior change. Only qualifying changes produce email. It uses the same SMTP secrets, `CS2_WATCH_ENABLED` variable, and `cs2-watch-state` branch as the Valve watch; no additional GitHub configuration is required. The watch does not run on café PCs or use an AI API.
 
 Setup on the default branch:
 
 1. In **Settings > Secrets and variables > Actions**, set `SMTP_HOST`, `SMTP_PORT` (465 for TLS or 587 for STARTTLS), `SMTP_USERNAME`, `SMTP_PASSWORD`, `SMTP_FROM` and `SMTP_TO` as repository secrets. Use SMTP credentials supported by the email provider.
-2. In **Actions > CafeLauncher CS2 update watch**, run `dry-run` to preview findings, then `test-email` to verify delivery. Neither mode updates alert history.
+2. In **Actions > CafeLauncher compatibility update watch**, run `dry-run` to preview findings, then `test-email` to verify delivery. Neither mode updates alert history.
 3. Set the Actions variable `CS2_WATCH_ENABLED` to `true`. Run `live` manually or wait for the next scheduled check. The workflow uses its built-in token to create and update the `cs2-watch-state` branch through Git. That branch contains only a timestamp and announcement fingerprints. If branch rules apply, permit the workflow to write to this branch.
 4. Run the live check again to verify that previously emailed changes stay quiet. If switching from the ChatGPT watch, pause it once GitHub delivery is verified.
 

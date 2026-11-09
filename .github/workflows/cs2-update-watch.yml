@@ -1,4 +1,4 @@
-name: CafeLauncher CS2 update watch
+name: CafeLauncher compatibility update watch
 
 on:
   schedule:
@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: 'Preview findings, send a test email, or run the live watch'
+        description: 'Preview CS2 and NVIDIA findings, send a test email, or run the live watch'
         type: choice
         default: dry-run
         options:
@@ -44,7 +44,7 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v7
-      - name: Check updates or test email
+      - name: Check CS2 and NVIDIA updates or test email
         env:
           WATCH_MODE: ${{ inputs.mode || 'live' }}
           SMTP_HOST: ${{ secrets.SMTP_HOST }}
