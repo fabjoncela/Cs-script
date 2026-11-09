@@ -11,7 +11,7 @@ del /q "%CAFE_RESTART_SIGNAL%" >nul 2>&1
 exit /b
 
 # POWERSHELL_GUI
-# CAFE_RELEASE=2026.11.09.9
+# CAFE_RELEASE=2026.11.09.10
 
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
@@ -2738,36 +2738,32 @@ public static class CafePhysxNvApi {
     }
 }
 "@ -ErrorAction Stop
-    $nvapiPath=$null
     $families=@(
         [pscustomobject]@{Nvtweak='SYSTEM\CurrentControlSet\Services\nvlddmkm\Global\NVTweak'; Nvapi='SYSTEM\CurrentControlSet\Services\nvlddmkm\NVAPI'},
         [pscustomobject]@{Nvtweak='SYSTEM\CurrentControlSet\Services\nvlddmkm\Parameters\Global\NVTweak'; Nvapi='SYSTEM\CurrentControlSet\Services\nvlddmkm\Parameters\NVAPI'}
     )
-    $activeFamilies=@()
+    $targetFamilies=@()
+    $existingIds=@()
     foreach($family in $families){
         $nvapiKey=$null
         try {
             $nvapiKey=[Microsoft.Win32.Registry]::LocalMachine.OpenSubKey($family.Nvapi,$false)
-            if($nvapiKey -and @($nvapiKey.GetValueNames()) -contains 'physxGpuId'){$activeFamilies+=,$family}
+            $hasNvtweak=Test-Path -LiteralPath ('Registry::HKEY_LOCAL_MACHINE\'+$family.Nvtweak)
+            $hasGpuId=$nvapiKey -and @($nvapiKey.GetValueNames()) -contains 'physxGpuId'
+            if($hasNvtweak -or $hasGpuId){
+                $targetFamilies+=,$family
+                if($hasGpuId){
+                    if($nvapiKey.GetValueKind('physxGpuId') -ne [Microsoft.Win32.RegistryValueKind]::Binary){throw ('Existing NVIDIA PhysX GPU ID has an unexpected type at '+$family.Nvapi)}
+                    $idBytes=$nvapiKey.GetValue('physxGpuId',$null,[Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
+                    if($idBytes -isnot [byte[]] -or $idBytes.Length -ne 4){throw ('Existing NVIDIA PhysX GPU ID has an unexpected size at '+$family.Nvapi)}
+                    $id=[BitConverter]::ToUInt32($idBytes,0)
+                    if($id -eq 0){throw ('Existing NVIDIA PhysX GPU ID is zero at '+$family.Nvapi)}
+                    $existingIds+=,$id
+                }
+            }
         } finally { if($nvapiKey){$nvapiKey.Dispose()} }
     }
-    if($activeFamilies.Count -eq 1){$subPath=$activeFamilies[0].Nvtweak;$nvapiPath=$activeFamilies[0].Nvapi}
-    elseif($activeFamilies.Count -gt 1){throw 'More than one NVIDIA PhysX registry family has a GPU selection value; refusing to guess.'}
-    else {
-        $existingFamilies=@($families | Where-Object { Test-Path -LiteralPath ('Registry::HKEY_LOCAL_MACHINE\'+$_.Nvtweak) })
-        if($existingFamilies.Count -ne 1){throw 'Could not identify the active NVIDIA PhysX registry family from its physxGpuId value.'}
-        $subPath=$existingFamilies[0].Nvtweak;$nvapiPath=$existingFamilies[0].Nvapi
-    }
-    if(-not (Test-Path -LiteralPath ('Registry::HKEY_LOCAL_MACHINE\'+$subPath))){throw 'The active NVIDIA PhysX settings registry key was not found.'}
-    if(-not $nvapiPath){throw 'Could not identify the NVIDIA PhysX GPU registry key.'}
-    $nvapiReadKey=[Microsoft.Win32.Registry]::LocalMachine.OpenSubKey($nvapiPath,$false)
-    if($null -eq $nvapiReadKey){throw 'The active NVIDIA PhysX GPU registry key could not be opened for reading.'}
-    try {
-        if(@($nvapiReadKey.GetValueNames()) -notcontains 'physxGpuId'){throw 'The active NVIDIA PhysX GPU ID value was not found.'}
-        if($nvapiReadKey.GetValueKind('physxGpuId') -ne [Microsoft.Win32.RegistryValueKind]::Binary){throw 'The active NVIDIA PhysX GPU ID has an unexpected registry type.'}
-        $previousGpuId=$nvapiReadKey.GetValue('physxGpuId',$null,[Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
-        if($previousGpuId -isnot [byte[]] -or $previousGpuId.Length -ne 4){throw 'The active NVIDIA PhysX GPU ID has an unexpected size.'}
-    } finally { $nvapiReadKey.Dispose() }
+    if($targetFamilies.Count -eq 0){throw 'No supported NVIDIA PhysX registry family was found.'}
     $nvapiReport=''
     $nvapiRoute='recommended GPU'
     try {
@@ -2776,38 +2772,73 @@ public static class CafePhysxNvApi {
     } catch {
         $lookupError=$_.Exception.Message
         if($lookupError -match 'refusing to guess|invalid PhysX GPU count|GPU ID 0') { throw }
-        $existingGpuId=[BitConverter]::ToUInt32($previousGpuId,0)
-        if($existingGpuId -eq 0){throw ('NVAPI could not identify the recommended PhysX GPU and the existing GPU ID is zero; refusing to guess. '+$lookupError)}
+        if($existingIds.Count -eq 0){throw ('NVAPI could not identify the recommended PhysX GPU and no existing nonzero GPU ID is available; refusing to guess. '+$lookupError)}
+        $uniqueExistingIds=@($existingIds | Select-Object -Unique)
+        if($uniqueExistingIds.Count -ne 1){throw ('NVAPI lookup is unavailable and NVIDIA PhysX registry families disagree on the selected GPU ID; refusing to guess. '+$lookupError)}
+        $existingGpuId=[uint32]$uniqueExistingIds[0]
         $recommendedGpuId=$existingGpuId
-        $gpuIdBytes=$previousGpuId
+        $gpuIdBytes=[BitConverter]::GetBytes([uint32]$existingGpuId)
         $nvapiRoute='existing GPU ID fallback'
         $nvapiReport='NVAPI recommended-GPU lookup unavailable; retaining existing nonzero GPU ID='+$existingGpuId+'. '+$lookupError
     }
-    $key=[Microsoft.Win32.Registry]::LocalMachine.OpenSubKey($subPath,$true)
-    if($null -eq $key){throw 'NVIDIA PhysX settings registry key could not be opened for writing.'}
-    $nvapiWriteKey=[Microsoft.Win32.Registry]::LocalMachine.OpenSubKey($nvapiPath,$true)
-    if($null -eq $nvapiWriteKey){$key.Dispose();throw 'NVIDIA PhysX GPU registry key could not be opened for writing.'}
-    try {
-        $name='NvCplPhysxAuto'
-        $hadValue=@($key.GetValueNames()) -contains $name
-        $previous=if($hadValue){$key.GetValue($name,$null,[Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)}else{$null}
-        $previousKind=if($hadValue){$key.GetValueKind($name)}else{$null}
+    $snapshots=@()
+    foreach($family in $targetFamilies){
+        $nvapiKey=$null;$nvtweakKey=$null
         try {
-            if($nvapiRoute -eq 'recommended GPU'){$nvapiWriteKey.SetValue('physxGpuId',$gpuIdBytes,[Microsoft.Win32.RegistryValueKind]::Binary)}
-            $key.SetValue($name,[int]1,[Microsoft.Win32.RegistryValueKind]::DWord)
-            $nvapiWriteKey.Flush();$key.Flush()
-            $actualGpuId=$nvapiWriteKey.GetValue('physxGpuId',$null,[Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
-            $actualAuto=$key.GetValue($name,$null,[Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
-            if($actualGpuId -isnot [byte[]] -or [BitConverter]::ToUInt32($actualGpuId,0) -ne $recommendedGpuId){throw 'NVIDIA PhysX GPU ID did not match the recommended NVAPI GPU ID after write.'}
-            if($actualAuto -ne 1){throw 'NVIDIA PhysX Auto-select flag did not read back as 1.'}
+            $nvapiKey=[Microsoft.Win32.Registry]::LocalMachine.OpenSubKey($family.Nvapi,$false)
+            $nvtweakKey=[Microsoft.Win32.Registry]::LocalMachine.OpenSubKey($family.Nvtweak,$false)
+            $hasGpuId=$nvapiKey -and @($nvapiKey.GetValueNames()) -contains 'physxGpuId'
+            $hasAuto=$nvtweakKey -and @($nvtweakKey.GetValueNames()) -contains 'NvCplPhysxAuto'
+            $snapshots+=,[pscustomobject]@{
+                Family=$family; HadNvapiKey=($null -ne $nvapiKey); HadNvtweakKey=($null -ne $nvtweakKey)
+                HadGpuId=$hasGpuId; PreviousGpuId=if($hasGpuId){$nvapiKey.GetValue('physxGpuId',$null,[Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)}else{$null}
+                PreviousGpuKind=if($hasGpuId){$nvapiKey.GetValueKind('physxGpuId')}else{$null}
+                HadAuto=$hasAuto; PreviousAuto=if($hasAuto){$nvtweakKey.GetValue('NvCplPhysxAuto',$null,[Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)}else{$null}
+                PreviousAutoKind=if($hasAuto){$nvtweakKey.GetValueKind('NvCplPhysxAuto')}else{$null}
+            }
+        } finally { if($nvapiKey){$nvapiKey.Dispose()};if($nvtweakKey){$nvtweakKey.Dispose()} }
+    }
+    try {
+            foreach($snapshot in $snapshots){
+                $family=$snapshot.Family
+                $nvapiWriteKey=$null;$nvtweakWriteKey=$null
+                try {
+                    $nvapiWriteKey=[Microsoft.Win32.Registry]::LocalMachine.CreateSubKey($family.Nvapi,$true)
+                    $nvtweakWriteKey=[Microsoft.Win32.Registry]::LocalMachine.CreateSubKey($family.Nvtweak,$true)
+                    if($null -eq $nvapiWriteKey -or $null -eq $nvtweakWriteKey){throw ('Could not open NVIDIA PhysX registry family for writing: '+$family.Nvtweak)}
+                    $nvapiWriteKey.SetValue('physxGpuId',$gpuIdBytes,[Microsoft.Win32.RegistryValueKind]::Binary)
+                    $nvtweakWriteKey.SetValue('NvCplPhysxAuto',[int]1,[Microsoft.Win32.RegistryValueKind]::DWord)
+                    $nvapiWriteKey.Flush();$nvtweakWriteKey.Flush()
+                    $actualGpuId=$nvapiWriteKey.GetValue('physxGpuId',$null,[Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
+                    $actualAuto=$nvtweakWriteKey.GetValue('NvCplPhysxAuto',$null,[Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
+                    if($actualGpuId -isnot [byte[]] -or $actualGpuId.Length -ne 4 -or [BitConverter]::ToUInt32($actualGpuId,0) -ne $recommendedGpuId){throw ('NVIDIA PhysX GPU ID did not match the requested GPU ID after write at '+$family.Nvapi)}
+                    if($actualAuto -ne 1){throw ('NVIDIA PhysX Auto-select flag did not read back as 1 at '+$family.Nvtweak)}
+                } finally {$nvapiWriteKey.Dispose();$nvtweakWriteKey.Dispose()}
+            }
         } catch {
-            if($nvapiRoute -eq 'recommended GPU'){$nvapiWriteKey.SetValue('physxGpuId',$previousGpuId,[Microsoft.Win32.RegistryValueKind]::Binary)}
-            if($hadValue){$key.SetValue($name,$previous,$previousKind)}else{$key.DeleteValue($name,$false)}
-            $nvapiWriteKey.Flush();$key.Flush()
-            throw
+            $writeFailure=$_.Exception.Message
+            $rollbackErrors=@()
+            foreach($snapshot in $snapshots){
+                $family=$snapshot.Family
+                $nvapiWriteKey=$null;$nvtweakWriteKey=$null
+                try {
+                    $nvapiWriteKey=[Microsoft.Win32.Registry]::LocalMachine.OpenSubKey($family.Nvapi,$true)
+                    $nvtweakWriteKey=[Microsoft.Win32.Registry]::LocalMachine.OpenSubKey($family.Nvtweak,$true)
+                    try {
+                        if($nvapiWriteKey){if($snapshot.HadGpuId){$nvapiWriteKey.SetValue('physxGpuId',$snapshot.PreviousGpuId,$snapshot.PreviousGpuKind)}else{$nvapiWriteKey.DeleteValue('physxGpuId',$false)};$nvapiWriteKey.Flush()}
+                        if($nvtweakWriteKey){if($snapshot.HadAuto){$nvtweakWriteKey.SetValue('NvCplPhysxAuto',$snapshot.PreviousAuto,$snapshot.PreviousAutoKind)}else{$nvtweakWriteKey.DeleteValue('NvCplPhysxAuto',$false)};$nvtweakWriteKey.Flush()}
+                    } finally {if($nvapiWriteKey){$nvapiWriteKey.Dispose()};if($nvtweakWriteKey){$nvtweakWriteKey.Dispose()}}
+                    if(-not $snapshot.HadNvapiKey){[Microsoft.Win32.Registry]::LocalMachine.DeleteSubKey($family.Nvapi,$false)}
+                    if(-not $snapshot.HadNvtweakKey){[Microsoft.Win32.Registry]::LocalMachine.DeleteSubKey($family.Nvtweak,$false)}
+                } catch {$rollbackErrors+=,($family.Nvtweak+': '+$_.Exception.Message)}
+            }
+            if($rollbackErrors.Count -gt 0){
+                throw ('PhysX registry update failed: '+$writeFailure+' Rollback errors: '+($rollbackErrors -join '; '))
+            }
+            throw ('PhysX registry update failed; original values were restored: '+$writeFailure)
         }
-        $message='PhysX GPU ID='+$recommendedGpuId+' verified at '+$nvapiPath+'\physxGpuId via '+$nvapiRoute+'; Auto-select flag=1 written and read back at '+$subPath+'\'+$name+'. '+$nvapiReport
-    } finally { $nvapiWriteKey.Dispose();$key.Dispose() }
+        $verifiedPaths=@($snapshots | ForEach-Object {$_.Family.Nvapi+'\physxGpuId and '+$_.Family.Nvtweak+'\NvCplPhysxAuto'}) -join '; '
+        $message='PhysX GPU ID='+$recommendedGpuId+' and Auto-select flag=1 written and read back across NVIDIA registry families via '+$nvapiRoute+': '+$verifiedPaths+'. '+$nvapiReport
     [IO.File]::WriteAllText($ResultPath,"APPLIED`r`n$message",[Text.Encoding]::UTF8)
     exit 0
 } catch {

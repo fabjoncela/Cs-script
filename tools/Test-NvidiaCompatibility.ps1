@@ -88,8 +88,8 @@ if(-not $apply.Contains('$gSyncFeatureVerified=$performanceReport -match') -or
 }
 if($functions['Set-CafePhysxAutoSelect'] -notmatch 'NvCplPhysxAuto' -or
    $functions['Set-CafePhysxAutoSelect'] -notmatch 'RegistryValueKind\]::DWord' -or
-   $functions['Set-CafePhysxAutoSelect'] -notmatch 'SetValue\(\$name,\[int\]1' -or
-   $functions['Set-CafePhysxAutoSelect'] -notmatch 'GetValue\(\$name' -or
+   $functions['Set-CafePhysxAutoSelect'] -notmatch "SetValue\('NvCplPhysxAuto',\[int\]1" -or
+   $functions['Set-CafePhysxAutoSelect'] -notmatch "GetValue\('NvCplPhysxAuto'" -or
    $functions['Set-CafePhysxAutoSelect'] -notmatch 'RunAs' -or
    $functions['Set-CafePhysxAutoSelect'] -notmatch 'GetRecommendedPhysxGpuId' -or
    $functions['Set-CafePhysxAutoSelect'] -notmatch 'NvAPI_GPU_CudaEnumComputeCapableGpus' -or
@@ -98,10 +98,10 @@ if($functions['Set-CafePhysxAutoSelect'] -notmatch 'NvCplPhysxAuto' -or
    $functions['Set-CafePhysxAutoSelect'] -notmatch 'SetValue\(''physxGpuId''' -or
    $functions['Set-CafePhysxAutoSelect'] -notmatch 'actualGpuId.*recommendedGpuId' -or
    $functions['Set-CafePhysxAutoSelect'] -notmatch 'existing GPU ID fallback' -or
-   $functions['Set-CafePhysxAutoSelect'] -notmatch 'ToUInt32\(\$previousGpuId,0\)' -or
-   $functions['Set-CafePhysxAutoSelect'] -notmatch 'if\(\$existingGpuId -eq 0\)' -or
+   $functions['Set-CafePhysxAutoSelect'] -notmatch '\$uniqueExistingIds\.Count -ne 1' -or
+   $functions['Set-CafePhysxAutoSelect'] -notmatch 'if\(\$existingIds\.Count -eq 0\)' -or
    $functions['Set-CafePhysxAutoSelect'] -notmatch '\$lookupError -match .*refusing to guess' -or
-   $functions['Set-CafePhysxAutoSelect'] -notmatch 'if\(\$nvapiRoute -eq ''recommended GPU''\).*SetValue' -or
+   $functions['Set-CafePhysxAutoSelect'] -notmatch 'SetValue\(''physxGpuId'',\$gpuIdBytes' -or
    $functions['Set-CafePhysxAutoSelect'] -notmatch 'refusing to guess'){
     throw 'PhysX Auto-select must prefer the recommended NVAPI GPU, safely retain only a valid nonzero existing ID when lookup is unavailable, reject ambiguous data, and verify both registry values.'
 }
@@ -109,9 +109,13 @@ $physxHelperCode=$functions['Set-CafePhysxAutoSelect']
 if($physxHelperCode -notmatch '\$families=@\(' -or
    $physxHelperCode -notmatch 'Nvapi=''SYSTEM\\CurrentControlSet\\Services\\nvlddmkm\\Parameters\\NVAPI''' -or
    $physxHelperCode -notmatch '\$nvapiKey\.GetValueNames\(\).*physxGpuId' -or
-   $physxHelperCode -notmatch '\$activeFamilies\.Count -eq 1' -or
-   $physxHelperCode -notmatch 'More than one NVIDIA PhysX registry family'){
-    throw 'PhysX Auto-select must choose the NVIDIA registry family associated with the existing GPU-selection entry and refuse ambiguous matches.'
+   $physxHelperCode -notmatch '\$targetFamilies\+=,\$family' -or
+   $physxHelperCode -notmatch 'CreateSubKey\(\$family\.Nvapi' -or
+   $physxHelperCode -notmatch 'CreateSubKey\(\$family\.Nvtweak' -or
+   $physxHelperCode -notmatch '\$verifiedPaths=' -or
+   $physxHelperCode -notmatch 'DeleteSubKey\(\$family\.Nvapi' -or
+   $physxHelperCode -notmatch 'DeleteSubKey\(\$family\.Nvtweak'){
+    throw 'PhysX Auto-select must synchronize and verify both supported registry families, with rollback for newly created keys.'
 }
 $helperMatch=[regex]::Match($functions['Set-CafePhysxAutoSelect'], '(?s)\$helper=@''\r?\n(?<script>.*?)\r?\n''@')
 if(-not $helperMatch.Success){throw 'PhysX helper script could not be extracted for syntax validation.'}
