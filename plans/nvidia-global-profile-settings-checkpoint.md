@@ -8,7 +8,7 @@ Extend CafeLauncher profile Apply to set NVIDIA **Power management mode** global
 
 ## Done
 
-- Inspected the current checkout: `main` at `3c31fb9`, matching `origin/main`. Existing untracked files `BACKEND_API_PLAN.md` and `plans/backend-vs-cs-script-audit.md` were left untouched.
+- Inspected the current checkout: `main` at `3c31fb9`, matching `origin/main`. The existing untracked `plans/backend-vs-cs-script-audit.md` was left untouched.
 - Added Power management mode to the global DRS routine in `cafe.bat`, using NVIDIA's public `PREFERRED_PSTATE_ID` (`0x1057EB71`) and `PREFERRED_PSTATE_PREFER_MAX` (`0x00000001`) values. The routine logs and verifies the saved value alongside the other global driver settings.
 - Updated `context.md` and `tools/Test-NvidiaCompatibility.ps1` to document and guard the supported setting and reject the unsupported legacy Low Latency IDs in the normal apply path.
 - A live Low Latency probe checked and attempted both legacy IDs (`0x10835000`, `0x0005F543`). Both reads and writes returned NVAPI status `-160`; the DRS session was discarded without saving. No Low Latency setting changed.

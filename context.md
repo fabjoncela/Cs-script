@@ -26,7 +26,43 @@ The client uses the CafeLauncherBackend API for profile, graphics, CFG, and grap
 
 The dashboard's top-right read-source label shows the most recent cloud source: Backend API, GitHub fallback, or local data when both cloud reads fail. GitHub API remaining-request status is visible only while the verified mirror is the active fallback.
 
-This backend client ships on `main` through the existing Google Drive launcher file. Google Drive remains a launcher distribution mirror; it does not store profile data or proxy backend API requests. The updater and graphics module download still use the original `Cs-script` repository. The pinned graphics module can accept a preset supplied by the launcher, so Apply Graphics uses the backend or verified mirror preset. Keep backend deployment and launcher distribution as separate workflows.
+### Three-repository flow
+
+| Repository | Role |
+| --- | --- |
+| `Cs-script` | Launcher source. The launcher updater checks and downloads `cafe.bat` from this repository. A validated `main` release is also copied to Google Drive for distribution. |
+| `cafelauncher-backend` | Authoritative API and database for profile, graphics, and CFG data. A push to `main` runs tests and schema checks against `Cs-script`; deployment follows only when those checks pass. |
+| `cafelauncher-backend-mirror` | Generated, public, read-only fallback snapshot of backend data. The backend mirror worker publishes it; do not edit generated data files directly. |
+
+Launcher code and backend deployment follow separate paths:
+
+```mermaid
+flowchart LR
+    CS["Cs-script main<br/>launcher source"] --> CI["Launcher validation"]
+    CI --> DRIVE["Google Drive<br/>distribution copy"]
+    CS -. "launcher checks here and downloads updates" .-> LAUNCHER["Running CafeLauncher"]
+    BACKEND_REPO["Backend repo main"] --> BACKEND_CI["Tests and schema check<br/>against Cs-script main"]
+    BACKEND_CI -->|"if checks pass"| SERVICE["Deploy backend service"]
+```
+
+At runtime, profile data follows this path:
+
+```mermaid
+flowchart LR
+    LAUNCHER["CafeLauncher"] -->|"profile, graphics, CFG, and history reads; authorized saves"| API["Backend API and database"]
+    API -->|"mirror worker publishes generated snapshot"| MIRROR["GitHub mirror repo"]
+    LAUNCHER -. "if API is unavailable: verify manifest, hashes, and revisions, then read" .-> MIRROR
+```
+
+In plain terms:
+
+- **Launcher updates:** The running launcher checks Cs-script GitHub for a newer `cafe.bat`. If the user accepts, it downloads from GitHub, checks the file size, Git blob hash, and PowerShell syntax, then backs up and replaces the local file. Separately, validated `main` releases are copied to Google Drive for distribution.
+- **Profile reads:** The launcher requests profile, graphics, CFG, and history data from the backend API first. If that is unavailable, it verifies the mirror manifest, hashes, and revisions before using mirror data; mirror-sourced actions can require confirmation because the mirror may lag.
+- **Profile saves:** Save & Sync sends the profile, graphics, and CFG bundle to the backend with its expected revision. The launcher reads the result back; an uncertain failed save stays in the local pending queue. The backend mirror worker publishes generated data to the read-only mirror.
+- **Backend deployment:** A push to the backend repo's `main` runs tests and a schema check against Cs-script; a passing `main` revision is deployed. Other branches run checks without deploying to production.
+- **Backend launcher releases:** The backend has a separate release API, but no launcher package is currently published there and CafeLauncher's updater does not use it. Google Drive distributes launcher files; it does not store profile data or proxy backend API requests.
+
+The backend integration ships as part of the launcher through its established Google Drive distribution. The separately hash-pinned graphics module can accept a preset supplied by the launcher, so Apply Graphics uses the backend or verified mirror preset.
 
 The read-only profile viewer in the sibling `CafeLauncherBackend` repository loads its profile list, sections, field labels/groups, and enum labels from `/v1/viewer-schema`; ordinary profile and graphics values are rendered from the API response. When changing launcher profile fields, the profile roster, graphics schema, or profile/graphics/CFG API contract, run the cross-repository profile schema parity check. Backend CI checks against current `Cs-script` main, and this repository's `.github/workflows/profile-schema-parity.yml` checks launcher changes against backend main. New launcher fields/profiles must be added to backend validation and viewer metadata first; the backend can safely expose additions before the corresponding launcher change merges. Do not deploy the backend unless deployment was requested.
 

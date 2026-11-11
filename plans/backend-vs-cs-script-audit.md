@@ -131,7 +131,7 @@ For every check, record setup, exact version, expected result, observed result, 
 
 These are questions for the audit, not conclusions that a bug exists:
 
-- The comparison baseline is now pinned: pre-migration `6c5caf9` → migration `d77401b`; use current launcher `main` `d18420a` for the remaining fixes. The workspace now has no tracked dirty changes; retain the untracked `BACKEND_API_PLAN.md` and audit plan.
+- The comparison baseline is now pinned: pre-migration `6c5caf9` → migration `d77401b`; use current launcher `main` `d18420a` for the remaining fixes. The workspace had no tracked dirty changes at this checkpoint; retain the audit plan.
 - The backend-integrated directory copy is release `2026.11.08.4` without `.git`; do not treat its exact contents as the final migrated client. Current tracked source and history are available in the main ProjectCafe Git repository.
 - Backend code at `adecb37` includes profile revision-history routes and tests. Local backend `main` at `7a56930` is behind; the public status page independently reports deployed commit `adecb37a3e17`.
 - The migration appears to change graphics history from GitHub commits to backend revisions and starts a fresh service history at import. Quantify this behavior change and make old history expectations explicit.
