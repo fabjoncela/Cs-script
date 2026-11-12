@@ -51,12 +51,22 @@ internal static class CompatibilityTests
         catch (InvalidOperationException) { rejected = true; }
         if (!rejected) throw new Exception("A mismatched Git blob SHA was accepted.");
         DateTime now = new DateTime(2026, 11, 12, 12, 0, 0, DateTimeKind.Utc);
+        string sha = CafeLauncherWebRunner.GitBlobSha(bytes);
         if (!CafeLauncherWebRunner.IsGithubLauncherMetadataCacheFresh(now.AddMinutes(-2), now) ||
             CafeLauncherWebRunner.IsGithubLauncherMetadataCacheFresh(now.AddMinutes(-4), now) ||
             CafeLauncherWebRunner.IsGithubLauncherMetadataCacheFresh(now.AddMinutes(1), now))
             throw new Exception("GitHub fallback metadata cache freshness was incorrect.");
+        if (!CafeLauncherWebRunner.IsValidGithubLauncherCache("2026.11.12.1", sha, bytes.Length, bytes) ||
+            CafeLauncherWebRunner.IsValidGithubLauncherCache("2026.11.12.1", sha, bytes.Length + 1, bytes) ||
+            CafeLauncherWebRunner.IsValidGithubLauncherCache("2026.11.12.9", sha, bytes.Length, bytes))
+            throw new Exception("Cached launcher size, hash, or release-marker validation failed.");
+        if (!CafeLauncherWebRunner.CanReuseGithubLauncherAfterNotModified(304, "\"etag-1\"", "\"etag-1\"", true) ||
+            CafeLauncherWebRunner.CanReuseGithubLauncherAfterNotModified(304, "\"etag-1\"", "\"etag-2\"", true) ||
+            CafeLauncherWebRunner.CanReuseGithubLauncherAfterNotModified(200, "\"etag-1\"", "\"etag-1\"", true) ||
+            CafeLauncherWebRunner.CanReuseGithubLauncherAfterNotModified(304, "\"etag-1\"", "\"etag-1\"", false))
+            throw new Exception("Conditional GitHub ETag response handling was incorrect.");
 
-        Console.WriteLine("PASS: GitHub blob validation, three-minute verified fallback cache, action detection, and tamper rejection.");
+        Console.WriteLine("PASS: GitHub blob/ETag validation, verified fallback cache, action detection, and tamper rejection.");
         return 0;
     }
 

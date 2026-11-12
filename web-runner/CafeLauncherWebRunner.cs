@@ -591,74 +591,153 @@ internal static class CafeLauncherWebRunner
         string cacheRoot = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "CafeLauncher", "Runner", "github");
         Directory.CreateDirectory(cacheRoot);
         string latestPath = Path.Combine(cacheRoot, "latest.json");
-        if (File.Exists(latestPath) && IsGithubLauncherMetadataCacheFresh(File.GetLastWriteTimeUtc(latestPath), DateTime.UtcNow))
+        string cachedEtag = null;
+        string cachedVersion = null;
+        string cachedSha = null;
+        int cachedSize = 0;
+        byte[] cachedBytes = null;
+        Dictionary<string, object> cachedResult = null;
+        Dictionary<string, object> latestMetadata = null;
+        DateTime lastWriteUtc = DateTime.MinValue;
+        if (File.Exists(latestPath))
         {
             try
             {
-                Dictionary<string, object> latest = ParseJson(File.ReadAllText(latestPath, Encoding.UTF8));
-                string cachedVersion = RequiredString(latest, "version");
-                string cachedSha = RequiredString(latest, "sha").ToLowerInvariant();
-                int cachedSize = Convert.ToInt32(latest["size"]);
+                lastWriteUtc = File.GetLastWriteTimeUtc(latestPath);
+                latestMetadata = ParseJson(File.ReadAllText(latestPath, Encoding.UTF8));
+                cachedVersion = RequiredString(latestMetadata, "version");
+                cachedSha = RequiredString(latestMetadata, "sha").ToLowerInvariant();
+                cachedSize = Convert.ToInt32(latestMetadata["size"]);
+                cachedEtag = OptionalString(latestMetadata, "etag");
                 if (Regex.IsMatch(cachedVersion, @"^\d{4}\.\d{1,2}\.\d{1,2}\.\d+$", RegexOptions.CultureInvariant) &&
                     cachedSize >= 10000 && cachedSize <= MaxLauncherBytes && Regex.IsMatch(cachedSha, @"^[0-9a-f]{40}$", RegexOptions.CultureInvariant))
                 {
                     string cachedPath = Path.Combine(cacheRoot, cachedSha, "cafe.bat");
-                    if (File.Exists(cachedPath))
-                    {
-                        byte[] cachedBytes = File.ReadAllBytes(cachedPath);
-                        Match cachedMarker = Regex.Match(Encoding.UTF8.GetString(cachedBytes), @"(?m)^# CAFE_RELEASE=(\d{4}\.\d{1,2}\.\d{1,2}\.\d+)\s*$", RegexOptions.CultureInvariant);
-                        if (cachedBytes.Length == cachedSize && String.Equals(GitBlobSha(cachedBytes), cachedSha, StringComparison.Ordinal) &&
-                            cachedMarker.Success && cachedMarker.Groups[1].Value == cachedVersion)
-                            return new Dictionary<string, object> { { "path", cachedPath }, { "bytes", cachedBytes }, { "version", cachedVersion } };
-                    }
+                    if (File.Exists(cachedPath)) cachedBytes = File.ReadAllBytes(cachedPath);
+                    if (IsValidGithubLauncherCache(cachedVersion, cachedSha, cachedSize, cachedBytes))
+                        cachedResult = new Dictionary<string, object> { { "path", cachedPath }, { "bytes", cachedBytes }, { "version", cachedVersion } };
                 }
+                if (cachedResult == null) cachedEtag = null;
             }
             catch
             {
-                // A stale or damaged cache must fall through to a fresh, verified GitHub response.
+                cachedEtag = null;
+                cachedResult = null;
             }
         }
+        if (cachedResult != null && IsGithubLauncherMetadataCacheFresh(lastWriteUtc, DateTime.UtcNow))
+            return cachedResult;
 
-        Dictionary<string, object> metadata = ParseJson(Encoding.UTF8.GetString(GetBytes(CreateGithubRequest(new Uri(endpoint), "GET"), 2 * MaxLauncherBytes)));
-        byte[] bytes = ValidateGithubLauncherPayload(metadata);
-        Match version = Regex.Match(Encoding.UTF8.GetString(bytes), @"(?m)^# CAFE_RELEASE=(\d{4}\.\d{1,2}\.\d{1,2}\.\d+)\s*$", RegexOptions.CultureInvariant);
-        if (!version.Success) throw new InvalidOperationException("The current CafeLauncher source has no valid release marker.");
-        string sha = RequiredString(metadata, "sha").ToLowerInvariant();
-        string cachePath = Path.Combine(cacheRoot, sha, "cafe.bat");
-        Directory.CreateDirectory(Path.GetDirectoryName(cachePath));
-        if (File.Exists(cachePath) && !String.Equals(GitBlobSha(File.ReadAllBytes(cachePath)), sha, StringComparison.Ordinal))
-            File.Delete(cachePath);
-        if (!File.Exists(cachePath))
-        {
-            string temporaryPath = cachePath + "." + Guid.NewGuid().ToString("N") + ".tmp";
-            try
-            {
-                File.WriteAllBytes(temporaryPath, bytes);
-                if (!String.Equals(GitBlobSha(File.ReadAllBytes(temporaryPath)), sha, StringComparison.Ordinal))
-                    throw new InvalidOperationException("The cached CafeLauncher source failed its GitHub blob hash check.");
-                File.Move(temporaryPath, cachePath);
-            }
-            finally
-            {
-                if (File.Exists(temporaryPath)) File.Delete(temporaryPath);
-            }
-        }
-        Dictionary<string, object> latestMetadata = new Dictionary<string, object>
-        {
-            { "version", version.Groups[1].Value }, { "sha", sha }, { "size", bytes.Length }
-        };
-        string latestTemporaryPath = latestPath + "." + Guid.NewGuid().ToString("N") + ".tmp";
+        HttpWebRequest request = CreateGithubRequest(new Uri(endpoint), "GET");
+        if (cachedResult != null && !String.IsNullOrEmpty(cachedEtag))
+            request.Headers[HttpRequestHeader.IfNoneMatch] = cachedEtag;
+        HttpWebResponse response = null;
         try
         {
-            File.WriteAllText(latestTemporaryPath, Json.Serialize(latestMetadata), new UTF8Encoding(false));
+            response = (HttpWebResponse)request.GetResponse();
+        }
+        catch (WebException error)
+        {
+            HttpWebResponse failedResponse = error.Response as HttpWebResponse;
+            if (failedResponse == null)
+                throw;
+            string notModifiedEtag = error.Response.Headers[HttpResponseHeader.ETag];
+            bool reusable = CanReuseGithubLauncherAfterNotModified((int)failedResponse.StatusCode, cachedEtag, notModifiedEtag, cachedResult != null);
+            failedResponse.Dispose();
+            if (!reusable) throw;
+            string retainedEtag = String.IsNullOrEmpty(notModifiedEtag) ? cachedEtag : notModifiedEtag;
+            WriteGithubLauncherLatestCache(latestPath, cachedVersion, cachedSha, cachedSize, retainedEtag);
+            return cachedResult;
+        }
+
+        using (response)
+        {
+            if (CanReuseGithubLauncherAfterNotModified((int)response.StatusCode, cachedEtag, response.Headers[HttpResponseHeader.ETag], cachedResult != null))
+            {
+                string retainedEtag = response.Headers[HttpResponseHeader.ETag];
+                if (String.IsNullOrEmpty(retainedEtag)) retainedEtag = cachedEtag;
+                WriteGithubLauncherLatestCache(latestPath, cachedVersion, cachedSha, cachedSize, retainedEtag);
+                return cachedResult;
+            }
+            if (response.StatusCode != HttpStatusCode.OK)
+                throw new InvalidOperationException("GitHub returned an unexpected status while checking the latest CafeLauncher source.");
+            using (Stream input = response.GetResponseStream())
+            using (MemoryStream output = new MemoryStream())
+            {
+                byte[] buffer = new byte[8192];
+                int read;
+                while ((read = input.Read(buffer, 0, buffer.Length)) > 0)
+                {
+                    if (output.Length + read > 2 * MaxLauncherBytes)
+                        throw new InvalidOperationException("A GitHub launcher response exceeded its size limit.");
+                    output.Write(buffer, 0, read);
+                }
+                latestMetadata = ParseJson(Encoding.UTF8.GetString(output.ToArray()));
+            }
+            string responseEtag = response.Headers[HttpResponseHeader.ETag];
+            byte[] bytes = ValidateGithubLauncherPayload(latestMetadata);
+            Match version = Regex.Match(Encoding.UTF8.GetString(bytes), @"(?m)^# CAFE_RELEASE=(\d{4}\.\d{1,2}\.\d{1,2}\.\d+)\s*$", RegexOptions.CultureInvariant);
+            if (!version.Success) throw new InvalidOperationException("The current CafeLauncher source has no valid release marker.");
+            string sha = RequiredString(latestMetadata, "sha").ToLowerInvariant();
+            string cachePath = Path.Combine(cacheRoot, sha, "cafe.bat");
+            Directory.CreateDirectory(Path.GetDirectoryName(cachePath));
+            if (File.Exists(cachePath) && !String.Equals(GitBlobSha(File.ReadAllBytes(cachePath)), sha, StringComparison.Ordinal))
+                File.Delete(cachePath);
+            if (!File.Exists(cachePath))
+            {
+                string temporaryPath = cachePath + "." + Guid.NewGuid().ToString("N") + ".tmp";
+                try
+                {
+                    File.WriteAllBytes(temporaryPath, bytes);
+                    if (!String.Equals(GitBlobSha(File.ReadAllBytes(temporaryPath)), sha, StringComparison.Ordinal))
+                        throw new InvalidOperationException("The cached CafeLauncher source failed its GitHub blob hash check.");
+                    File.Move(temporaryPath, cachePath);
+                }
+                finally
+                {
+                    if (File.Exists(temporaryPath)) File.Delete(temporaryPath);
+                }
+            }
+            WriteGithubLauncherLatestCache(latestPath, version.Groups[1].Value, sha, bytes.Length, responseEtag);
+            return new Dictionary<string, object> { { "path", cachePath }, { "bytes", bytes }, { "version", version.Groups[1].Value } };
+        }
+    }
+
+    private static void WriteGithubLauncherLatestCache(string latestPath, string version, string sha, int size, string etag)
+    {
+        Dictionary<string, object> latestMetadata = new Dictionary<string, object>
+        {
+            { "version", version }, { "sha", sha }, { "size", size }
+        };
+        if (!String.IsNullOrEmpty(etag)) latestMetadata["etag"] = etag;
+        string temporaryPath = latestPath + "." + Guid.NewGuid().ToString("N") + ".tmp";
+        try
+        {
+            File.WriteAllText(temporaryPath, Json.Serialize(latestMetadata), new UTF8Encoding(false));
             if (File.Exists(latestPath)) File.Delete(latestPath);
-            File.Move(latestTemporaryPath, latestPath);
+            File.Move(temporaryPath, latestPath);
         }
         finally
         {
-            if (File.Exists(latestTemporaryPath)) File.Delete(latestTemporaryPath);
+            if (File.Exists(temporaryPath)) File.Delete(temporaryPath);
         }
-        return new Dictionary<string, object> { { "path", cachePath }, { "bytes", bytes }, { "version", version.Groups[1].Value } };
+    }
+
+    internal static bool IsValidGithubLauncherCache(string version, string sha, int size, byte[] bytes)
+    {
+        if (bytes == null || bytes.Length != size || size < 10000 || size > MaxLauncherBytes ||
+            !Regex.IsMatch(sha ?? String.Empty, @"^[0-9a-f]{40}$", RegexOptions.CultureInvariant) ||
+            !Regex.IsMatch(version ?? String.Empty, @"^\d{4}\.\d{1,2}\.\d{1,2}\.\d+$", RegexOptions.CultureInvariant) ||
+            !String.Equals(GitBlobSha(bytes), sha, StringComparison.Ordinal)) return false;
+        Match marker = Regex.Match(Encoding.UTF8.GetString(bytes), @"(?m)^# CAFE_RELEASE=(\d{4}\.\d{1,2}\.\d{1,2}\.\d+)\s*$", RegexOptions.CultureInvariant);
+        return marker.Success && marker.Groups[1].Value == version;
+    }
+
+    internal static bool CanReuseGithubLauncherAfterNotModified(int statusCode, string cachedEtag, string responseEtag, bool cacheValid)
+    {
+        if (statusCode != 304 || !cacheValid) return false;
+        return String.IsNullOrEmpty(responseEtag) || String.IsNullOrEmpty(cachedEtag) ||
+            String.Equals(responseEtag, cachedEtag, StringComparison.Ordinal);
     }
 
     internal static bool IsGithubLauncherMetadataCacheFresh(DateTime lastWriteUtc, DateTime nowUtc)
