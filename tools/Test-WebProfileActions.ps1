@@ -12,11 +12,15 @@ if($source -notmatch 'if\s*\(\s*\$profile\.LaunchApps\s+-and\s+-not\s+\$WebActio
    $source -notmatch 'Web Apply profile intentionally skipped Launch All'){
     throw 'The web profile action must skip app launches while preserving normal Windows Launch All behavior.'
 }
-foreach($name in @('New-CafeWebProfileActionEnvelope','Get-CafeWebPendingReason','Reset-CafeWebPendingEditsAfterRunnerUpdate','Complete-CafeWebRunnerProfileReset','Request-LogitechLiveDPI','Write-CafeWebProgress','Start-CafeWebProgressStage','Complete-CafeWebProgressStage','Invoke-CafeWebApplyProfile','Invoke-CafeWebApplyGraphics')){
+foreach($name in @('Test-CafeWebPinnedActionTarget','New-CafeWebProfileActionEnvelope','Get-CafeWebPendingReason','Reset-CafeWebPendingEditsAfterRunnerUpdate','Complete-CafeWebRunnerProfileReset','Request-LogitechLiveDPI','Write-CafeWebProgress','Start-CafeWebProgressStage','Complete-CafeWebProgressStage','Invoke-CafeWebApplyProfile','Invoke-CafeWebApplyGraphics')){
     $definition=@($ast.FindAll({param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst]},$true)|Where-Object{$_.Name -eq $name})
     if($definition.Count -ne 1){throw ('Expected one definition for '+$name)}
     Invoke-Expression $definition[0].Extent.Text
 }
+
+$script:TargetRoot=Join-Path $env:TEMP ('CafeLauncher-WebProfileTarget-'+[guid]::NewGuid().ToString('N'))
+$null=New-Item -ItemType Directory -Path (Join-Path $script:TargetRoot 'game\csgo\cfg') -Force
+[IO.File]::WriteAllText((Join-Path $script:TargetRoot 'steam.exe'),'test fixture')
 
 function Reset-ProfileActionTest {
     $script:GamingProfiles=[ordered]@{FabMode=@{};ArliMode=@{}}
@@ -28,6 +32,7 @@ function Reset-ProfileActionTest {
     $script:RunOutcomes=New-Object 'System.Collections.Generic.List[object]'
     $script:SnapshotCalls=0;$script:ApplyCalls=0;$script:SteamUser=76561198000000000L
     $script:SteamAvailable=$true;$script:Cs2Available=$true;$script:ThrowSnapshot=$false
+    $script:SteamPath=Join-Path $script:TargetRoot 'steam.exe';$script:CfgPath=Join-Path $script:TargetRoot 'game\csgo\cfg'
     $script:QueueClearCalls=0;$script:SaveSettingsCalls=0;$script:ResetMarkerCompleteCalls=0;$script:SnapshotImportCalls=0
     $script:CafeWebProgressSequence=0;$script:CafeWebProgressTimers=@{};$script:CafeWebCurrentProgressStage=$null
     $env:CAFE_WEB_RUNNER_UPDATED=''
@@ -48,8 +53,8 @@ function Get-CafeWebActionSnapshot {
 function Set-CafeWebActionSnapshot { param([string]$ProfileName,$Snapshot,[switch]$NoSave);$script:SnapshotImportCalls++ }
 function Get-PCDiagnostics {
     [pscustomobject]@{
-        Steam=[pscustomobject]@{ActiveSessionPresent=$script:SteamAvailable;Executable='C:\Cafe\Steam.exe'}
-        CS2=[pscustomobject]@{Status=$(if($script:Cs2Available){'DETECTED'}else{'NOT_UNIQUELY_DETECTED'});ConfigPath=$(if($script:Cs2Available){'C:\Cafe\CS2\cfg'}else{$null})}
+        Steam=[pscustomobject]@{ActiveSessionPresent=$script:SteamAvailable;Executable=$script:SteamPath}
+        CS2=[pscustomobject]@{Status=$(if($script:Cs2Available){'DETECTED'}else{'NOT_UNIQUELY_DETECTED'});ConfigPath=$(if($script:Cs2Available){$script:CfgPath}else{$null})}
     }
 }
 function Get-CafeWebActiveSteamUserId { return $script:SteamUser }
@@ -62,6 +67,11 @@ function Invoke-GamingProfile {
 function Set-StepResult { param($Run,$Step,$Status,$Detail);$script:StepResults.Add([pscustomobject]@{Run=$Run;Step=$Step;Status=$Status;Detail=$Detail}) }
 function Set-RunOutcome { param($Run,$Setting,$Status,$Detail,$Actual,$Requested,$Target);$script:RunOutcomes.Add([pscustomobject]@{Run=$Run;Setting=$Setting;Status=$Status;Detail=$Detail;Actual=$Actual;Requested=$Requested;Target=$Target}) }
 function Write-Log { param($Message,$Level) }
+
+Reset-ProfileActionTest
+if(-not (Test-CafeWebPinnedActionTarget -SteamUserId $script:SteamUser -SteamPath $script:SteamPath -CfgDirectory $script:CfgPath)){throw 'The focused Steam/CS2 target check rejected its pinned fixture.'}
+if(Test-CafeWebPinnedActionTarget -SteamUserId ($script:SteamUser+1) -SteamPath $script:SteamPath -CfgDirectory $script:CfgPath){throw 'The focused target check accepted a different Steam account.'}
+if(Test-CafeWebPinnedActionTarget -SteamUserId $script:SteamUser -SteamPath $script:SteamPath -CfgDirectory ($script:CfgPath+'\missing')){throw 'The focused target check accepted a missing config path.'}
 
 Reset-ProfileActionTest
 $script:LogihubEnsureCalls=0;$script:LiveDpiCalls=0;$script:WebLiveDpiSwitch=$false
@@ -138,4 +148,5 @@ try{
     if(Test-Path -LiteralPath $progressTestDirectory){Remove-Item -LiteralPath $progressTestDirectory -Recurse -Force}
 }
 
-'Web profile action checks passed: verified result mapping, progress start/end timing, pending-edit block, Steam preflight, and graphics pending-edit block.'
+'Web profile action checks passed: result mapping, timed progress, pending-edit and Steam gates, pinned-target recheck, and graphics block.'
+Remove-Item -LiteralPath $script:TargetRoot -Recurse -Force

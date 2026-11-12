@@ -11,7 +11,7 @@ del /q "%CAFE_RESTART_SIGNAL%" >nul 2>&1
 exit /b
 
 # POWERSHELL_GUI
-# CAFE_RELEASE=2026.11.12.4
+# CAFE_RELEASE=2026.11.12.5
 
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
@@ -10099,13 +10099,8 @@ function Invoke-GamingProfile {
         # Profile Apply installs its CFG without editing any Steam launch options.
         $steps += @{ Name = "Install CS2 $profileCfgName"; Action = {
             if($WebAction){
-                $inventory=Get-PCDiagnostics -AsObject
-                $activeUser=Get-CafeWebActiveSteamUserId
-                if(-not $inventory.Steam.ActiveSessionPresent -or $activeUser -ne $WebSteamUserId -or
-                   -not [string]::Equals([string]$inventory.Steam.Executable,$WebSteamPath,[StringComparison]::OrdinalIgnoreCase) -or
-                   $inventory.CS2.Status -cne 'DETECTED' -or
-                   -not [string]::Equals([string]$inventory.CS2.ConfigPath,$WebCfgDirectory,[StringComparison]::OrdinalIgnoreCase)){
-                    throw 'Steam session or CS2 CFG path changed before profile CFG installation.'
+                if(-not (Test-CafeWebPinnedActionTarget -SteamUserId $WebSteamUserId -SteamPath $WebSteamPath -CfgDirectory $WebCfgDirectory)){
+                    throw 'Steam session or pinned CS2 CFG target changed before profile CFG installation.'
                 }
                 $cfgInstalled=Install-ProfileCfg -Silent -CfgName $profileCfgName -DownloadUrl $profileCfgUrl -CloudPreferred:([bool]$profileCfgUrl) -CloudSnapshot $profileCfgSnapshot -UseSnapshotOnly -CfgDirectory $WebCfgDirectory
             }else{
@@ -10232,6 +10227,22 @@ function Get-CS2SteamLaunchArguments {
     return @('-applaunch', '730', '+exec', 'cafelauncher_profile_baseline.cfg', '+exec', $CfgName)
 }
 
+function Install-CafePlayExecCfg {
+    param([Parameter(Mandatory=$true)][ValidateSet('Baseline','Profile')][string]$Kind,[string]$CfgName='',[string]$DownloadUrl='',$CloudSnapshot,[string]$CfgDirectory='', [switch]$WebAction)
+    if($Kind -eq 'Baseline'){return (Install-CS2ProfileBaselineCfg -CfgDirectory $CfgDirectory)}
+    if($WebAction){
+        return (Install-ProfileCfg -Silent -CfgName $CfgName -DownloadUrl $DownloadUrl -CloudPreferred:([bool]$DownloadUrl) -CloudSnapshot $CloudSnapshot -UseSnapshotOnly -CfgDirectory $CfgDirectory)
+    }
+    return (Install-ProfileCfg -Silent -CfgName $CfgName -DownloadUrl $DownloadUrl -CloudPreferred:([bool]$DownloadUrl) -CloudSnapshot $CloudSnapshot -UseSnapshotOnly)
+}
+
+function Start-CafePlayExecInSteam {
+    param([Parameter(Mandatory=$true)][string]$SteamPath,[Parameter(Mandatory=$true)][string]$CfgName)
+    $launchArgs=@(Get-CS2SteamLaunchArguments -CfgName $CfgName)
+    [void](Start-Process -FilePath $SteamPath -ArgumentList $launchArgs -ErrorAction Stop)
+    return $launchArgs
+}
+
 function Start-CS2WithProfileCfg {
     param([Parameter(Mandatory=$true)][string]$ProfileName)
     if (-not $script:GamingProfiles.Contains($ProfileName)) { throw "Unknown CS2 profile: $ProfileName" }
@@ -10248,7 +10259,7 @@ function Start-CS2WithProfileCfg {
     $cfgName = [string]$profile.ConfigFile
     if ($cfgName -notmatch '^[A-Za-z0-9_-]+\.cfg$') { throw "Invalid CFG filename for $ProfileName." }
     Write-Log "$ProfileName Play + Exec: installing the CS2 reset baseline before the selected profile CFG."
-    $baselineInstalled=Install-CS2ProfileBaselineCfg
+    $baselineInstalled=Install-CafePlayExecCfg -Kind Baseline
     if($baselineInstalled -ne $true){
         Write-Log "$ProfileName Play + Exec cancelled: the CS2 reset baseline could not be installed." 'ERROR'
         [System.Windows.Forms.MessageBox]::Show('Unable to install the CS2 profile reset baseline. CS2 was not started. Check LIVE LOGS.','CS2 Baseline Installation Failed','OK','Warning') | Out-Null
@@ -10259,7 +10270,7 @@ function Start-CS2WithProfileCfg {
         $url = $script:FabCfgCloudUrl
     }
     Write-Log "$ProfileName Play + Exec: installing $cfgName before starting CS2."
-    $installed = Install-ProfileCfg -Silent -CfgName $cfgName -DownloadUrl $url -CloudPreferred:([bool]$url) -CloudSnapshot $profileSnapshot -UseSnapshotOnly
+    $installed = Install-CafePlayExecCfg -Kind Profile -CfgName $cfgName -DownloadUrl $url -CloudSnapshot $profileSnapshot
     if ($installed -ne $true) {
         Write-Log "$ProfileName Play + Exec cancelled: $cfgName installation did not succeed." 'ERROR'
         [System.Windows.Forms.MessageBox]::Show(
@@ -10287,8 +10298,7 @@ function Start-CS2WithProfileCfg {
         [System.Windows.Forms.MessageBox]::Show('Steam not found. CFG installed but CS2 was not launched.', 'Steam Not Found', 'OK', 'Warning') | Out-Null
         return
     }
-    $args = @(Get-CS2SteamLaunchArguments -CfgName $cfgName)
-    Start-Process -FilePath $steamExe -ArgumentList $args -ErrorAction Stop
+    $args = @(Start-CafePlayExecInSteam -SteamPath $steamExe -CfgName $cfgName)
     Write-Log "$ProfileName requested CS2 launch via Steam: -applaunch 730 +exec cafelauncher_profile_baseline.cfg +exec $cfgName. Persistent Steam launch options unchanged."
 }
 
@@ -10457,28 +10467,11 @@ function Invoke-CafeWebApplyGraphics {
         if(-not $snapshot){$snapshot=Get-CafeWebActionSnapshot -ProfileName $ProfileName}
         Complete-CafeWebProgressStage -Name 'Check graphics profile state and refresh snapshot' -Status 'SUCCESS' -Detail 'The selected graphics preset was read from a verified snapshot.'
         Start-CafeWebProgressStage -Name 'Load and verify graphics helper' -Detail 'Checking the cached helper or downloading the pinned helper if needed.'
-        $expected='b6fa5619e13df559b40c02cd8a11d9d7cd99d7e8'
-        $source=Add-CafeCacheBust -Uri 'https://raw.githubusercontent.com/fabjoncela/Cs-script/main/graphics/ApplyGraphics.ps1'
-        $cache=Join-Path $env:LOCALAPPDATA 'CafeLauncher\graphics-module.ps1'
-        $parent=Split-Path -Parent $cache
-        if(-not (Test-Path -LiteralPath $parent)){[void](New-Item -Path $parent -ItemType Directory -Force)}
-        $temp=Join-Path $env:TEMP ('CafeLauncher-graphics-module-'+[guid]::NewGuid().ToString('N')+'.ps1')
-        try{
-            $localModule=Join-Path (Split-Path -Parent $env:CAFE_SCRIPT) 'graphics\ApplyGraphics.ps1'
-            if((Test-Path -LiteralPath $localModule -PathType Leaf) -and (Get-GitBlobSha -Bytes ([IO.File]::ReadAllBytes($localModule))) -eq $expected){Copy-Item -LiteralPath $localModule -Destination $cache -Force}
-            elseif(-not (Test-Path -LiteralPath $cache -PathType Leaf) -or (Get-GitBlobSha -Bytes ([IO.File]::ReadAllBytes($cache))) -ne $expected){
-                [Net.ServicePointManager]::SecurityProtocol=[Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
-                Invoke-WebRequest -Uri $source -OutFile $temp -UseBasicParsing -TimeoutSec 15 -ErrorAction Stop
-                if((Get-GitBlobSha -Bytes ([IO.File]::ReadAllBytes($temp))) -ne $expected){throw 'Downloaded graphics helper failed its pinned Git blob SHA.'}
-                Copy-Item -LiteralPath $temp -Destination $cache -Force
-            }
-        }finally{Remove-Item -LiteralPath $temp -Force -ErrorAction SilentlyContinue}
-        if((Get-GitBlobSha -Bytes ([IO.File]::ReadAllBytes($cache))) -ne $expected){throw 'Cached graphics helper failed its pinned Git blob SHA.'}
-        . $cache
+        $cache=Get-CafeVerifiedGraphicsModulePath
         Complete-CafeWebProgressStage -Name 'Load and verify graphics helper' -Status 'SUCCESS' -Detail 'The graphics helper passed its pinned hash check and loaded.'
         Start-CafeWebProgressStage -Name 'Apply CS2 video and NVIDIA graphics settings' -Detail 'Applying and verifying the selected graphics preset on this PC.'
         $mayHaveChanged=$true
-        $graphics=Apply-CS2ModeGraphics -ModeName $ProfileName -Preset $snapshot.Graphics -WebAction
+        $graphics=Invoke-CafeGraphicsPresetCore -ModeName $ProfileName -Preset $snapshot.Graphics -WebAction -ModulePath $cache
         if(-not $graphics -or -not $graphics.state){throw 'Graphics helper did not return a structured result.'}
         $graphicsState=[string]$graphics.state
         $progressState=if($graphicsState -eq 'COMPLETED'){'SUCCESS'}elseif($graphicsState -eq 'PARTIAL'){'PARTIAL'}elseif($graphicsState -eq 'SKIPPED'){'SKIPPED'}else{'FAILED'}
@@ -10490,6 +10483,16 @@ function Invoke-CafeWebApplyGraphics {
         $step=[ordered]@{name='Apply game graphics';status=$(if($mayHaveChanged){'PARTIAL'}else{'FAILED'});detail='The graphics action stopped before a complete result was confirmed.'}
         return (New-CafeWebProfileActionEnvelope -State $(if($mayHaveChanged){'INTERRUPTED'}else{'FAILED'}) -Summary ('CafeLauncher could not confirm the graphics result. '+$_.Exception.Message) -Steps @($step) -ExecutionOutcomeKnown:(-not $mayHaveChanged))
     }
+}
+
+function Test-CafeWebPinnedActionTarget {
+    param([long]$SteamUserId,[string]$SteamPath,[string]$CfgDirectory)
+    $activeUser=Get-CafeWebActiveSteamUserId
+    if($activeUser -le 0 -or $activeUser -ne $SteamUserId){return $false}
+    if([string]::IsNullOrWhiteSpace($SteamPath) -or -not (Test-Path -LiteralPath $SteamPath -PathType Leaf)){return $false}
+    if([string]::IsNullOrWhiteSpace($CfgDirectory) -or $CfgDirectory -notmatch '(?i)\\game\\csgo\\cfg$' -or
+       -not (Test-Path -LiteralPath $CfgDirectory -PathType Container)){return $false}
+    return $true
 }
 
 function Get-CafeWebActiveSteamUserId {
@@ -10632,14 +10635,8 @@ function Invoke-CafeWebPlayExec {
         Complete-CafeWebProgressStage -Name 'Fetch and verify profile, graphics, and CFG bundle' -Status 'SUCCESS' -Detail 'The full bundle was verified at one backend revision.'
 
         Start-CafeWebProgressStage -Name 'Recheck Steam session and CS2 config target' -Detail 'Confirming that the selected Steam account and config folder have not changed.'
-        $preWriteInventory=Get-PCDiagnostics -AsObject
-        $preWriteSteamUser=Get-CafeWebActiveSteamUserId
-        $preWriteSteamPath=[string]$preWriteInventory.Steam.Executable
-        $cfgDirectory=[string]$preWriteInventory.CS2.ConfigPath
-        if(-not $preWriteInventory.Steam.ActiveSessionPresent -or $preWriteSteamUser -ne $activeSteamUser -or
-           -not [string]::Equals($preWriteSteamPath,$steamPath,[StringComparison]::OrdinalIgnoreCase) -or
-           $preWriteInventory.CS2.Status -cne 'DETECTED' -or
-           -not [string]::Equals($cfgDirectory,$initialCs2ConfigPath,[StringComparison]::OrdinalIgnoreCase)){
+        $cfgDirectory=$initialCs2ConfigPath
+        if(-not (Test-CafeWebPinnedActionTarget -SteamUserId $activeSteamUser -SteamPath $steamPath -CfgDirectory $cfgDirectory)){
             Complete-CafeWebProgressStage -Name 'Recheck Steam session and CS2 config target' -Status 'SKIPPED' -Detail 'The Steam session or CS2 config target changed; no game CFG files were changed.'
             [void]$steps.Add([ordered]@{name='PC session recheck';status='SKIPPED';detail='Steam or the CS2 config target changed during setup. No game CFG files were changed.'})
             return (New-CafeWebPlayExecEnvelope -State 'SKIPPED' -Summary 'The Steam session or CS2 install changed while CafeLauncher prepared the action. No game CFG files were changed and Steam was not started.' -Steps $steps.ToArray() -CfgName $cfgName -Cs2AlreadyRunning $cs2Running -SteamLaunchRequested $false)
@@ -10648,7 +10645,7 @@ function Invoke-CafeWebPlayExec {
         Complete-CafeWebProgressStage -Name 'Recheck Steam session and CS2 config target' -Status 'SUCCESS' -Detail 'The Steam session and config target still match.'
         Start-CafeWebProgressStage -Name 'Install reset baseline CFG' -Detail 'Writing and verifying the known baseline CFG before the profile CFG.'
         $gameCfgWriteStarted=$true
-        if(-not (Install-CS2ProfileBaselineCfg -CfgDirectory $cfgDirectory)){
+        if(-not (Install-CafePlayExecCfg -Kind Baseline -CfgDirectory $cfgDirectory -WebAction)){
             Complete-CafeWebProgressStage -Name 'Install reset baseline CFG' -Status 'FAILED' -Detail 'The baseline install was not verified; Steam will not be started.'
             [void]$steps.Add([ordered]@{name='Reset baseline CFG';status='FAILED';detail='The reset baseline could not be installed and verified. Steam was not started.'})
             return (New-CafeWebPlayExecEnvelope -State 'INTERRUPTED' -Summary 'The reset baseline install did not return a verified result. Check this PC before retrying; Steam was not launched by a confirmed result.' -Steps $steps.ToArray() -CfgName $cfgName -Cs2AlreadyRunning $cs2Running -SteamLaunchRequested $false -ExecutionOutcomeKnown $false)
@@ -10659,7 +10656,7 @@ function Invoke-CafeWebPlayExec {
         $downloadUrl=[string]$profile.CfgDownloadUrl
         if($ProfileName -eq 'FabMode' -and [string]::IsNullOrWhiteSpace($downloadUrl)){$downloadUrl=$script:FabCfgCloudUrl}
         Start-CafeWebProgressStage -Name 'Install selected profile CFG' -Detail 'Writing the selected profile CFG from the verified backend bundle and checking the result.'
-        $installed=Install-ProfileCfg -Silent -CfgName $cfgName -DownloadUrl $downloadUrl -CloudPreferred:$true -CloudSnapshot $snapshot -UseSnapshotOnly -CfgDirectory $cfgDirectory
+        $installed=Install-CafePlayExecCfg -Kind Profile -CfgName $cfgName -DownloadUrl $downloadUrl -CloudSnapshot $snapshot -CfgDirectory $cfgDirectory -WebAction
         if($installed -ne $true){
             Complete-CafeWebProgressStage -Name 'Install selected profile CFG' -Status 'FAILED' -Detail 'The selected CFG install was not verified; Steam will not be started.'
             [void]$steps.Add([ordered]@{name='Profile CFG';status='FAILED';detail=($cfgName+' could not be installed and verified. Steam was not started.')})
@@ -10686,9 +10683,8 @@ function Invoke-CafeWebPlayExec {
             return (New-CafeWebPlayExecEnvelope -State 'PARTIAL' -Summary 'CFG files were installed, but the active Steam session changed before launch. Steam was not started.' -Steps $steps.ToArray() -CfgName $cfgName -Cs2AlreadyRunning $false -SteamLaunchRequested $false)
         }
 
-        $launchArgs=@(Get-CS2SteamLaunchArguments -CfgName $cfgName)
         $steamLaunchAttempted=$true
-        Start-Process -FilePath $steamPath -ArgumentList $launchArgs -ErrorAction Stop
+        $launchArgs=@(Start-CafePlayExecInSteam -SteamPath $steamPath -CfgName $cfgName)
         $steamLaunchRequested=$true
         Complete-CafeWebProgressStage -Name 'Start CS2 through Steam' -Status 'SUCCESS' -Detail 'Steam accepted the CS2 launch request.'
         [void]$steps.Add([ordered]@{name='Steam launch';status='SUCCESS';detail='Steam was asked to start CS2 with the reset baseline followed by the selected profile CFG. Persistent Steam launch options were unchanged.'})
@@ -10760,6 +10756,51 @@ if($env:CAFE_WEB_ACTION -in @('apply-profile','apply-graphics')){
     }
 }
 
+function Get-CafeVerifiedGraphicsModulePath {
+    param()
+    $expected='b6fa5619e13df559b40c02cd8a11d9d7cd99d7e8'
+    $cache=Join-Path $env:LOCALAPPDATA 'CafeLauncher\graphics-module.ps1'
+    $parent=Split-Path -Parent $cache
+    if(-not (Test-Path -LiteralPath $parent)){[void](New-Item -Path $parent -ItemType Directory -Force)}
+    $localModule=Join-Path (Split-Path -Parent $env:CAFE_SCRIPT) 'graphics\ApplyGraphics.ps1'
+    $loaded=$false
+    if((Test-Path -LiteralPath $localModule -PathType Leaf) -and (Get-GitBlobSha -Bytes ([IO.File]::ReadAllBytes($localModule))) -eq $expected){
+        $tokens=$null;$errors=$null
+        [void][System.Management.Automation.Language.Parser]::ParseFile($localModule,[ref]$tokens,[ref]$errors)
+        if(@($errors).Count){throw 'Local graphics module has invalid PowerShell syntax.'}
+        Copy-Item -LiteralPath $localModule -Destination $cache -Force -ErrorAction Stop
+        $loaded=$true
+    }
+    if(-not $loaded -and (Test-Path -LiteralPath $cache -PathType Leaf) -and (Get-GitBlobSha -Bytes ([IO.File]::ReadAllBytes($cache))) -eq $expected){$loaded=$true}
+    if(-not $loaded){
+        $source=Add-CafeCacheBust -Uri 'https://raw.githubusercontent.com/fabjoncela/Cs-script/main/graphics/ApplyGraphics.ps1'
+        $temp=Join-Path $env:TEMP ('CafeLauncher-graphics-module-'+[guid]::NewGuid().ToString('N')+'.ps1')
+        try{
+            [Net.ServicePointManager]::SecurityProtocol=[Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+            Invoke-WebRequest -Uri $source -OutFile $temp -UseBasicParsing -TimeoutSec 12 -ErrorAction Stop
+            $bytes=[IO.File]::ReadAllBytes($temp)
+            if((Get-GitBlobSha -Bytes $bytes) -ne $expected){throw 'Downloaded graphics helper failed its pinned Git blob SHA.'}
+            $tokens=$null;$errors=$null
+            [void][System.Management.Automation.Language.Parser]::ParseFile($temp,[ref]$tokens,[ref]$errors)
+            if(@($errors).Count){throw 'Downloaded graphics module has invalid PowerShell syntax.'}
+            Copy-Item -LiteralPath $temp -Destination $cache -Force -ErrorAction Stop
+        }finally{Remove-Item -LiteralPath $temp -Force -ErrorAction SilentlyContinue}
+    }
+    if((Get-GitBlobSha -Bytes ([IO.File]::ReadAllBytes($cache))) -ne $expected){throw 'Cached graphics helper failed its pinned Git blob SHA.'}
+    $tokens=$null;$errors=$null
+    [void][System.Management.Automation.Language.Parser]::ParseFile($cache,[ref]$tokens,[ref]$errors)
+    if(@($errors).Count){throw 'Cached graphics module has invalid PowerShell syntax.'}
+    return $cache
+}
+
+function Invoke-CafeGraphicsPresetCore {
+    param([Parameter(Mandatory=$true)][string]$ModeName,[Parameter(Mandatory=$true)]$Preset,[switch]$WebAction,[string]$ModulePath='')
+    if(-not $ModulePath){$ModulePath=Get-CafeVerifiedGraphicsModulePath}
+    . $ModulePath
+    if($WebAction){return (Apply-CS2ModeGraphics -ModeName $ModeName -Preset $Preset -WebAction)}
+    return (Apply-CS2ModeGraphics -ModeName $ModeName -Preset $Preset)
+}
+
 # Independent CS2 graphics module; loaded ONLY when Apply Graphics is clicked.
 # Strict hash pin prevents executing unreviewed modified remote module code.
 function Invoke-GraphicsOnly {
@@ -10769,46 +10810,7 @@ function Invoke-GraphicsOnly {
     Start-StepScope -Run $graphicsRun -Step 'Apply Graphics'
     try {
     if(-not (Resolve-PendingProfileChanges -ProfileName $ModeName)){return}
-    $expected='b6fa5619e13df559b40c02cd8a11d9d7cd99d7e8'
-    $source=Add-CafeCacheBust -Uri 'https://raw.githubusercontent.com/fabjoncela/Cs-script/main/graphics/ApplyGraphics.ps1'
-    $cache=Join-Path $env:LOCALAPPDATA 'CafeLauncher\graphics-module.ps1'
-    $parent=Split-Path -Parent $cache
-    if(-not (Test-Path -LiteralPath $parent)){[void](New-Item -Path $parent -ItemType Directory -Force)}
-    $temp=Join-Path $env:TEMP ('CafeLauncher-graphics-module-'+[guid]::NewGuid().ToString('N')+'.ps1')
-    try{
-        $localModule=Join-Path (Split-Path -Parent $env:CAFE_SCRIPT) 'graphics\ApplyGraphics.ps1'
-        $loadedLocal=$false
-        if(Test-Path -LiteralPath $localModule -PathType Leaf){
-            $localBytes=[IO.File]::ReadAllBytes($localModule)
-            if((Get-GitBlobSha -Bytes $localBytes) -eq $expected){
-                $localTokens=$null;$localErrors=$null
-                [void][System.Management.Automation.Language.Parser]::ParseFile($localModule,[ref]$localTokens,[ref]$localErrors)
-                if(@($localErrors).Count){throw 'Local graphics module has invalid PowerShell syntax.'}
-                Copy-Item -LiteralPath $localModule -Destination $cache -Force -ErrorAction Stop
-                $loadedLocal=$true
-                Write-Log 'Loaded the hash-verified graphics module beside this testing launcher.'
-            }
-        }
-        if(-not $loadedLocal){
-            [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
-            Invoke-CafeTimedRequest -Name 'Graphics module download' -Uri $source -Request {
-                Invoke-WebRequest -Uri $source -OutFile $temp -UseBasicParsing -TimeoutSec 12 -ErrorAction Stop
-            } | Out-Null
-            $bytes=[IO.File]::ReadAllBytes($temp)
-            if((Get-GitBlobSha -Bytes $bytes) -ne $expected){throw 'Cloud graphics module SHA does not match the reviewed launcher version.'}
-            $tokens=$null;$errors=$null
-            [void][System.Management.Automation.Language.Parser]::ParseFile($temp,[ref]$tokens,[ref]$errors)
-            if(@($errors).Count){throw 'Downloaded graphics module has invalid PowerShell syntax.'}
-            Copy-Item -LiteralPath $temp -Destination $cache -Force -ErrorAction Stop
-        }
-    }catch{
-        Write-Log ('Could not download graphics module: '+$_.Exception.Message) 'WARN'
-    }finally{Remove-Item -LiteralPath $temp -Force -ErrorAction SilentlyContinue}
-    if(-not (Test-Path -LiteralPath $cache -PathType Leaf)){throw 'Graphics module unavailable. Connect to GitHub and retry.'}
-    if((Get-GitBlobSha -Bytes ([IO.File]::ReadAllBytes($cache))) -ne $expected){
-        throw 'Cached graphics module failed signature/hash validation. Graphics not applied.'
-    }
-    . $cache
+    $modulePath=Get-CafeVerifiedGraphicsModulePath
     $cloudSnapshot=$null
     try{$cloudSnapshot=Get-CafeCloudSnapshot -ProfileName $ModeName -ForceRefresh}
     catch{
@@ -10822,7 +10824,7 @@ function Invoke-GraphicsOnly {
         if(-not (Confirm-CS2GraphicsPresetUse -ModeName $ModeName -Path $localPath)){throw 'Apply Graphics canceled; current cloud preset could not be verified.'}
         $preset=Get-ProfileGraphicsPreset -ProfileName $ModeName -Canonical
     }
-    Apply-CS2ModeGraphics -ModeName $ModeName -Preset $preset
+    Invoke-CafeGraphicsPresetCore -ModeName $ModeName -Preset $preset -ModulePath $modulePath | Out-Null
     } catch {
         Write-Log ('Graphics module could not complete: '+$_.Exception.Message) 'ERROR'
     } finally {

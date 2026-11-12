@@ -4,6 +4,9 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
+$script:TestTargetRoot=Join-Path $env:TEMP ('CafeLauncher-WebPlayTarget-'+[guid]::NewGuid().ToString('N'))
+$null=New-Item -ItemType Directory -Path (Join-Path $script:TestTargetRoot 'game\csgo\cfg') -Force
+[IO.File]::WriteAllText((Join-Path $script:TestTargetRoot 'steam.exe'),'test fixture')
 $launcherPath = Join-Path $repoRoot 'cafe.bat'
 $launcher = [IO.File]::ReadAllText($launcherPath)
 $marker = '# POWERSHELL_GUI'+"`r`n"
@@ -14,7 +17,7 @@ $parseErrors = $null
 $ast = [System.Management.Automation.Language.Parser]::ParseInput($launcher.Substring($markerIndex+$marker.Length),[ref]$tokens,[ref]$parseErrors)
 if(@($parseErrors).Count){throw ('Launcher PowerShell failed to parse: '+$parseErrors[0].Message)}
 
-foreach($name in @('New-CafeWebPlayExecEnvelope','Reset-CafeWebPendingEditsAfterRunnerUpdate','Write-CafeWebProgress','Start-CafeWebProgressStage','Complete-CafeWebProgressStage','Invoke-CafeWebPlayExec')){
+foreach($name in @('Test-CafeWebPinnedActionTarget','Install-CafePlayExecCfg','Start-CafePlayExecInSteam','New-CafeWebPlayExecEnvelope','Reset-CafeWebPendingEditsAfterRunnerUpdate','Write-CafeWebProgress','Start-CafeWebProgressStage','Complete-CafeWebProgressStage','Invoke-CafeWebPlayExec')){
     $definitions=@($ast.FindAll({param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst]},$true) |
         Where-Object {$_.Name -eq $name})
     if($definitions.Count -ne 1){throw ('Expected exactly one function definition: '+$name)}
@@ -27,8 +30,8 @@ function Reset-WebPlayTestState {
     $script:CafeWebCurrentProgressStage=$null
     $env:CAFE_WEB_PROGRESS_DIR=''
     $script:TestProfileName='FabMode'
-    $script:TestSteamPath='C:\CafeTest\Steam\steam.exe'
-    $script:TestCfgPath='C:\CafeTest\SteamLibrary\steamapps\common\Counter-Strike Global Offensive\game\csgo\cfg'
+    $script:TestSteamPath=Join-Path $script:TestTargetRoot 'steam.exe'
+    $script:TestCfgPath=Join-Path $script:TestTargetRoot 'game\csgo\cfg'
     $script:TestRevision=7
     $script:TestRevisionFloor=7
     $script:TestRollbackApproved=$true
@@ -67,6 +70,15 @@ function Reset-WebPlayTestState {
     $script:ProfileRefreshStatus=@{}
 }
 
+function Test-Path {
+    [CmdletBinding()]
+    param([string]$LiteralPath,[string]$PathType,[string]$Path)
+    $candidate=if($LiteralPath){$LiteralPath}else{$Path}
+    if($script:TestPathChanges -and [string]::Equals($candidate,$script:TestCfgPath,[StringComparison]::OrdinalIgnoreCase)){return $false}
+    if([string]::Equals($candidate,$script:TestSteamPath,[StringComparison]::OrdinalIgnoreCase)){return $true}
+    if([string]::Equals($candidate,$script:TestCfgPath,[StringComparison]::OrdinalIgnoreCase)){return $true}
+    return Microsoft.PowerShell.Management\Test-Path @PSBoundParameters
+}
 function Get-CafeBackendQueuePath { return (Join-Path $env:TEMP 'CafeLauncher-web-play-test-no-queue.json') }
 function Reset-CafeWebPendingEditsAfterRunnerUpdate { param([string]$ProfileName);$script:ResetProfileStateCalls++;return $null }
 function Get-PCDiagnostics {
@@ -216,3 +228,5 @@ $uncertainLaunch=Invoke-CafeWebPlayExec -ProfileName 'FabMode'
 Assert-WebPlayResult $uncertainLaunch 'INTERRUPTED' $false
 
 Write-Output 'Web Play + Exec checks passed: verified revision and pinned CFG target; Steam/CS2/account gates; pending edits; rollback; already-running CS2; backend outage; and uncertain CFG/launch outcomes.'
+
+Remove-Item -LiteralPath $script:TestTargetRoot -Recurse -Force

@@ -272,10 +272,25 @@ foreach($freshReadFunctionName in @(
         param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
             $node.Name -eq $freshReadFunctionName
     },$true))
-    if($freshReadFunction.Count -ne 1 -or $freshReadFunction[0].Extent.Text -notmatch 'Add-CafeCacheBust'){
-        throw ("$freshReadFunctionName must bypass stale raw GitHub CDN responses.")
+    $expectedText=if($freshReadFunctionName -eq 'Invoke-GraphicsOnly'){'Get-CafeVerifiedGraphicsModulePath'}else{'Add-CafeCacheBust'}
+    if($freshReadFunction.Count -ne 1 -or $freshReadFunction[0].Extent.Text -notmatch [regex]::Escape($expectedText)){
+        throw ("$freshReadFunctionName must use the cache-busted verified request path.")
     }
 }
+$graphicsLoader=@($psAst.FindAll({
+    param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Get-CafeVerifiedGraphicsModulePath'
+},$true))
+if($graphicsLoader.Count -ne 1 -or $graphicsLoader[0].Extent.Text -notmatch 'Add-CafeCacheBust' -or $graphicsLoader[0].Extent.Text -notmatch 'Get-GitBlobSha'){
+    throw 'The shared graphics loader must cache-bust remote fetches and enforce the pinned Git blob hash.'
+}
+$graphicsLoaderBody=$graphicsLoader[0].Extent.Text
+$cacheValidationAt=$graphicsLoaderBody.IndexOf('Get-GitBlobSha -Bytes ([IO.File]::ReadAllBytes($cache))',[StringComparison]::Ordinal)
+$networkFetchAt=$graphicsLoaderBody.IndexOf('Invoke-WebRequest -Uri $source',[StringComparison]::Ordinal)
+if($cacheValidationAt -lt 0 -or $networkFetchAt -le $cacheValidationAt){throw 'A valid cached graphics module must be reused before any network fetch.'}
+$webGraphics=@($psAst.FindAll({param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Invoke-CafeWebApplyGraphics'},$true))
+$graphicsCore=@($psAst.FindAll({param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Invoke-CafeGraphicsPresetCore'},$true))
+$standardGraphics=@($psAst.FindAll({param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Invoke-GraphicsOnly'},$true))
+if($webGraphics.Count -ne 1 -or $graphicsCore.Count -ne 1 -or $standardGraphics.Count -ne 1 -or $webGraphics[0].Extent.Text -notmatch 'Invoke-CafeGraphicsPresetCore' -or $standardGraphics[0].Extent.Text -notmatch 'Invoke-CafeGraphicsPresetCore'){throw 'Windows and web Apply Graphics must use the same preset action core.'}
 $profileApiFunction=@($psAst.FindAll({
     param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
         $node.Name -eq 'Get-GitHubJsonFromContentsApi'
@@ -627,11 +642,13 @@ if($profileApply.Count -ne 1 -or $profileApply[0].Extent.Text -notmatch 'Resolve
     throw 'Profile and graphics apply actions must resolve unsynced edits before using cloud settings.'
 }
 $profileApplyBody=$profileApply[0].Extent.Text
+$playCfgCore=@($psAst.FindAll({param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Install-CafePlayExecCfg'},$true))
 if($profileApplyBody -notmatch 'Refresh-ProfileFromBackend -ProfileName \$ProfileName -PassThruSnapshot' -or
    $profileApplyBody -notmatch 'Get-ProfileGraphicsPreset -ProfileName \$ProfileName -CloudSnapshot \$profileSnapshot' -or
    $profileApplyBody -notmatch 'Install-ProfileCfg .* -CloudSnapshot \$profileCfgSnapshot -UseSnapshotOnly' -or
    $playExec[0].Extent.Text -notmatch 'Refresh-ProfileFromBackend -ProfileName \$ProfileName -PassThruSnapshot' -or
-   $playExec[0].Extent.Text -notmatch 'Install-ProfileCfg .* -CloudSnapshot \$profileSnapshot -UseSnapshotOnly'){
+   $playExec[0].Extent.Text -notmatch 'Install-CafePlayExecCfg -Kind Profile .* -CloudSnapshot \$profileSnapshot' -or
+   $playCfgCore.Count -ne 1 -or $playCfgCore[0].Extent.Text -notmatch 'Install-ProfileCfg .* -CloudSnapshot \$CloudSnapshot -UseSnapshotOnly'){
     throw 'Apply and Play + Exec must install their CFG from the same verified profile snapshot used for refresh.'
 }
 $graphicsRefreshAt=$profileApplyBody.IndexOf('Get-ProfileGraphicsPreset -ProfileName $ProfileName -RequireVerifiedCloud',[StringComparison]::Ordinal)
