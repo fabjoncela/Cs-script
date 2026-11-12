@@ -54,6 +54,34 @@ function ConvertTo-GitTextBytes {
     } finally { $stream.Dispose() }
 }
 
+function Assert-BackendPublishToken {
+    param([string]$Origin,[string]$Version,[string]$Token)
+    $request = [Net.HttpWebRequest]::Create($Origin.TrimEnd('/') + "/v1/admin/releases/$Version/launcher")
+    $request.Method = 'PUT'
+    $request.ContentType = 'application/octet-stream'
+    $request.Headers.Add('Authorization', 'Bearer ' + $Token)
+    $request.ContentLength = 1
+    $stream = $request.GetRequestStream()
+    try { $stream.WriteByte(0) } finally { $stream.Dispose() }
+    try {
+        $response = [Net.HttpWebResponse]$request.GetResponse()
+        try { throw "Unexpected successful response to the non-publishing token check (HTTP $([int]$response.StatusCode))." }
+        finally { $response.Dispose() }
+    } catch [Net.WebException] {
+        $response = $_.Exception.Response
+        if (-not $response) { throw 'Could not verify the backend publishing token over HTTPS.' }
+        try {
+            $status = [int]$response.StatusCode
+            $reader = New-Object IO.StreamReader($response.GetResponseStream())
+            try { $body = $reader.ReadToEnd() } finally { $reader.Dispose() }
+            if ($status -eq 401) { throw 'The backend rejected this publishing token (HTTP 401). Check that you used the CafeLauncher backend publishing token.' }
+            if ($status -ne 422 -or $body -notmatch 'launcher_asset_too_small') {
+                throw "The backend token check returned HTTP $status instead of its expected safe size rejection."
+            }
+        } finally { $response.Dispose() }
+    }
+}
+
 foreach ($path in @($launcherPath, $graphicsPath, $publisherPath)) {
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
         throw "Required release file was not found: $path"
@@ -159,6 +187,9 @@ try {
     } elseif ($oldToken.Length -lt 32) {
         throw 'CAFELAUNCHER_PUBLISH_TOKEN must contain at least 32 characters.'
     }
+
+    Assert-BackendPublishToken -Origin $BaseUrl -Version $version -Token $env:CAFELAUNCHER_PUBLISH_TOKEN
+    Write-Host 'Publishing token accepted; the one-byte probe was rejected before any file could be stored.'
 
     $python = Get-Command python.exe -ErrorAction Stop
     & $python.Source $publisherPath release `
