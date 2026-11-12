@@ -31,11 +31,11 @@ internal static class CompatibilityTests
             !CafeLauncherWebRunner.LauncherSupportsAction(validated, "apply-graphics"))
             throw new Exception("Web action capability detection failed.");
         Dictionary<string, object> release = new Dictionary<string, object> {
-            { "version", "0.6.0" }, { "sha256", new string('a', 64) }, { "size", 50000 }
+            { "version", "0.7.0" }, { "sha256", new string('a', 64) }, { "size", 50000 }
         };
         Dictionary<string, object> checkedRelease = CafeLauncherWebRunner.ValidateRunnerReleaseMetadata(release);
-        if ((int)checkedRelease["size"] != 50000 || !CafeLauncherWebRunner.IsRunnerVersionNewer("0.6.0", "0.5.0") ||
-            CafeLauncherWebRunner.IsRunnerVersionNewer("0.5.0", "0.6.0"))
+        if ((int)checkedRelease["size"] != 50000 || !CafeLauncherWebRunner.IsRunnerVersionNewer("0.7.0", "0.6.0") ||
+            CafeLauncherWebRunner.IsRunnerVersionNewer("0.6.0", "0.7.0"))
             throw new Exception("Runner release metadata validation or update ordering failed.");
         release["sha256"] = "not-a-sha";
         bool invalidReleaseRejected = false;

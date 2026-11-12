@@ -14,7 +14,7 @@ $parseErrors = $null
 $ast = [System.Management.Automation.Language.Parser]::ParseInput($launcher.Substring($markerIndex+$marker.Length),[ref]$tokens,[ref]$parseErrors)
 if(@($parseErrors).Count){throw ('Launcher PowerShell failed to parse: '+$parseErrors[0].Message)}
 
-foreach($name in @('New-CafeWebPlayExecEnvelope','Reset-CafeWebPendingEditsAfterRunnerUpdate','Invoke-CafeWebPlayExec')){
+foreach($name in @('New-CafeWebPlayExecEnvelope','Reset-CafeWebPendingEditsAfterRunnerUpdate','Write-CafeWebProgress','Start-CafeWebProgressStage','Complete-CafeWebProgressStage','Invoke-CafeWebPlayExec')){
     $definitions=@($ast.FindAll({param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst]},$true) |
         Where-Object {$_.Name -eq $name})
     if($definitions.Count -ne 1){throw ('Expected exactly one function definition: '+$name)}
@@ -22,6 +22,10 @@ foreach($name in @('New-CafeWebPlayExecEnvelope','Reset-CafeWebPendingEditsAfter
 }
 
 function Reset-WebPlayTestState {
+    $script:CafeWebProgressSequence=0
+    $script:CafeWebProgressTimers=@{}
+    $script:CafeWebCurrentProgressStage=$null
+    $env:CAFE_WEB_PROGRESS_DIR=''
     $script:TestProfileName='FabMode'
     $script:TestSteamPath='C:\CafeTest\Steam\steam.exe'
     $script:TestCfgPath='C:\CafeTest\SteamLibrary\steamapps\common\Counter-Strike Global Offensive\game\csgo\cfg'
