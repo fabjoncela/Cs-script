@@ -17,8 +17,9 @@ using Microsoft.Win32;
 internal static class CafeLauncherWebRunner
 {
     private const string BackendOrigin = "https://fabjon-hp.tail681ec9.ts.net:10000";
-    private const string RunnerVersion = "0.4.0";
+    private const string RunnerVersion = "0.5.0";
     private const int MaxLauncherBytes = 1000000;
+    private const int MaxRunnerBytes = 8 * 1024 * 1024;
     private static readonly JavaScriptSerializer Json = new JavaScriptSerializer { MaxJsonLength = 2 * 1024 * 1024 };
 
     [STAThread]
@@ -29,11 +30,23 @@ internal static class CafeLauncherWebRunner
             if (args.Length == 0) return InstallForCurrentUser();
             if (args.Length == 1 && args[0] == "--register") return RegisterProtocol(Process.GetCurrentProcess().MainModule.FileName);
             if (args.Length == 1 && args[0] == "--unregister") return UnregisterProtocol();
-            if (args.Length != 1) throw new InvalidOperationException("Open CafeLauncher from the CafeLauncher website on this PC.");
+            if (args.Length < 1 || args.Length > 2 || (args.Length == 2 && args[1] != "--after-update"))
+                throw new InvalidOperationException("Open CafeLauncher from the CafeLauncher website on this PC.");
 
             string requestId = ParseRequestUri(args[0]);
             ServicePointManager.SecurityProtocol |= SecurityProtocolType.Tls12;
             ServicePointManager.Expect100Continue = false;
+            bool startedAfterUpdate = args.Length == 2;
+            bool profileResetPending = File.Exists(PendingProfileResetPath());
+            if (!startedAfterUpdate)
+            {
+                string updatedRunner = TryUpdateRunner(requestId);
+                if (updatedRunner != null)
+                {
+                    StartUpdatedRunner(updatedRunner, requestId);
+                    return 0;
+                }
+            }
 
             string claimCapability = RandomToken();
             Dictionary<string, object> claimBody = new Dictionary<string, object>
@@ -54,7 +67,7 @@ internal static class CafeLauncherWebRunner
             if (action == "detect-pc" && profile != null)
                 throw new InvalidOperationException("Detect PC must not include a profile.");
             if (action != "detect-pc") ProfileCfg(profile);
-            return ExecuteClaimedAction(requestId, action, profile, claimCapability);
+            return ExecuteClaimedAction(requestId, action, profile, claimCapability, startedAfterUpdate || profileResetPending);
         }
         catch (Exception error)
         {
@@ -110,12 +123,18 @@ internal static class CafeLauncherWebRunner
 
     private static int RegisterProtocol(string executable)
     {
+        return WriteProtocolRegistration(executable, true);
+    }
+
+    private static int WriteProtocolRegistration(string executable, bool showMessage)
+    {
         executable = Path.GetFullPath(executable);
         string expectedCommand = "\"" + executable + "\" \"%1\"";
         using (RegistryKey existing = Registry.CurrentUser.OpenSubKey(@"Software\Classes\cafelauncher\shell\open\command", false))
         {
             string registeredCommand = existing == null ? null : existing.GetValue(null) as string;
-            if (registeredCommand != null && !String.Equals(registeredCommand, expectedCommand, StringComparison.OrdinalIgnoreCase))
+            if (registeredCommand != null && !String.Equals(registeredCommand, expectedCommand, StringComparison.OrdinalIgnoreCase) &&
+                !IsManagedRunnerCommand(registeredCommand))
                 throw new InvalidOperationException("Another CafeLauncher protocol handler is already registered for this Windows user. Remove or update that registration before installing this runner.");
         }
         using (RegistryKey protocol = Registry.CurrentUser.CreateSubKey(@"Software\Classes\cafelauncher"))
@@ -129,8 +148,142 @@ internal static class CafeLauncherWebRunner
                 command.SetValue(null, expectedCommand);
             }
         }
-        MessageBox.Show("CafeLauncher web links are registered for this Windows user.", "CafeLauncher", MessageBoxButtons.OK, MessageBoxIcon.Information);
+        if (showMessage) MessageBox.Show("CafeLauncher web links are registered for this Windows user.", "CafeLauncher", MessageBoxButtons.OK, MessageBoxIcon.Information);
         return 0;
+    }
+
+    private static bool IsManagedRunnerCommand(string command)
+    {
+        const string suffix = "\" \"%1\"";
+        if (String.IsNullOrEmpty(command) || !command.StartsWith("\"", StringComparison.Ordinal) || !command.EndsWith(suffix, StringComparison.OrdinalIgnoreCase)) return false;
+        string path;
+        try { path = Path.GetFullPath(command.Substring(1, command.Length - suffix.Length - 1)); }
+        catch { return false; }
+        if (!String.Equals(Path.GetFileName(path), "CafeLauncherWebRunner.exe", StringComparison.OrdinalIgnoreCase)) return false;
+        string root = Path.GetFullPath(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "CafeLauncher", "Runner"));
+        string prefix = root.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
+        return path.StartsWith(prefix, StringComparison.OrdinalIgnoreCase);
+    }
+
+    internal static Dictionary<string, object> ValidateRunnerReleaseMetadata(Dictionary<string, object> metadata)
+    {
+        if (metadata == null) throw new InvalidOperationException("GitHub returned no runner release metadata.");
+        string version = RequiredString(metadata, "version");
+        string hash = RequiredString(metadata, "sha256").ToLowerInvariant();
+        int size;
+        try { size = Convert.ToInt32(metadata["size"]); }
+        catch { throw new InvalidOperationException("GitHub returned an invalid runner size."); }
+        Version parsed;
+        if (!Regex.IsMatch(version, @"^\d+\.\d+\.\d+$", RegexOptions.CultureInvariant) || !Version.TryParse(version, out parsed) ||
+            size < 10000 || size > MaxRunnerBytes || !Regex.IsMatch(hash, @"^[0-9a-f]{64}$", RegexOptions.CultureInvariant))
+            throw new InvalidOperationException("GitHub returned invalid runner release metadata.");
+        return new Dictionary<string, object> { { "version", version }, { "sha256", hash }, { "size", size } };
+    }
+
+    internal static bool IsRunnerVersionNewer(string candidate, string current)
+    {
+        Version candidateVersion, currentVersion;
+        return Version.TryParse(candidate, out candidateVersion) && Version.TryParse(current, out currentVersion) && candidateVersion > currentVersion;
+    }
+
+    private static string TryUpdateRunner(string requestId)
+    {
+        const string metadataUrl = "https://github.com/fabjoncela/Cs-script/releases/latest/download/CafeLauncherWebRunner.release.json";
+        byte[] metadataBytes;
+        try { metadataBytes = GetGithubReleaseAssetBytes(new Uri(metadataUrl), 4096); }
+        catch (WebException) { return null; } // Keep the installed runner usable when GitHub is temporarily unavailable.
+        Dictionary<string, object> metadata = ValidateRunnerReleaseMetadata(ParseJson(Encoding.UTF8.GetString(metadataBytes)));
+        string version = (string)metadata["version"];
+        if (!IsRunnerVersionNewer(version, RunnerVersion)) return null;
+
+        string runnerRoot = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "CafeLauncher", "Runner");
+        string versionDirectory = Path.Combine(runnerRoot, "releases", version);
+        Directory.CreateDirectory(versionDirectory);
+        string destination = Path.Combine(versionDirectory, "CafeLauncherWebRunner.exe");
+        bool cached = false;
+        if (File.Exists(destination))
+        {
+            byte[] local = File.ReadAllBytes(destination);
+            cached = local.Length == (int)metadata["size"] && String.Equals(Hash(local), (string)metadata["sha256"], StringComparison.Ordinal);
+        }
+        if (!cached)
+        {
+            Uri releaseAsset = new Uri("https://github.com/fabjoncela/Cs-script/releases/download/cafelauncher-web-runner-v" + version + "/CafeLauncherWebRunner.exe");
+            byte[] bytes;
+            try { bytes = GetGithubReleaseAssetBytes(releaseAsset, MaxRunnerBytes); }
+            catch (WebException) { return null; }
+            if (bytes.Length != (int)metadata["size"] || !String.Equals(Hash(bytes), (string)metadata["sha256"], StringComparison.Ordinal))
+                throw new InvalidOperationException("The latest CafeLauncher runner failed its published size or SHA-256 check.");
+            string temporary = destination + "." + Guid.NewGuid().ToString("N") + ".tmp";
+            try
+            {
+                File.WriteAllBytes(temporary, bytes);
+                if (File.Exists(destination)) File.Replace(temporary, destination, null);
+                else File.Move(temporary, destination);
+            }
+            finally { if (File.Exists(temporary)) File.Delete(temporary); }
+        }
+        WriteProtocolRegistration(destination, false);
+        string resetMarker = PendingProfileResetPath();
+        string resetTemporary = resetMarker + "." + Guid.NewGuid().ToString("N") + ".tmp";
+        try
+        {
+            File.WriteAllText(resetTemporary, version, new UTF8Encoding(false));
+            if (File.Exists(resetMarker)) File.Replace(resetTemporary, resetMarker, null);
+            else File.Move(resetTemporary, resetMarker);
+        }
+        finally { if (File.Exists(resetTemporary)) File.Delete(resetTemporary); }
+        return destination;
+    }
+
+    private static string PendingProfileResetPath()
+    {
+        return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "CafeLauncher", "Runner", "pending-profile-reset.txt");
+    }
+
+    private static byte[] GetGithubReleaseAssetBytes(Uri uri, int maximum)
+    {
+        if (uri == null || uri.Scheme != Uri.UriSchemeHttps ||
+            !String.Equals(uri.Host, "github.com", StringComparison.OrdinalIgnoreCase) ||
+            !uri.AbsolutePath.StartsWith("/fabjoncela/Cs-script/releases/", StringComparison.Ordinal) ||
+            uri.Query.Length != 0 || uri.Fragment.Length != 0 || uri.UserInfo.Length != 0)
+            throw new InvalidOperationException("CafeLauncher refused a runner download outside the fixed GitHub release path.");
+        HttpWebRequest request = (HttpWebRequest)WebRequest.Create(uri);
+        request.Method = "GET";
+        request.UserAgent = "CafeLauncher-WebRunner/" + RunnerVersion;
+        request.Timeout = 20000;
+        request.ReadWriteTimeout = 20000;
+        request.AllowAutoRedirect = true;
+        request.MaximumResponseHeadersLength = 32;
+        using (HttpWebResponse response = (HttpWebResponse)request.GetResponse())
+        using (Stream stream = response.GetResponseStream())
+        using (MemoryStream memory = new MemoryStream())
+        {
+            string host = response.ResponseUri.Host;
+            if (host != "github.com" && host != "release-assets.githubusercontent.com" && host != "objects.githubusercontent.com")
+                throw new InvalidOperationException("GitHub redirected the runner download to an untrusted host.");
+            byte[] buffer = new byte[8192];
+            int read;
+            while ((read = stream.Read(buffer, 0, buffer.Length)) > 0)
+            {
+                if (memory.Length + read > maximum) throw new InvalidOperationException("The CafeLauncher runner download exceeded its size limit.");
+                memory.Write(buffer, 0, read);
+            }
+            return memory.ToArray();
+        }
+    }
+
+    private static void StartUpdatedRunner(string executable, string requestId)
+    {
+        string uri = "cafelauncher://v1/run/" + requestId;
+        ProcessStartInfo start = new ProcessStartInfo(executable, "\"" + uri + "\" --after-update");
+        start.UseShellExecute = false;
+        start.CreateNoWindow = true;
+        start.WorkingDirectory = Path.GetDirectoryName(executable);
+        using (Process process = Process.Start(start))
+        {
+            if (process == null) throw new InvalidOperationException("The updated CafeLauncher runner could not be started.");
+        }
     }
 
     private static int UnregisterProtocol()
@@ -161,7 +314,7 @@ internal static class CafeLauncherWebRunner
         return match.Groups[1].Value;
     }
 
-    private static int ExecuteClaimedAction(string requestId, string action, string profile, string capability)
+    private static int ExecuteClaimedAction(string requestId, string action, string profile, string capability, bool runnerUpdated)
     {
         SendEvent(requestId, capability, "RUNNING", "Runner claimed request", "SUCCESS", "CafeLauncher runner is ready on this Windows session.", null);
         if (!IsSupportedAction(action))
@@ -192,7 +345,7 @@ internal static class CafeLauncherWebRunner
                 : "Downloaded launcher size and SHA-256 match the immutable release manifest.";
             SendEvent(requestId, capability, "RUNNING", "Launcher verification", "SUCCESS", verificationDetail, null);
             actionMayHaveRun = action != "detect-pc";
-            Dictionary<string, object> detection = RunLauncherAction(launcherPath, requestId, action, profile);
+            Dictionary<string, object> detection = RunLauncherAction(launcherPath, requestId, action, profile, runnerUpdated);
             if (action != "detect-pc")
             {
                 if (Convert.ToInt32(detection["schemaVersion"]) != 1)
@@ -388,7 +541,7 @@ internal static class CafeLauncherWebRunner
         }
     }
 
-    private static Dictionary<string, object> RunLauncherAction(string launcherPath, string requestId, string action, string profile)
+    private static Dictionary<string, object> RunLauncherAction(string launcherPath, string requestId, string action, string profile, bool runnerUpdated)
     {
         byte[] sourceBytes = File.ReadAllBytes(launcherPath);
         string source = Encoding.UTF8.GetString(sourceBytes);
@@ -414,6 +567,7 @@ internal static class CafeLauncherWebRunner
             start.EnvironmentVariables["CAFE_WEB_ACTION"] = action;
             start.EnvironmentVariables["CAFE_WEB_REQUEST_ID"] = requestId;
             start.EnvironmentVariables["CAFE_WEB_RESULT_FILE"] = resultPath;
+            if (runnerUpdated) start.EnvironmentVariables["CAFE_WEB_RUNNER_UPDATED"] = "1";
             if (profile != null) start.EnvironmentVariables["CAFE_WEB_PROFILE"] = profile;
             using (Process process = Process.Start(start))
             {

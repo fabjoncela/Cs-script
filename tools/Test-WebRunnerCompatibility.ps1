@@ -30,6 +30,18 @@ internal static class CompatibilityTests
             !CafeLauncherWebRunner.LauncherSupportsAction(validated, "apply-profile") ||
             !CafeLauncherWebRunner.LauncherSupportsAction(validated, "apply-graphics"))
             throw new Exception("Web action capability detection failed.");
+        Dictionary<string, object> release = new Dictionary<string, object> {
+            { "version", "0.5.0" }, { "sha256", new string('a', 64) }, { "size", 50000 }
+        };
+        Dictionary<string, object> checkedRelease = CafeLauncherWebRunner.ValidateRunnerReleaseMetadata(release);
+        if ((int)checkedRelease["size"] != 50000 || !CafeLauncherWebRunner.IsRunnerVersionNewer("0.5.0", "0.4.0") ||
+            CafeLauncherWebRunner.IsRunnerVersionNewer("0.4.0", "0.5.0"))
+            throw new Exception("Runner release metadata validation or update ordering failed.");
+        release["sha256"] = "not-a-sha";
+        bool invalidReleaseRejected = false;
+        try { CafeLauncherWebRunner.ValidateRunnerReleaseMetadata(release); }
+        catch (InvalidOperationException) { invalidReleaseRejected = true; }
+        if (!invalidReleaseRejected) throw new Exception("Malformed runner release metadata was accepted.");
         if (CafeLauncherWebRunner.LauncherSupportsAction(Encoding.UTF8.GetBytes("# legacy launcher"), "detect-pc"))
             throw new Exception("A legacy launcher was incorrectly marked compatible.");
 

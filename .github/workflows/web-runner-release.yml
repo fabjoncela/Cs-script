@@ -27,11 +27,16 @@ jobs:
           ./web-runner/Build-WebRunner.ps1 -OutputPath "$env:RUNNER_TEMP/CafeLauncherWebRunner.exe"
           $source = Get-Content web-runner/CafeLauncherWebRunner.cs -Raw
           if ($source -notmatch 'RunnerVersion = "(\d+\.\d+\.\d+)"') { throw 'RunnerVersion is missing or invalid.' }
-          "version=$($Matches[1])" >> $env:GITHUB_OUTPUT
+          $version = $Matches[1]
+          "version=$version" >> $env:GITHUB_OUTPUT
           $exe = Join-Path $env:RUNNER_TEMP 'CafeLauncherWebRunner.exe'
           $hash = (Get-FileHash -LiteralPath $exe -Algorithm SHA256).Hash.ToLowerInvariant()
+          $size = (Get-Item -LiteralPath $exe).Length
           "$hash  CafeLauncherWebRunner.exe" | Set-Content -LiteralPath (Join-Path $env:RUNNER_TEMP 'CafeLauncherWebRunner.exe.sha256') -NoNewline
+          $releaseManifest = [ordered]@{ version=$version; sha256=$hash; size=$size } | ConvertTo-Json -Compress
+          [IO.File]::WriteAllText((Join-Path $env:RUNNER_TEMP 'CafeLauncherWebRunner.release.json'), $releaseManifest, (New-Object Text.UTF8Encoding($false)))
           "sha256=$hash" >> $env:GITHUB_OUTPUT
+          "size=$size" >> $env:GITHUB_OUTPUT
         id: build
       - name: Publish immutable versioned release
         shell: pwsh
@@ -42,17 +47,19 @@ jobs:
           $expectedHash = '${{ steps.build.outputs.sha256 }}'
           $existing = gh release view $tag --json assets --jq '.assets[].name' 2>$null
           if ($LASTEXITCODE -eq 0) {
-            if ($existing -notcontains 'CafeLauncherWebRunner.exe' -or $existing -notcontains 'CafeLauncherWebRunner.exe.sha256') { throw "Release $tag exists without the required assets; refusing to mutate it." }
+            if ($existing -notcontains 'CafeLauncherWebRunner.exe' -or $existing -notcontains 'CafeLauncherWebRunner.exe.sha256' -or $existing -notcontains 'CafeLauncherWebRunner.release.json') { throw "Release $tag exists without the required assets; refusing to mutate it." }
             $verifyDirectory = Join-Path $env:RUNNER_TEMP 'published-release'
             New-Item -ItemType Directory -Path $verifyDirectory | Out-Null
-            gh release download $tag --pattern 'CafeLauncherWebRunner.exe' --pattern 'CafeLauncherWebRunner.exe.sha256' --dir $verifyDirectory
+            gh release download $tag --pattern 'CafeLauncherWebRunner.exe' --pattern 'CafeLauncherWebRunner.exe.sha256' --pattern 'CafeLauncherWebRunner.release.json' --dir $verifyDirectory
             if ($LASTEXITCODE -ne 0) { throw "Could not verify existing release $tag." }
             $line = Get-Content -LiteralPath (Join-Path $verifyDirectory 'CafeLauncherWebRunner.exe.sha256') -Raw
             $publishedHash = (Get-FileHash -LiteralPath (Join-Path $verifyDirectory 'CafeLauncherWebRunner.exe') -Algorithm SHA256).Hash.ToLowerInvariant()
             if ($line -notmatch '^([0-9a-f]{64})\s+CafeLauncherWebRunner\.exe\s*$' -or $Matches[1] -ne $expectedHash -or $publishedHash -ne $expectedHash) { throw "Runner bytes changed or the published asset is damaged without a RunnerVersion bump; refusing to replace $tag." }
+            $publishedManifest = Get-Content -LiteralPath (Join-Path $verifyDirectory 'CafeLauncherWebRunner.release.json') -Raw | ConvertFrom-Json
+            if ($publishedManifest.version -ne '${{ steps.build.outputs.version }}' -or $publishedManifest.sha256 -ne $expectedHash -or $publishedManifest.size -ne [long]'${{ steps.build.outputs.size }}') { throw "Runner update manifest disagrees with the immutable assets for $tag." }
             Write-Host "Release $tag already contains the exact runner bytes."
             exit 0
           }
           if ($LASTEXITCODE -ne 1) { throw 'Could not check whether the runner release already exists.' }
-          gh release create $tag (Join-Path $env:RUNNER_TEMP 'CafeLauncherWebRunner.exe') (Join-Path $env:RUNNER_TEMP 'CafeLauncherWebRunner.exe.sha256') --title "CafeLauncher Web Runner v${{ steps.build.outputs.version }}" --notes 'Per-user CafeLauncher web runner for Windows. Open the downloaded executable once to install it for the current Windows account and register cafelauncher://.' --target $env:GITHUB_SHA
+          gh release create $tag (Join-Path $env:RUNNER_TEMP 'CafeLauncherWebRunner.exe') (Join-Path $env:RUNNER_TEMP 'CafeLauncherWebRunner.exe.sha256') (Join-Path $env:RUNNER_TEMP 'CafeLauncherWebRunner.release.json') --title "CafeLauncher Web Runner v${{ steps.build.outputs.version }}" --notes 'Per-user CafeLauncher web runner for Windows. Open the downloaded executable once to install it for the current Windows account and register cafelauncher://. Future runner releases install automatically when a web action is clicked.' --target $env:GITHUB_SHA
           if ($LASTEXITCODE -ne 0) { throw "Could not publish runner release $tag." }

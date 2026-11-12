@@ -14,7 +14,7 @@ $parseErrors = $null
 $ast = [System.Management.Automation.Language.Parser]::ParseInput($launcher.Substring($markerIndex+$marker.Length),[ref]$tokens,[ref]$parseErrors)
 if(@($parseErrors).Count){throw ('Launcher PowerShell failed to parse: '+$parseErrors[0].Message)}
 
-foreach($name in @('New-CafeWebPlayExecEnvelope','Invoke-CafeWebPlayExec')){
+foreach($name in @('New-CafeWebPlayExecEnvelope','Reset-CafeWebPendingEditsAfterRunnerUpdate','Invoke-CafeWebPlayExec')){
     $definitions=@($ast.FindAll({param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst]},$true) |
         Where-Object {$_.Name -eq $name})
     if($definitions.Count -ne 1){throw ('Expected exactly one function definition: '+$name)}
@@ -45,6 +45,8 @@ function Reset-WebPlayTestState {
     $script:TestLaunchArguments=New-Object 'System.Collections.Generic.List[object]'
     $script:TestSaveCount=0
     $script:TestHistoryRevision=0
+    $script:ResetProfileStateCalls=0
+    $env:CAFE_WEB_RUNNER_UPDATED=''
     $script:BackendBaseUrl='https://cafelauncher.example'
     $script:FabCfgCloudUrl='https://cafelauncher.example/v1/cfg/fab.cfg'
     $script:GamingProfiles=[ordered]@{FabMode=@{ConfigFile='fab.cfg';CfgDownloadUrl=$script:FabCfgCloudUrl}}
@@ -62,6 +64,7 @@ function Reset-WebPlayTestState {
 }
 
 function Get-CafeBackendQueuePath { return (Join-Path $env:TEMP 'CafeLauncher-web-play-test-no-queue.json') }
+function Reset-CafeWebPendingEditsAfterRunnerUpdate { param([string]$ProfileName);$script:ResetProfileStateCalls++;return $null }
 function Get-PCDiagnostics {
     [CmdletBinding()]
     param([switch]$AsObject)
@@ -137,6 +140,7 @@ function Assert-WebPlayResult {
 Reset-WebPlayTestState
 $success=Invoke-CafeWebPlayExec -ProfileName 'FabMode'
 Assert-WebPlayResult $success 'COMPLETED' $true
+if($script:ResetProfileStateCalls -ne 1){throw 'Play + Exec did not check the one-time runner update profile reset state.'}
 if(-not $success.result.data.steamLaunchRequested -or $script:TestLaunchArguments.Count -ne 1){throw 'Successful Play + Exec did not request exactly one Steam launch.'}
 if($script:TestHistoryRevision -ne 7 -or $script:TestInstallTargets.Count -ne 2 -or
    $script:TestInstallTargets[0] -cne $script:TestCfgPath -or $script:TestInstallTargets[1] -cne $script:TestCfgPath){

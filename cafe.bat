@@ -11,7 +11,7 @@ del /q "%CAFE_RESTART_SIGNAL%" >nul 2>&1
 exit /b
 
 # POWERSHELL_GUI
-# CAFE_RELEASE=2026.11.12.2
+# CAFE_RELEASE=2026.11.12.3
 
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
@@ -9746,9 +9746,31 @@ try {
     }
     $script:LogihubDownloadTimer.Start()
 }
+function Ensure-LogihubWebExecutable {
+    if(Test-Path -LiteralPath $script:LogihubExe -PathType Leaf){
+        try{[void](Get-LogihubExecutable);return $script:LogihubExe}
+        catch{Write-Log ('Cached Logitech helper is not current; replacing it from the pinned release: '+$_.Exception.Message) 'WARN'}
+    }
+    [void](New-Item -ItemType Directory -Path $script:LogihubDirectory -Force -ErrorAction Stop)
+    $temp=Join-Path $script:LogihubDirectory ('logihub-web-'+[guid]::NewGuid().ToString('N')+'.tmp')
+    try{
+        [Net.ServicePointManager]::SecurityProtocol=[Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+        Invoke-WebRequest -Uri 'https://github.com/fabjoncela/better-logihub/releases/download/v0.1.0-c54d.1/logihub.exe' -OutFile $temp -UseBasicParsing -TimeoutSec 30 -ErrorAction Stop
+        if((Get-FileHash -LiteralPath $temp -Algorithm SHA256 -ErrorAction Stop).Hash.ToLowerInvariant() -ne $script:LogihubExpectedSHA){throw 'Downloaded Logitech helper SHA-256 verification failed.'}
+        if(Test-Path -LiteralPath $script:LogihubExe -PathType Leaf){[IO.File]::Replace($temp,$script:LogihubExe,$null)}
+        else{[IO.File]::Move($temp,$script:LogihubExe)}
+    }finally{Remove-Item -LiteralPath $temp -Force -ErrorAction SilentlyContinue}
+    return (Get-LogihubExecutable)
+}
+
 function Request-LogitechLiveDPI {
-    param([int]$DPI=800)
+    param([int]$DPI=800,[switch]$WebAction)
     Assert-LogitechDPI $DPI
+    if($WebAction){
+        Ensure-LogihubWebExecutable | Out-Null
+        Set-LogitechLiveDPI -DPI $DPI -WebAction
+        return
+    }
     # Latest-click-wins: a later profile changes the target DPI, not the download.
     $script:LogihubRequestGeneration++
     $script:LogihubRequestedDPI=$DPI
@@ -9908,7 +9930,7 @@ function Schedule-LogitechDpiVerification {
 }
 
 function Set-LogitechLiveDPI {
-    param([int]$DPI=800)
+    param([int]$DPI=800,[switch]$WebAction)
     Assert-LogitechDPI $DPI
     if(@(Get-Process -Name lghub,lghub_agent -ErrorAction SilentlyContinue).Count -gt 0){
         Write-Log 'G HUB detected; leaving it running. It may override the DPI later.' 'WARN'
@@ -9964,7 +9986,7 @@ function Set-LogitechLiveDPI {
     $detail='Device identity was revalidated before applying and reading back DPI.'
     if($usedHostFallback){$detail='Standard path failed read-back; Superlight 1 host-mode fallback applied and verified DPI. Host mode remains active.'}
     Set-RunOutcome -Run $run -Setting 'Logitech live DPI' -Requested ([string]$DPI) -Target ($target.Name+' device '+$deviceIndex) -Status APPLIED -Actual ([string]$readValue) -Detail $detail
-    Schedule-LogitechDpiVerification -Target $target -DPI $DPI -Generation $script:LogihubRequestGeneration -Run $run
+    if(-not $WebAction){Schedule-LogitechDpiVerification -Target $target -DPI $DPI -Generation $script:LogihubRequestGeneration -Run $run}
 }
 function Set-LogitechOnboardDPI {
     param([int]$DPI=800)
@@ -10093,14 +10115,9 @@ function Invoke-GamingProfile {
         $steps += @{ Name = 'Launch apps (without G HUB; including Mouse Pointer Options)'; Action = { Launch-ProfileApps -SkipGHub -ProfileName $ProfileName } }
     }
     # Profile launch never starts G HUB, which can overwrite the requested mouse DPI.
-    # Apply live DPI last via our better-logihub helper. Never write onboard here.
-    if($WebAction){
-        $steps += @{ Name = 'Logitech live DPI'; Action = {
-            Set-RunOutcome -Run $ProfileName -Setting 'Logitech live DPI' -Requested ([string]$profile.LogitechDPI) -Target 'Selected Superlight' -Status SKIPPED -Detail 'Web actions do not start the asynchronous device-helper download; use the Windows dashboard for live DPI.'
-        } }
-    }else{
-        $steps += @{ Name = 'Logitech live DPI'; Action = { Request-LogitechLiveDPI -DPI ([int]$profile.LogitechDPI) } }
-    }
+    # Web mode downloads and verifies synchronously so its result includes live DPI read-back.
+    # Neither entry point writes onboard memory here.
+    $steps += @{ Name = 'Logitech live DPI'; Action = { Request-LogitechLiveDPI -DPI ([int]$profile.LogitechDPI) -WebAction:$WebAction } }
     foreach ($step in $steps) {
         Write-Log ("$ProfileName step started: " + $step.Name)
         Start-StepScope -Run $ProfileName -Step $step.Name
@@ -10305,7 +10322,7 @@ function Get-CafeWebPendingReason {
 }
 
 function Get-CafeWebActionSnapshot {
-    param([Parameter(Mandatory=$true)][string]$ProfileName)
+    param([Parameter(Mandatory=$true)][string]$ProfileName,[switch]$NoCache)
     if(-not $script:GamingProfiles.Contains($ProfileName)){throw 'Unknown CafeLauncher profile.'}
     $latest=Get-CafeHttpBytes -Uri ($script:BackendBaseUrl+'/v1/profiles/'+[Uri]::EscapeDataString($ProfileName)) -MaxBytes 2097152
     $revision=0
@@ -10315,27 +10332,71 @@ function Get-CafeWebActionSnapshot {
     if($script:BackendRevisions.ContainsKey($ProfileName) -and [int]$snapshot.Revision -lt [int]$script:BackendRevisions[$ProfileName]){
         throw 'The backend profile revision is older than this PC has verified. Review the restore in the Windows dashboard before applying it.'
     }
+    if(-not $NoCache){Set-CafeWebActionSnapshot -ProfileName $ProfileName -Snapshot $snapshot}
+    return $snapshot
+}
+
+function Set-CafeWebActionSnapshot {
+    param([Parameter(Mandatory=$true)][string]$ProfileName,[Parameter(Mandatory=$true)]$Snapshot,[switch]$NoSave)
     $cfgName=[string]$script:GamingProfiles[$ProfileName].ConfigFile
-    $remote=ConvertFrom-Json -InputObject ($snapshot.Profile|ConvertTo-Json -Depth 8 -Compress) -ErrorAction Stop
+    $remote=ConvertFrom-Json -InputObject ($Snapshot.Profile|ConvertTo-Json -Depth 8 -Compress) -ErrorAction Stop
     $remote.CfgDownloadUrl=$script:BackendBaseUrl+'/v1/cfg/'+$cfgName
     [void](Import-ProfileValues -ProfileName $ProfileName -SavedProfile $remote -SourceLabel 'Backend')
-    $script:GraphicsPresets[$ProfileName]=$snapshot.Graphics
-    $script:GamingProfiles[$ProfileName].ScalingMode=[int]$snapshot.Graphics.ScalingMode
-    $script:BackendRevisions[$ProfileName]=[int]$snapshot.Revision
-    $script:BackendSnapshots[$ProfileName]=$snapshot
+    $script:GraphicsPresets[$ProfileName]=$Snapshot.Graphics
+    $script:GamingProfiles[$ProfileName].ScalingMode=[int]$Snapshot.Graphics.ScalingMode
+    $script:BackendRevisions[$ProfileName]=[int]$Snapshot.Revision
+    $script:BackendSnapshots[$ProfileName]=$Snapshot
     $script:ProfileRefreshStatus[$ProfileName]='Backend'
     Set-CafeCloudReadSourceDisplay -Source 'Backend'
-    try{Save-ProfileSettings}catch{Write-Log ('Could not cache verified web-action profile: '+$_.Exception.Message) 'WARN'}
-    return $snapshot
+    if(-not $NoSave){try{Save-ProfileSettings}catch{Write-Log ('Could not cache verified web-action profile: '+$_.Exception.Message) 'WARN'}}
+}
+
+function Reset-CafeWebPendingEditsAfterRunnerUpdate {
+    param([Parameter(Mandatory=$true)][string]$ProfileName)
+    if($env:CAFE_WEB_RUNNER_UPDATED -cne '1'){return $null}
+    $pendingProfiles=New-Object 'System.Collections.Generic.List[string]'
+    foreach($name in @($script:GamingProfiles.Keys)){
+        if(Get-CafeWebPendingReason -ProfileName ([string]$name)){$pendingProfiles.Add([string]$name)}
+    }
+    if(-not $pendingProfiles.Count){Complete-CafeWebRunnerProfileReset;return $null}
+    # Only discard after the current primary-backend bundle has been fetched,
+    # validated as one revision for every pending profile. If any read fails,
+    # keep the local draft and stop the action.
+    $snapshots=@{}
+    foreach($name in $pendingProfiles){$snapshots[$name]=Get-CafeWebActionSnapshot -ProfileName $name -NoCache}
+    foreach($name in $pendingProfiles){Set-CafeWebActionSnapshot -ProfileName $name -Snapshot $snapshots[$name] -NoSave}
+    foreach($name in $pendingProfiles){
+        $script:PendingSync[$name]=$false
+        [void]$script:PendingCfgSensitivity.Remove($name)
+        [void]$script:PendingProfileCfgRestore.Remove($name)
+        [void]$script:CapturedCS2Convars.Remove($name)
+        [void]$script:CapturedCS2Binds.Remove($name)
+        [void]$script:PendingTarget.Remove($name)
+        Clear-CafeBackendQueue -ProfileName $name
+    }
+    try{Save-ProfileSettings}catch{throw ('Profiles were refreshed from the backend, but the discarded-edit state could not be saved: '+$_.Exception.Message)}
+    foreach($name in $pendingProfiles){Write-Log ('Local pending '+$name+' edits were discarded after the web runner updated; backend revision '+$snapshots[$name].Revision+' is now authoritative.') 'WARN'}
+    Complete-CafeWebRunnerProfileReset
+    if($snapshots.ContainsKey($ProfileName)){return $snapshots[$ProfileName]}
+    return $null
+}
+
+function Complete-CafeWebRunnerProfileReset {
+    $marker=Join-Path $env:LOCALAPPDATA 'CafeLauncher\Runner\pending-profile-reset.txt'
+    if(Test-Path -LiteralPath $marker -PathType Leaf){
+        try{Remove-Item -LiteralPath $marker -Force -ErrorAction Stop}
+        catch{Write-Log ('Could not clear the one-time runner-update profile reset marker: '+$_.Exception.Message) 'WARN'}
+    }
 }
 
 function Invoke-CafeWebApplyProfile {
     param([Parameter(Mandatory=$true)][string]$ProfileName)
-    $pending=Get-CafeWebPendingReason -ProfileName $ProfileName
-    if($pending){return (New-CafeWebProfileActionEnvelope -State 'SKIPPED' -Summary $pending -Steps @([ordered]@{name='Profile state';status='SKIPPED';detail=$pending}))}
     $run=$ProfileName
     try{
-        $snapshot=Get-CafeWebActionSnapshot -ProfileName $ProfileName
+        $snapshot=Reset-CafeWebPendingEditsAfterRunnerUpdate -ProfileName $ProfileName
+        $pending=Get-CafeWebPendingReason -ProfileName $ProfileName
+        if($pending){return (New-CafeWebProfileActionEnvelope -State 'SKIPPED' -Summary $pending -Steps @([ordered]@{name='Profile state';status='SKIPPED';detail=$pending}))}
+        if(-not $snapshot){$snapshot=Get-CafeWebActionSnapshot -ProfileName $ProfileName}
         $inventory=Get-PCDiagnostics -AsObject
         $steamUser=Get-CafeWebActiveSteamUserId
         $steamPath=[string]$inventory.Steam.Executable
@@ -10369,11 +10430,12 @@ function Invoke-CafeWebApplyProfile {
 
 function Invoke-CafeWebApplyGraphics {
     param([Parameter(Mandatory=$true)][string]$ProfileName)
-    $pending=Get-CafeWebPendingReason -ProfileName $ProfileName
-    if($pending){return (New-CafeWebProfileActionEnvelope -State 'SKIPPED' -Summary $pending -Steps @([ordered]@{name='Profile state';status='SKIPPED';detail=$pending}))}
     $mayHaveChanged=$false
     try{
-        $snapshot=Get-CafeWebActionSnapshot -ProfileName $ProfileName
+        $snapshot=Reset-CafeWebPendingEditsAfterRunnerUpdate -ProfileName $ProfileName
+        $pending=Get-CafeWebPendingReason -ProfileName $ProfileName
+        if($pending){return (New-CafeWebProfileActionEnvelope -State 'SKIPPED' -Summary $pending -Steps @([ordered]@{name='Profile state';status='SKIPPED';detail=$pending}))}
+        if(-not $snapshot){$snapshot=Get-CafeWebActionSnapshot -ProfileName $ProfileName}
         $expected='b6fa5619e13df559b40c02cd8a11d9d7cd99d7e8'
         $source=Add-CafeCacheBust -Uri 'https://raw.githubusercontent.com/fabjoncela/Cs-script/main/graphics/ApplyGraphics.ps1'
         $cache=Join-Path $env:LOCALAPPDATA 'CafeLauncher\graphics-module.ps1'
@@ -10427,6 +10489,7 @@ function Invoke-CafeWebPlayExec {
         $cfgName=[string]$profile.ConfigFile
         if($cfgName -notmatch '^[A-Za-z0-9_-]+\.cfg$'){throw 'The selected profile CFG name is invalid.'}
 
+        $updatedSnapshot=Reset-CafeWebPendingEditsAfterRunnerUpdate -ProfileName $ProfileName
         $queuePath=Get-CafeBackendQueuePath -ProfileName $ProfileName
         if($script:PendingSync[$ProfileName] -or $script:PendingTarget[$ProfileName] -eq 'GitHubLegacy' -or
            (Test-Path -LiteralPath $queuePath -PathType Leaf) -or
@@ -10456,12 +10519,17 @@ function Invoke-CafeWebPlayExec {
 
         # Resolve the latest published revision once, then fetch the complete
         # immutable bundle for that revision instead of composing three latest reads.
-        $latestResponse=Get-CafeHttpBytes -Uri ($script:BackendBaseUrl+'/v1/profiles/'+[Uri]::EscapeDataString($ProfileName)) -MaxBytes 2097152
-        $revision=0
-        if(-not [int]::TryParse([string]$latestResponse.Headers['X-Profile-Revision'],[ref]$revision) -or $revision -lt 1){
-            throw 'The primary backend did not provide a valid current profile revision.'
+        if($updatedSnapshot){
+            $snapshot=$updatedSnapshot
+            $revision=[int]$snapshot.Revision
+        }else{
+            $latestResponse=Get-CafeHttpBytes -Uri ($script:BackendBaseUrl+'/v1/profiles/'+[Uri]::EscapeDataString($ProfileName)) -MaxBytes 2097152
+            $revision=0
+            if(-not [int]::TryParse([string]$latestResponse.Headers['X-Profile-Revision'],[ref]$revision) -or $revision -lt 1){
+                throw 'The primary backend did not provide a valid current profile revision.'
+            }
+            $snapshot=Get-CafeBackendProfileHistoryRevision -ProfileName $ProfileName -Revision $revision
         }
-        $snapshot=Get-CafeBackendProfileHistoryRevision -ProfileName $ProfileName -Revision $revision
         if($script:BackendRevisions.ContainsKey($ProfileName) -and [int]$snapshot.Revision -lt [int]$script:BackendRevisions[$ProfileName]){
             [void]$steps.Add([ordered]@{name='Profile snapshot';status='SKIPPED';detail='The backend revision is older than this PC has verified. Open the Windows dashboard to review the restore before retrying.'})
             return (New-CafeWebPlayExecEnvelope -State 'SKIPPED' -Summary 'The backend profile revision requires review in the Windows dashboard. No files were changed and Steam was not started.' -Steps $steps.ToArray() -CfgName $cfgName -Cs2AlreadyRunning $cs2Running -SteamLaunchRequested $false)
