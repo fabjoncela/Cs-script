@@ -17,10 +17,11 @@ using Microsoft.Win32;
 internal static class CafeLauncherWebRunner
 {
     private const string BackendOrigin = "https://fabjon-hp.tail681ec9.ts.net:10000";
-    private const string RunnerVersion = "0.5.0";
+    private const string RunnerVersion = "0.6.0";
     private const int MaxLauncherBytes = 1000000;
     private const int MaxRunnerBytes = 8 * 1024 * 1024;
     private static readonly JavaScriptSerializer Json = new JavaScriptSerializer { MaxJsonLength = 2 * 1024 * 1024 };
+    private sealed class ActionCanceledException : Exception { }
 
     [STAThread]
     private static int Main(string[] args)
@@ -344,8 +345,13 @@ internal static class CafeLauncherWebRunner
                 ? "The current CafeLauncher source matched the official GitHub Contents API size and Git blob SHA."
                 : "Downloaded launcher size and SHA-256 match the immutable release manifest.";
             SendEvent(requestId, capability, "RUNNING", "Launcher verification", "SUCCESS", verificationDetail, null);
+            if (action != "detect-pc" && IsCancellationRequested(requestId, capability))
+            {
+                SendEvent(requestId, capability, "CANCELED", null, null, null, CancellationResult(action, profile));
+                return 1;
+            }
             actionMayHaveRun = action != "detect-pc";
-            Dictionary<string, object> detection = RunLauncherAction(launcherPath, requestId, action, profile, runnerUpdated);
+            Dictionary<string, object> detection = RunLauncherAction(launcherPath, requestId, action, profile, runnerUpdated, capability);
             if (action != "detect-pc")
             {
                 if (Convert.ToInt32(detection["schemaVersion"]) != 1)
@@ -392,6 +398,18 @@ internal static class CafeLauncherWebRunner
             SendEvent(requestId, capability, "RUNNING", "PC discovery", "SUCCESS", "Local Steam and CS2 discovery finished.", null);
             SendEvent(requestId, capability, "COMPLETED", null, null, null, result);
             return 0;
+        }
+        catch (ActionCanceledException)
+        {
+            if (actionMayHaveRun)
+            {
+                Dictionary<string, object> interrupted = FailureResult(action, profile,
+                    "Stop was requested and Windows PowerShell was stopped. Some changes may already have happened; check this PC before retrying.");
+                GetDictionary(interrupted, "data")["executionOutcomeKnown"] = false;
+                SendEvent(requestId, capability, "INTERRUPTED", null, null, null, interrupted);
+            }
+            else SendEvent(requestId, capability, "CANCELED", null, null, null, CancellationResult(action, profile));
+            return 1;
         }
         catch (Exception error)
         {
@@ -541,7 +559,7 @@ internal static class CafeLauncherWebRunner
         }
     }
 
-    private static Dictionary<string, object> RunLauncherAction(string launcherPath, string requestId, string action, string profile, bool runnerUpdated)
+    private static Dictionary<string, object> RunLauncherAction(string launcherPath, string requestId, string action, string profile, bool runnerUpdated, string capability)
     {
         byte[] sourceBytes = File.ReadAllBytes(launcherPath);
         string source = Encoding.UTF8.GetString(sourceBytes);
@@ -572,10 +590,25 @@ internal static class CafeLauncherWebRunner
             using (Process process = Process.Start(start))
             {
                 if (process == null) throw new InvalidOperationException("Windows PowerShell could not be started.");
-                if (!process.WaitForExit(120000))
+                DateTime deadline = DateTime.UtcNow.AddMilliseconds(120000);
+                DateTime nextControlCheck = DateTime.MinValue;
+                while (!process.WaitForExit(500))
                 {
-                    try { process.Kill(); } catch { }
-                    throw new TimeoutException("The CafeLauncher action took too long and was stopped.");
+                    if (DateTime.UtcNow >= nextControlCheck)
+                    {
+                        nextControlCheck = DateTime.UtcNow.AddSeconds(2);
+                        if (IsCancellationRequested(requestId, capability))
+                        {
+                            try { process.Kill(); } catch { }
+                            process.WaitForExit(5000);
+                            throw new ActionCanceledException();
+                        }
+                    }
+                    if (DateTime.UtcNow >= deadline)
+                    {
+                        try { process.Kill(); } catch { }
+                        throw new TimeoutException("The CafeLauncher action took too long and was stopped.");
+                    }
                 }
                 if (process.ExitCode != 0 || !File.Exists(resultPath) || new FileInfo(resultPath).Length > 64 * 1024)
                     throw new InvalidOperationException("The verified launcher could not return the PC detection result.");
@@ -688,6 +721,28 @@ internal static class CafeLauncherWebRunner
                 { "cs2", new Dictionary<string, object> { { "status", "NOT_UNIQUELY_DETECTED" }, { "installPath", null }, { "configPath", null } } }
             } }
         };
+    }
+
+    private static Dictionary<string, object> CancellationResult(string action, string profile)
+    {
+        Dictionary<string, object> result = FailureResult(action, profile, "Canceled before the Windows action started.");
+        result["steps"] = new object[0];
+        return result;
+    }
+
+    private static bool IsCancellationRequested(string requestId, string capability)
+    {
+        try
+        {
+            HttpWebRequest request = CreateRequest(new Uri(BackendOrigin + "/v1/actions/" + requestId + "/control"), "GET");
+            request.Timeout = 2000;
+            request.ReadWriteTimeout = 2000;
+            request.Headers[HttpRequestHeader.Authorization] = "Bearer " + capability;
+            Dictionary<string, object> control = ParseJson(Encoding.UTF8.GetString(GetBytes(request, 4096)));
+            object value;
+            return control.TryGetValue("cancelRequested", out value) && value is bool && (bool)value;
+        }
+        catch (Exception) { return false; }
     }
 
     private static Dictionary<string, object> Step(string name, string status, string detail)
