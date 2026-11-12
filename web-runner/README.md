@@ -1,6 +1,6 @@
 # CafeLauncher Web Runner (development)
 
-This is the local runner for the optional web-action flow. It targets Windows PowerShell 5.1 and .NET Framework already present on supported Windows café PCs; it adds no runtime package. It supports **Detect PC** and **Play + Exec**. Play + Exec uses the verified `cafe.bat` release and its existing profile, baseline CFG, profile CFG, and Steam launch logic. This source is not yet published, installed, or validated on a café PC.
+This is the local runner for the optional web-action flow. It targets Windows PowerShell 5.1 and .NET Framework already present on supported Windows café PCs; it adds no runtime package. It supports **Detect PC** and **Play + Exec**. Play + Exec uses the verified `cafe.bat` release and its existing profile, baseline CFG, profile CFG, and Steam launch logic. The first-run install and release workflow are local source changes and have not yet been published or validated on a café PC.
 
 ## Build
 
@@ -10,7 +10,9 @@ From this directory, run:
 .\Build-WebRunner.ps1
 ```
 
-The script uses the .NET Framework C# compiler and writes `build\CafeLauncherWebRunner.exe` by default. The executable is a per-user URI handler; after it is copied to its permanent café image path, run `CafeLauncherWebRunner.exe --register` once in the kiosk user's Windows session. Registration refuses to replace another handler; `--unregister` removes the key only when it still points to this executable. Do not register a copy in a temporary or Deep Freeze-reverted directory.
+The script uses the .NET Framework C# compiler and writes `build\CafeLauncherWebRunner.exe` by default. The website download link points to the latest GitHub Release asset. The player must open the downloaded executable once: it copies itself to `%LOCALAPPDATA%\CafeLauncher\Runner\CafeLauncherWebRunner.exe`, verifies the copied bytes, and registers `cafelauncher://` for that Windows account. This needs no admin rights. Reopening the same installer is safe and updates the installed copy when the bytes differ. If a different protocol handler is already registered, setup stops instead of replacing it. `--register` and `--unregister` remain available for staff provisioning; unregister removes the key only when it still points to this executable.
+
+The app cannot be installed silently by a browser. On a PC where user files survive reboot, the download-and-open step is a one-time setup for that Windows account. If Deep Freeze or another reset discards LocalAppData or the registry at reboot, café staff must install/register it in the saved base image or reprovision it during maintenance. The website calls this out; a player download cannot make a reset-protected installation persistent.
 
 ## Request safety
 
@@ -24,6 +26,7 @@ The script uses the .NET Framework C# compiler and writes `build\CafeLauncherWeb
 ## Current limits
 
 - No protocol registration has been applied on this workstation or a café PC.
+- The runner's first-run self-install copies it under the current account's LocalAppData and registers the protocol. `tools/Test-WebRunnerInstall.ps1` exercises initial copy, same-version no-op, and replacement using temporary test files only.
 - The web-action API and launcher action-mode changes are local source changes. The backend is not configured or deployed for this API, and no compatible launcher release is published yet.
 - Play + Exec requires an active Steam session, a uniquely detected CS2 CFG path, no unresolved local profile edits, and a current primary-backend profile/graphics/CFG history bundle. It fails closed on a backend rollback or unavailable snapshot and does not silently use mirror or local fallback data.
 - CFG writes use the detected path pinned at the start of the action, revalidated immediately before each install. If a write or Steam launch may have happened but no complete result is available, the runner reports `INTERRUPTED`; the web page stays locked until the player confirms they checked the PC.

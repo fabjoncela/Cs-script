@@ -17,7 +17,7 @@ using Microsoft.Win32;
 internal static class CafeLauncherWebRunner
 {
     private const string BackendOrigin = "https://fabjon-hp.tail681ec9.ts.net:10000";
-    private const string RunnerVersion = "0.1.0";
+    private const string RunnerVersion = "0.2.0";
     private const int MaxLauncherBytes = 1000000;
     private static readonly JavaScriptSerializer Json = new JavaScriptSerializer { MaxJsonLength = 2 * 1024 * 1024 };
 
@@ -26,7 +26,8 @@ internal static class CafeLauncherWebRunner
     {
         try
         {
-            if (args.Length == 1 && args[0] == "--register") return RegisterProtocol();
+            if (args.Length == 0) return InstallForCurrentUser();
+            if (args.Length == 1 && args[0] == "--register") return RegisterProtocol(Process.GetCurrentProcess().MainModule.FileName);
             if (args.Length == 1 && args[0] == "--unregister") return UnregisterProtocol();
             if (args.Length != 1) throw new InvalidOperationException("Open CafeLauncher from the CafeLauncher website on this PC.");
 
@@ -62,9 +63,54 @@ internal static class CafeLauncherWebRunner
         }
     }
 
-    private static int RegisterProtocol()
+    private static int InstallForCurrentUser()
     {
-        string executable = Process.GetCurrentProcess().MainModule.FileName;
+        string source = Process.GetCurrentProcess().MainModule.FileName;
+        string destination = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "CafeLauncher", "Runner", "CafeLauncherWebRunner.exe");
+        string installedPath = Path.GetFullPath(destination);
+        if (!String.Equals(Path.GetFullPath(source), installedPath, StringComparison.OrdinalIgnoreCase))
+            InstallExecutable(source, installedPath);
+        RegisterProtocol(installedPath);
+        MessageBox.Show("CafeLauncher is ready for this Windows user. Return to the website and click an action.", "CafeLauncher installed", MessageBoxButtons.OK, MessageBoxIcon.Information);
+        return 0;
+    }
+
+    // Kept free of registry and environment access so copy/replace behavior can
+    // be exercised using temporary files without changing the test machine.
+    internal static void InstallExecutable(string source, string destination)
+    {
+        string sourcePath = Path.GetFullPath(source);
+        string destinationPath = Path.GetFullPath(destination);
+        if (String.Equals(sourcePath, destinationPath, StringComparison.OrdinalIgnoreCase)) return;
+        if (!File.Exists(sourcePath)) throw new InvalidOperationException("The downloaded CafeLauncher installer could not be found.");
+
+        byte[] sourceBytes = File.ReadAllBytes(sourcePath);
+        if (sourceBytes.Length < 10000) throw new InvalidOperationException("The CafeLauncher installer file is incomplete. Download it again and retry.");
+        Directory.CreateDirectory(Path.GetDirectoryName(destinationPath));
+        if (File.Exists(destinationPath) && String.Equals(Hash(File.ReadAllBytes(destinationPath)), Hash(sourceBytes), StringComparison.Ordinal)) return;
+
+        string temporaryPath = destinationPath + ".installing-" + Guid.NewGuid().ToString("N");
+        try
+        {
+            File.WriteAllBytes(temporaryPath, sourceBytes);
+            if (!String.Equals(Hash(File.ReadAllBytes(temporaryPath)), Hash(sourceBytes), StringComparison.Ordinal))
+                throw new InvalidOperationException("CafeLauncher could not verify the copied installer. Try again.");
+            if (File.Exists(destinationPath)) File.Replace(temporaryPath, destinationPath, null);
+            else File.Move(temporaryPath, destinationPath);
+        }
+        catch (IOException)
+        {
+            throw new InvalidOperationException("CafeLauncher could not update its installed file. Close any CafeLauncher window and try again.");
+        }
+        finally
+        {
+            if (File.Exists(temporaryPath)) File.Delete(temporaryPath);
+        }
+    }
+
+    private static int RegisterProtocol(string executable)
+    {
+        executable = Path.GetFullPath(executable);
         string expectedCommand = "\"" + executable + "\" \"%1\"";
         using (RegistryKey existing = Registry.CurrentUser.OpenSubKey(@"Software\Classes\cafelauncher\shell\open\command", false))
         {
