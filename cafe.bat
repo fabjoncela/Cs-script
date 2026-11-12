@@ -3435,7 +3435,8 @@ function Install-ProfileCfg {
         [string]$DownloadUrl = '',
         [switch]$CloudPreferred,
         $CloudSnapshot,
-        [switch]$UseSnapshotOnly
+        [switch]$UseSnapshotOnly,
+        [string]$CfgDirectory=''
     )
     if ($CfgName -notmatch '^[A-Za-z0-9_-]+\.cfg$') {
         Write-Log "Unsafe config filename rejected: $CfgName" 'ERROR'
@@ -3452,7 +3453,19 @@ function Install-ProfileCfg {
             return $false
         }
 
-        $cfgDirectory = Find-CS2ConfigFolder -NoPrompt:$Silent
+        if($CfgDirectory){
+            $cfgDirectory=[IO.Path]::GetFullPath($CfgDirectory)
+            if(-not (Test-Path -LiteralPath $cfgDirectory -PathType Container) -or
+               $cfgDirectory -notmatch '(?i)\\game\\csgo\\cfg$'){
+                throw 'The pinned CS2 config directory is invalid.'
+            }
+            $currentCfgDirectory=Find-CS2ConfigFolder -NoPrompt:$Silent
+            if(-not $currentCfgDirectory -or -not [string]::Equals([IO.Path]::GetFullPath($currentCfgDirectory),$cfgDirectory,[StringComparison]::OrdinalIgnoreCase)){
+                throw 'The active CS2 config target changed before the profile CFG could be installed.'
+            }
+        }else{
+            $cfgDirectory = Find-CS2ConfigFolder -NoPrompt:$Silent
+        }
         if (-not $cfgDirectory) {
             Write-Log "CS2 $CfgName installation cancelled; no CS2 config folder selected." 'WARN'
             return $false
@@ -3629,6 +3642,41 @@ function Set-CafeStartupStatus {
 }
 
 function Get-PCDiagnostics {
+    param([switch]$AsObject)
+    if($AsObject){
+        $steam=Get-SteamExecutable
+        $roots=@(Get-SteamLibraryRoots)
+        $cs2=$null
+        try{$cs2=Find-CS2ConfigFolder -NoPrompt}catch{}
+        $cs2InstallPath=$null
+        if($cs2){
+            $cs2InstallPath=Split-Path -Parent (Split-Path -Parent (Split-Path -Parent ([string]$cs2)))
+        }
+        $activeSteamSession=$false
+        try{
+            $activeProcess=Get-ItemProperty -LiteralPath 'HKCU:\Software\Valve\Steam\ActiveProcess' -ErrorAction Stop
+            $activeUser=0L
+            if($null -ne $activeProcess.ActiveUser -and [long]::TryParse([string]$activeProcess.ActiveUser,[ref]$activeUser)){
+                if($activeUser -lt 0){$activeUser=$activeUser -band 4294967295L}
+                $activeSteamSession=($activeUser -gt 0)
+            }
+        }catch{}
+        return [pscustomobject]@{
+            SchemaVersion=1
+            CheckedUtc=[DateTime]::UtcNow.ToString('o',[Globalization.CultureInfo]::InvariantCulture)
+            Steam=[pscustomobject]@{
+                Status=$(if($steam){'DETECTED'}else{'NOT_DETECTED'})
+                Executable=$(if($steam){[string]$steam}else{$null})
+                Libraries=@($roots | ForEach-Object {[string]$_})
+                ActiveSessionPresent=[bool]$activeSteamSession
+            }
+            CS2=[pscustomobject]@{
+                Status=$(if($cs2){'DETECTED'}else{'NOT_UNIQUELY_DETECTED'})
+                InstallPath=$(if($cs2){[string]$cs2InstallPath}else{$null})
+                ConfigPath=$(if($cs2){[string]$cs2}else{$null})
+            }
+        }
+    }
     $lines = New-Object 'System.Collections.Generic.List[string]'
     Set-CafeStartupStatus 'Checking NVIDIA and display...'
     try{$scan=Get-NvidiaCompatibilityScan;foreach($line in $scan.Report){$lines.Add('NVIDIA: '+$line)}}
@@ -3684,6 +3732,39 @@ function Get-PCDiagnostics {
     } catch { $lines.Add('NVIDIA Control Panel: not detected') }
     return ($lines -join [Environment]::NewLine)
 }
+
+# The portable web runner sets these values only for a verified, claimed
+# Detect PC request. This branch exits before the Windows dashboard is built.
+if($env:CAFE_WEB_ACTION -ceq 'detect-pc'){
+    try{
+        if($env:CAFE_WEB_ACTION -cne 'detect-pc' -or $env:CAFE_WEB_REQUEST_ID -notmatch '^[A-Za-z0-9_-]{43}$'){
+            throw 'Unsupported or invalid CafeLauncher web action context.'
+        }
+        $resultPath=[string]$env:CAFE_WEB_RESULT_FILE
+        $tempRoot=[IO.Path]::GetFullPath([IO.Path]::GetTempPath())
+        $fullResultPath=[IO.Path]::GetFullPath($resultPath)
+        if(-not $fullResultPath.StartsWith($tempRoot,[StringComparison]::OrdinalIgnoreCase) -or
+           [IO.Path]::GetExtension($fullResultPath) -cne '.json'){
+            throw 'CafeLauncher web result path is invalid.'
+        }
+        $diagnostics=Get-PCDiagnostics -AsObject
+        $json=ConvertTo-Json -InputObject $diagnostics -Depth 8 -Compress
+        [IO.File]::WriteAllText($fullResultPath,$json,(New-Object System.Text.UTF8Encoding($false)))
+        exit 0
+    }catch{
+        try{
+            if($env:CAFE_WEB_RESULT_FILE){
+                $errorPath=[IO.Path]::GetFullPath([string]$env:CAFE_WEB_RESULT_FILE)
+                $tempRoot=[IO.Path]::GetFullPath([IO.Path]::GetTempPath())
+                if($errorPath.StartsWith($tempRoot,[StringComparison]::OrdinalIgnoreCase)){
+                    [IO.File]::WriteAllText($errorPath+'.error','PC detection failed.',(New-Object System.Text.UTF8Encoding($false)))
+                }
+            }
+        }catch{}
+        exit 1
+    }
+}
+if($env:CAFE_WEB_ACTION -and $env:CAFE_WEB_ACTION -cne 'play-exec'){exit 1}
 
 function Show-PCDiagnostics {
     Write-Log 'PC detection started.'
@@ -6873,6 +6954,10 @@ function Confirm-CafeBackendRevisionRollback {
         $approvedRevision=[int]$script:BackendRevisionRollbackApprovals[$ProfileName]
     }
     if($approvedRevision -gt 0 -and $revision -ge $approvedRevision){return $true}
+    if($env:CAFE_WEB_ACTION -ceq 'play-exec' -and $env:CAFE_WEB_REQUEST_ID -match '^[A-Za-z0-9_-]{43}$'){
+        Write-Log ($ProfileName+' web action blocked because backend revision rollback requires review in the Windows dashboard.') 'WARN'
+        return $false
+    }
     $message=($ProfileName+' backend data is at revision '+$revision+', but this PC previously verified revision '+$lastVerifiedRevision+'.'+"`r`n`r`n"+
         'This can happen after restoring an older backend backup. Continuing may use older profile, graphics, or CFG settings.'+"`r`n`r`n"+
         'Choose Yes only if you expect this restore. No keeps the existing local values and cancels this cloud read.')
@@ -10044,10 +10129,23 @@ function Get-CS2ProfileBaselineCfgText {
 }
 
 function Install-CS2ProfileBaselineCfg {
+    param([string]$CfgDirectory='')
     $cfgName='cafelauncher_profile_baseline.cfg'
     $staged=$null
     try {
-        $cfgDirectory=Find-CS2ConfigFolder -NoPrompt
+        if($CfgDirectory){
+            $cfgDirectory=[IO.Path]::GetFullPath($CfgDirectory)
+            if(-not (Test-Path -LiteralPath $cfgDirectory -PathType Container) -or
+               $cfgDirectory -notmatch '(?i)\\game\\csgo\\cfg$'){
+                throw 'The pinned CS2 config directory is invalid.'
+            }
+            $currentCfgDirectory=Find-CS2ConfigFolder -NoPrompt
+            if(-not $currentCfgDirectory -or -not [string]::Equals([IO.Path]::GetFullPath($currentCfgDirectory),$cfgDirectory,[StringComparison]::OrdinalIgnoreCase)){
+                throw 'The active CS2 config target changed before the reset baseline could be installed.'
+            }
+        }else{
+            $cfgDirectory=Find-CS2ConfigFolder -NoPrompt
+        }
         if(-not $cfgDirectory){Write-Log 'CS2 profile baseline install skipped; no unique validated config folder was found.' 'ERROR';return $false}
         $destination=Join-Path $cfgDirectory $cfgName
         $staged=Join-Path $cfgDirectory ($cfgName+'.cafe-'+[Guid]::NewGuid().ToString('N')+'.tmp')
@@ -10137,6 +10235,190 @@ function Start-CS2WithProfileCfg {
     $args = @(Get-CS2SteamLaunchArguments -CfgName $cfgName)
     Start-Process -FilePath $steamExe -ArgumentList $args -ErrorAction Stop
     Write-Log "$ProfileName requested CS2 launch via Steam: -applaunch 730 +exec cafelauncher_profile_baseline.cfg +exec $cfgName. Persistent Steam launch options unchanged."
+}
+
+function New-CafeWebPlayExecEnvelope {
+    param([string]$State,[string]$Summary,[object[]]$Steps,[string]$CfgName,[bool]$Cs2AlreadyRunning,[bool]$SteamLaunchRequested,[string[]]$ConsoleCommands=@(),[bool]$ExecutionOutcomeKnown=$true)
+    return [pscustomobject]@{
+        schemaVersion=1
+        state=$State
+        result=[ordered]@{
+            summary=$Summary
+            steps=@($Steps)
+            data=[ordered]@{
+                steamLaunchRequested=$SteamLaunchRequested
+                cs2AlreadyRunning=$Cs2AlreadyRunning
+                executionOutcomeKnown=$ExecutionOutcomeKnown
+                cfgName=$CfgName
+                consoleCommands=@($ConsoleCommands)
+            }
+        }
+    }
+}
+
+function Get-CafeWebActiveSteamUserId {
+    $activeUser=0L
+    try{
+        $activeProcess=Get-ItemProperty -LiteralPath 'HKCU:\Software\Valve\Steam\ActiveProcess' -ErrorAction Stop
+        if($null -ne $activeProcess.ActiveUser -and [long]::TryParse([string]$activeProcess.ActiveUser,[ref]$activeUser)){
+            if($activeUser -lt 0){$activeUser=$activeUser -band 4294967295L}
+        }
+    }catch{}
+    return $activeUser
+}
+
+function Invoke-CafeWebPlayExec {
+    param([Parameter(Mandatory=$true)][string]$ProfileName)
+    $steps=New-Object 'System.Collections.Generic.List[object]'
+    $cfgName=''
+    $cs2Running=$false
+    $steamLaunchRequested=$false
+    $gameCfgWriteStarted=$false
+    $steamLaunchAttempted=$false
+    try{
+        if(-not $script:GamingProfiles.Contains($ProfileName)){throw 'Unknown CafeLauncher profile.'}
+        $profile=$script:GamingProfiles[$ProfileName]
+        $cfgName=[string]$profile.ConfigFile
+        if($cfgName -notmatch '^[A-Za-z0-9_-]+\.cfg$'){throw 'The selected profile CFG name is invalid.'}
+
+        $queuePath=Get-CafeBackendQueuePath -ProfileName $ProfileName
+        if($script:PendingSync[$ProfileName] -or $script:PendingTarget[$ProfileName] -eq 'GitHubLegacy' -or
+           (Test-Path -LiteralPath $queuePath -PathType Leaf) -or
+           $script:PendingCfgSensitivity.ContainsKey($ProfileName) -or
+           $script:PendingProfileCfgRestore.ContainsKey($ProfileName) -or
+           ($script:CapturedCS2Convars.ContainsKey($ProfileName) -and $script:CapturedCS2Convars[$ProfileName]) -or
+           ($script:CapturedCS2Binds.ContainsKey($ProfileName) -and $script:CapturedCS2Binds[$ProfileName])){
+            [void]$steps.Add([ordered]@{name='Profile state';status='SKIPPED';detail='This profile has local changes awaiting review or sync. Open the Windows dashboard to resolve them before Play + Exec.'})
+            return (New-CafeWebPlayExecEnvelope -State 'SKIPPED' -Summary 'No files were changed and Steam was not started because this profile has pending local changes.' -Steps $steps.ToArray() -CfgName $cfgName -Cs2AlreadyRunning $false -SteamLaunchRequested $false)
+        }
+
+        $inventory=Get-PCDiagnostics -AsObject
+        $steamPath=[string]$inventory.Steam.Executable
+        $initialCs2ConfigPath=[string]$inventory.CS2.ConfigPath
+        $activeSteamUser=Get-CafeWebActiveSteamUserId
+        if(-not $inventory.Steam.ActiveSessionPresent -or -not $steamPath -or $activeSteamUser -le 0){
+            [void]$steps.Add([ordered]@{name='Active Steam session';status='SKIPPED';detail='Sign in to Steam in this Windows session, then retry. No files were changed.'})
+            return (New-CafeWebPlayExecEnvelope -State 'SKIPPED' -Summary 'An active Steam session was not detected. No files were changed and Steam was not started.' -Steps $steps.ToArray() -CfgName $cfgName -Cs2AlreadyRunning $false -SteamLaunchRequested $false)
+        }
+        [void]$steps.Add([ordered]@{name='Active Steam session';status='SUCCESS';detail='Steam is active for this Windows user.'})
+        if($inventory.CS2.Status -cne 'DETECTED' -or -not $initialCs2ConfigPath){
+            [void]$steps.Add([ordered]@{name='CS2 config path';status='SKIPPED';detail='No unique validated CS2 config path was found. No files were changed.'})
+            return (New-CafeWebPlayExecEnvelope -State 'SKIPPED' -Summary 'No unique CS2 install was found. No files were changed and Steam was not started.' -Steps $steps.ToArray() -CfgName $cfgName -Cs2AlreadyRunning $false -SteamLaunchRequested $false)
+        }
+        [void]$steps.Add([ordered]@{name='CS2 config path';status='SUCCESS';detail='A unique validated CS2 config path was detected.'})
+        $cs2Running=[bool](Get-Process -Name 'cs2' -ErrorAction SilentlyContinue)
+
+        # Resolve the latest published revision once, then fetch the complete
+        # immutable bundle for that revision instead of composing three latest reads.
+        $latestResponse=Get-CafeHttpBytes -Uri ($script:BackendBaseUrl+'/v1/profiles/'+[Uri]::EscapeDataString($ProfileName)) -MaxBytes 2097152
+        $revision=0
+        if(-not [int]::TryParse([string]$latestResponse.Headers['X-Profile-Revision'],[ref]$revision) -or $revision -lt 1){
+            throw 'The primary backend did not provide a valid current profile revision.'
+        }
+        $snapshot=Get-CafeBackendProfileHistoryRevision -ProfileName $ProfileName -Revision $revision
+        if(-not (Confirm-CafeBackendRevisionRollback -ProfileName $ProfileName -Snapshot $snapshot)){
+            [void]$steps.Add([ordered]@{name='Profile snapshot';status='SKIPPED';detail='The backend revision is older than this PC has verified. Open the Windows dashboard to review the restore before retrying.'})
+            return (New-CafeWebPlayExecEnvelope -State 'SKIPPED' -Summary 'The backend profile revision requires review in the Windows dashboard. No files were changed and Steam was not started.' -Steps $steps.ToArray() -CfgName $cfgName -Cs2AlreadyRunning $cs2Running -SteamLaunchRequested $false)
+        }
+        if([string]$snapshot.Source -cne 'Backend'){
+            [void]$steps.Add([ordered]@{name='Profile snapshot';status='SKIPPED';detail='A current primary-backend snapshot could not be verified. The public mirror and local fallback are not used for this web action.'})
+            return (New-CafeWebPlayExecEnvelope -State 'SKIPPED' -Summary 'The current profile, graphics, and CFG bundle could not be verified from the primary backend. No files were changed and Steam was not started.' -Steps $steps.ToArray() -CfgName $cfgName -Cs2AlreadyRunning $cs2Running -SteamLaunchRequested $false)
+        }
+        $remote=ConvertFrom-Json -InputObject ($snapshot.Profile|ConvertTo-Json -Depth 8 -Compress) -ErrorAction Stop
+        $remote.CfgDownloadUrl=$script:BackendBaseUrl+'/v1/cfg/'+$cfgName
+        [void](Import-ProfileValues -ProfileName $ProfileName -SavedProfile $remote -SourceLabel 'Backend')
+        $script:GraphicsPresets[$ProfileName]=$snapshot.Graphics
+        $script:GamingProfiles[$ProfileName].ScalingMode=[int]$snapshot.Graphics.ScalingMode
+        $script:BackendRevisions[$ProfileName]=[int]$snapshot.Revision
+        $script:BackendSnapshots[$ProfileName]=$snapshot
+        $script:ProfileRefreshStatus[$ProfileName]='Backend'
+        Set-CafeCloudReadSourceDisplay -Source 'Backend'
+        try{Save-ProfileSettings}catch{Write-Log ('Could not cache the verified web-action profile snapshot: '+$_.Exception.Message) 'WARN'}
+        [void]$steps.Add([ordered]@{name='Profile snapshot';status='SUCCESS';detail=('Profile, graphics, and CFG verified together at backend revision '+$snapshot.Revision+'.')})
+
+        $preWriteInventory=Get-PCDiagnostics -AsObject
+        $preWriteSteamUser=Get-CafeWebActiveSteamUserId
+        $preWriteSteamPath=[string]$preWriteInventory.Steam.Executable
+        $cfgDirectory=[string]$preWriteInventory.CS2.ConfigPath
+        if(-not $preWriteInventory.Steam.ActiveSessionPresent -or $preWriteSteamUser -ne $activeSteamUser -or
+           -not [string]::Equals($preWriteSteamPath,$steamPath,[StringComparison]::OrdinalIgnoreCase) -or
+           $preWriteInventory.CS2.Status -cne 'DETECTED' -or
+           -not [string]::Equals($cfgDirectory,$initialCs2ConfigPath,[StringComparison]::OrdinalIgnoreCase)){
+            [void]$steps.Add([ordered]@{name='PC session recheck';status='SKIPPED';detail='Steam or the CS2 config target changed during setup. No game CFG files were changed.'})
+            return (New-CafeWebPlayExecEnvelope -State 'SKIPPED' -Summary 'The Steam session or CS2 install changed while CafeLauncher prepared the action. No game CFG files were changed and Steam was not started.' -Steps $steps.ToArray() -CfgName $cfgName -Cs2AlreadyRunning $cs2Running -SteamLaunchRequested $false)
+        }
+        [void]$steps.Add([ordered]@{name='PC session recheck';status='SUCCESS';detail='The active Steam session and CS2 config target still match the initial detection.'})
+        $gameCfgWriteStarted=$true
+        if(-not (Install-CS2ProfileBaselineCfg -CfgDirectory $cfgDirectory)){
+            [void]$steps.Add([ordered]@{name='Reset baseline CFG';status='FAILED';detail='The reset baseline could not be installed and verified. Steam was not started.'})
+            return (New-CafeWebPlayExecEnvelope -State 'INTERRUPTED' -Summary 'The reset baseline install did not return a verified result. Check this PC before retrying; Steam was not launched by a confirmed result.' -Steps $steps.ToArray() -CfgName $cfgName -Cs2AlreadyRunning $cs2Running -SteamLaunchRequested $false -ExecutionOutcomeKnown $false)
+        }
+        [void]$steps.Add([ordered]@{name='Reset baseline CFG';status='SUCCESS';detail='The baseline CFG was installed and verified.'})
+
+        $downloadUrl=[string]$profile.CfgDownloadUrl
+        if($ProfileName -eq 'FabMode' -and [string]::IsNullOrWhiteSpace($downloadUrl)){$downloadUrl=$script:FabCfgCloudUrl}
+        $installed=Install-ProfileCfg -Silent -CfgName $cfgName -DownloadUrl $downloadUrl -CloudPreferred:$true -CloudSnapshot $snapshot -UseSnapshotOnly -CfgDirectory $cfgDirectory
+        if($installed -ne $true){
+            [void]$steps.Add([ordered]@{name='Profile CFG';status='FAILED';detail=($cfgName+' could not be installed and verified. Steam was not started.')})
+            return (New-CafeWebPlayExecEnvelope -State 'INTERRUPTED' -Summary ('The profile CFG '+$cfgName+' install did not return a verified result. Check this PC before retrying; Steam was not launched by a confirmed result.') -Steps $steps.ToArray() -CfgName $cfgName -Cs2AlreadyRunning $cs2Running -SteamLaunchRequested $false -ExecutionOutcomeKnown $false)
+        }
+        [void]$steps.Add([ordered]@{name='Profile CFG';status='SUCCESS';detail=($cfgName+' was installed from the same verified backend snapshot.')})
+
+        $cs2Running=$cs2Running -or [bool](Get-Process -Name 'cs2' -ErrorAction SilentlyContinue)
+        if($cs2Running){
+            [void]$steps.Add([ordered]@{name='Steam launch';status='SKIPPED';detail='CS2 is already running. Run the two commands shown below in the CS2 developer console, or close CS2 and retry.'})
+            $commands=@('exec cafelauncher_profile_baseline.cfg',('exec '+$cfgName))
+            return (New-CafeWebPlayExecEnvelope -State 'PARTIAL' -Summary 'Both CFG files were installed, but CS2 was already running and could not execute them at startup.' -Steps $steps.ToArray() -CfgName $cfgName -Cs2AlreadyRunning $true -SteamLaunchRequested $false -ConsoleCommands $commands)
+        }
+
+        $activeUserAfter=Get-CafeWebActiveSteamUserId
+        $steamPathAfter=Get-SteamExecutable
+        if($activeUserAfter -ne $activeSteamUser -or -not $steamPathAfter -or
+           -not [string]::Equals($steamPathAfter,$steamPath,[StringComparison]::OrdinalIgnoreCase)){
+            [void]$steps.Add([ordered]@{name='Steam launch';status='SKIPPED';detail='The active Steam session changed during setup. CFG files were installed but Steam was not started; check this PC before retrying.'})
+            return (New-CafeWebPlayExecEnvelope -State 'PARTIAL' -Summary 'CFG files were installed, but the active Steam session changed before launch. Steam was not started.' -Steps $steps.ToArray() -CfgName $cfgName -Cs2AlreadyRunning $false -SteamLaunchRequested $false)
+        }
+
+        $launchArgs=@(Get-CS2SteamLaunchArguments -CfgName $cfgName)
+        $steamLaunchAttempted=$true
+        Start-Process -FilePath $steamPath -ArgumentList $launchArgs -ErrorAction Stop
+        $steamLaunchRequested=$true
+        [void]$steps.Add([ordered]@{name='Steam launch';status='SUCCESS';detail='Steam was asked to start CS2 with the reset baseline followed by the selected profile CFG. Persistent Steam launch options were unchanged.'})
+        return (New-CafeWebPlayExecEnvelope -State 'COMPLETED' -Summary 'The verified profile CFGs were installed and Steam was asked to start CS2.' -Steps $steps.ToArray() -CfgName $cfgName -Cs2AlreadyRunning $false -SteamLaunchRequested $steamLaunchRequested)
+    }catch{
+        [void]$steps.Add([ordered]@{name='Play + Exec';status='FAILED';detail='The action stopped on this PC before a verified launch result was obtained.'})
+        Write-Log ('Web Play + Exec stopped for '+$ProfileName+': '+$_.Exception.Message) 'ERROR'
+        $unknown=($gameCfgWriteStarted -or $steamLaunchAttempted)
+        $state=if($unknown){'INTERRUPTED'}else{'FAILED'}
+        $summary=if($unknown){'Play + Exec stopped without a complete local result. Check the CFG files and Steam on this PC before retrying.'}else{'Play + Exec could not start. Review the local CafeLauncher log before retrying.'}
+        return (New-CafeWebPlayExecEnvelope -State $state -Summary $summary -Steps $steps.ToArray() -CfgName $(if($cfgName){$cfgName}else{'fab.cfg'}) -Cs2AlreadyRunning $cs2Running -SteamLaunchRequested $steamLaunchRequested -ExecutionOutcomeKnown (-not $unknown))
+    }
+}
+
+if($env:CAFE_WEB_ACTION -ceq 'play-exec'){
+    try{
+        if($env:CAFE_WEB_REQUEST_ID -notmatch '^[A-Za-z0-9_-]{43}$' -or $env:CAFE_WEB_PROFILE -notmatch '^(FabMode|ArliMode|BrileMode|ArmlMode|OliMode|Provmode)$'){
+            throw 'Invalid CafeLauncher web action context.'
+        }
+        $resultPath=[IO.Path]::GetFullPath([string]$env:CAFE_WEB_RESULT_FILE)
+        $tempRoot=[IO.Path]::GetFullPath([IO.Path]::GetTempPath())
+        if(-not $resultPath.StartsWith($tempRoot,[StringComparison]::OrdinalIgnoreCase) -or [IO.Path]::GetExtension($resultPath) -cne '.json'){
+            throw 'CafeLauncher web result path is invalid.'
+        }
+        $webOutput=Invoke-CafeWebPlayExec -ProfileName ([string]$env:CAFE_WEB_PROFILE)
+        $json=ConvertTo-Json -InputObject $webOutput -Depth 12 -Compress
+        [IO.File]::WriteAllText($resultPath,$json,(New-Object System.Text.UTF8Encoding($false)))
+        exit 0
+    }catch{
+        try{
+            $errorPath=[IO.Path]::GetFullPath([string]$env:CAFE_WEB_RESULT_FILE)
+            $tempRoot=[IO.Path]::GetFullPath([IO.Path]::GetTempPath())
+            if($errorPath.StartsWith($tempRoot,[StringComparison]::OrdinalIgnoreCase)){
+                [IO.File]::WriteAllText($errorPath+'.error','Play + Exec failed.',(New-Object System.Text.UTF8Encoding($false)))
+            }
+        }catch{}
+        exit 1
+    }
 }
 
 # Independent CS2 graphics module; loaded ONLY when Apply Graphics is clicked.
