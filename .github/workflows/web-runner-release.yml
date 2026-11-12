@@ -30,6 +30,7 @@ jobs:
           $version = $Matches[1]
           "version=$version" >> $env:GITHUB_OUTPUT
           $exe = Join-Path $env:RUNNER_TEMP 'CafeLauncherWebRunner.exe'
+          if ([Diagnostics.FileVersionInfo]::GetVersionInfo($exe).FileVersion -ne "$version.0") { throw 'Runner file version does not match RunnerVersion.' }
           $hash = (Get-FileHash -LiteralPath $exe -Algorithm SHA256).Hash.ToLowerInvariant()
           $size = (Get-Item -LiteralPath $exe).Length
           "$hash  CafeLauncherWebRunner.exe" | Set-Content -LiteralPath (Join-Path $env:RUNNER_TEMP 'CafeLauncherWebRunner.exe.sha256') -NoNewline
@@ -61,5 +62,5 @@ jobs:
             exit 0
           }
           if ($LASTEXITCODE -ne 1) { throw 'Could not check whether the runner release already exists.' }
-          gh release create $tag (Join-Path $env:RUNNER_TEMP 'CafeLauncherWebRunner.exe') (Join-Path $env:RUNNER_TEMP 'CafeLauncherWebRunner.exe.sha256') (Join-Path $env:RUNNER_TEMP 'CafeLauncherWebRunner.release.json') --title "CafeLauncher Web Runner v${{ steps.build.outputs.version }}" --notes 'Per-user CafeLauncher web runner for Windows. Open the downloaded executable once to install it for the current Windows account and register cafelauncher://. Future runner releases install automatically when a web action is clicked.' --target $env:GITHUB_SHA
+          gh release create $tag (Join-Path $env:RUNNER_TEMP 'CafeLauncherWebRunner.exe') (Join-Path $env:RUNNER_TEMP 'CafeLauncherWebRunner.exe.sha256') (Join-Path $env:RUNNER_TEMP 'CafeLauncherWebRunner.release.json') --title "CafeLauncher Web Runner v${{ steps.build.outputs.version }}" --notes 'Per-user CafeLauncher web runner for Windows. Open the downloaded executable once to install it for the current Windows account, register cafelauncher://, and add a standard Installed apps entry so Windows can recognize setup completion. Future runner releases install automatically when a web action is clicked.' --target $env:GITHUB_SHA
           if ($LASTEXITCODE -ne 0) { throw "Could not publish runner release $tag." }

@@ -50,8 +50,13 @@ internal static class CompatibilityTests
         try { CafeLauncherWebRunner.ValidateGithubLauncherPayload(metadata); }
         catch (InvalidOperationException) { rejected = true; }
         if (!rejected) throw new Exception("A mismatched Git blob SHA was accepted.");
+        DateTime now = new DateTime(2026, 11, 12, 12, 0, 0, DateTimeKind.Utc);
+        if (!CafeLauncherWebRunner.IsGithubLauncherMetadataCacheFresh(now.AddMinutes(-2), now) ||
+            CafeLauncherWebRunner.IsGithubLauncherMetadataCacheFresh(now.AddMinutes(-4), now) ||
+            CafeLauncherWebRunner.IsGithubLauncherMetadataCacheFresh(now.AddMinutes(1), now))
+            throw new Exception("GitHub fallback metadata cache freshness was incorrect.");
 
-        Console.WriteLine("PASS: GitHub blob validation, web-action compatibility detection, and tamper rejection.");
+        Console.WriteLine("PASS: GitHub blob validation, three-minute verified fallback cache, action detection, and tamper rejection.");
         return 0;
     }
 

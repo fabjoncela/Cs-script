@@ -8,6 +8,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Globalization;
 using System.Net;
+using System.Reflection;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
@@ -15,10 +16,18 @@ using System.Web.Script.Serialization;
 using System.Windows.Forms;
 using Microsoft.Win32;
 
+[assembly: AssemblyTitle("CafeLauncher Web Runner")]
+[assembly: AssemblyDescription("Per-user Windows companion for CafeLauncher web actions.")]
+[assembly: AssemblyCompany("CafeLauncher")]
+[assembly: AssemblyProduct("CafeLauncher Web Runner")]
+[assembly: AssemblyVersion("0.7.1.0")]
+[assembly: AssemblyFileVersion("0.7.1.0")]
+
 internal static class CafeLauncherWebRunner
 {
     private const string BackendOrigin = "https://fabjon-hp.tail681ec9.ts.net:10000";
-    private const string RunnerVersion = "0.7.0";
+    private const string RunnerVersion = "0.7.1";
+    private const string RunnerUninstallKey = @"Software\Microsoft\Windows\CurrentVersion\Uninstall\CafeLauncherWebRunner";
     private const int MaxLauncherBytes = 1000000;
     private const int MaxRunnerBytes = 8 * 1024 * 1024;
     private static readonly JavaScriptSerializer Json = new JavaScriptSerializer { MaxJsonLength = 2 * 1024 * 1024 };
@@ -32,6 +41,7 @@ internal static class CafeLauncherWebRunner
             if (args.Length == 0) return InstallForCurrentUser();
             if (args.Length == 1 && args[0] == "--register") return RegisterProtocol(Process.GetCurrentProcess().MainModule.FileName);
             if (args.Length == 1 && args[0] == "--unregister") return UnregisterProtocol();
+            if (args.Length == 1 && args[0] == "--uninstall") return UninstallForCurrentUser();
             if (args.Length < 1 || args.Length > 2 || (args.Length == 2 && args[1] != "--after-update"))
                 throw new InvalidOperationException("Open CafeLauncher from the CafeLauncher website on this PC.");
 
@@ -39,6 +49,7 @@ internal static class CafeLauncherWebRunner
             ServicePointManager.SecurityProtocol |= SecurityProtocolType.Tls12;
             ServicePointManager.Expect100Continue = false;
             bool startedAfterUpdate = args.Length == 2;
+            WriteUninstallRegistrationIfInstalled(Process.GetCurrentProcess().MainModule.FileName);
             bool profileResetPending = File.Exists(PendingProfileResetPath());
             if (!startedAfterUpdate)
             {
@@ -86,8 +97,106 @@ internal static class CafeLauncherWebRunner
         if (!String.Equals(Path.GetFullPath(source), installedPath, StringComparison.OrdinalIgnoreCase))
             InstallExecutable(source, installedPath);
         RegisterProtocol(installedPath);
+        WriteUninstallRegistration(installedPath);
         MessageBox.Show("CafeLauncher is ready for this Windows user. Return to the website and click an action.", "CafeLauncher installed", MessageBoxButtons.OK, MessageBoxIcon.Information);
         return 0;
+    }
+
+    internal static void WriteUninstallRegistration(RegistryKey parent, string executable)
+    {
+        if (parent == null) throw new ArgumentNullException("parent");
+        executable = Path.GetFullPath(executable);
+        string directory = Path.GetDirectoryName(executable);
+        Version version = new Version(RunnerVersion);
+        // The per-user uninstall record also tells Windows' compatibility
+        // assistant that this self-installing runner completed successfully.
+        using (RegistryKey entry = parent.CreateSubKey("CafeLauncherWebRunner"))
+        {
+            if (entry == null) throw new InvalidOperationException("Could not register CafeLauncher in Windows installed apps.");
+            entry.SetValue("DisplayName", "CafeLauncher Web Runner", RegistryValueKind.String);
+            entry.SetValue("DisplayVersion", RunnerVersion, RegistryValueKind.String);
+            entry.SetValue("Publisher", "CafeLauncher", RegistryValueKind.String);
+            entry.SetValue("Language", 1033, RegistryValueKind.DWord);
+            entry.SetValue("InstallLocation", directory, RegistryValueKind.String);
+            entry.SetValue("DisplayIcon", "\"" + executable + "\",0", RegistryValueKind.String);
+            entry.SetValue("UninstallString", "\"" + executable + "\" --uninstall", RegistryValueKind.String);
+            entry.SetValue("NoModify", 1, RegistryValueKind.DWord);
+            entry.SetValue("NoRepair", 1, RegistryValueKind.DWord);
+            entry.SetValue("VersionMajor", version.Major, RegistryValueKind.DWord);
+            entry.SetValue("VersionMinor", version.Minor, RegistryValueKind.DWord);
+        }
+    }
+
+    private static void WriteUninstallRegistration(string executable)
+    {
+        using (RegistryKey parent = Registry.CurrentUser.CreateSubKey(@"Software\Microsoft\Windows\CurrentVersion\Uninstall"))
+        {
+            if (parent == null) throw new InvalidOperationException("Could not register CafeLauncher in Windows installed apps.");
+            WriteUninstallRegistration(parent, executable);
+        }
+    }
+
+    private static void WriteUninstallRegistrationIfInstalled(string executable)
+    {
+        if (IsManagedRunnerExecutable(executable)) WriteUninstallRegistration(executable);
+    }
+
+    private static int UninstallForCurrentUser()
+    {
+        string executable = Path.GetFullPath(Process.GetCurrentProcess().MainModule.FileName);
+        if (!IsManagedRunnerExecutable(executable))
+            throw new InvalidOperationException("Run CafeLauncher uninstall from its installed Windows account location.");
+
+        ScheduleRunnerRemoval(executable);
+
+        RemoveManagedProtocolRegistration();
+        Registry.CurrentUser.DeleteSubKeyTree(RunnerUninstallKey, false);
+        MessageBox.Show("CafeLauncher was removed for this Windows account.", "CafeLauncher removed", MessageBoxButtons.OK, MessageBoxIcon.Information);
+        return 0;
+    }
+
+    private static void ScheduleRunnerRemoval(string executable)
+    {
+        string powershell = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), @"WindowsPowerShell\v1.0\powershell.exe");
+        if (!File.Exists(powershell)) throw new InvalidOperationException("Windows PowerShell was not found, so CafeLauncher could not finish uninstalling.");
+        int parentProcessId = Process.GetCurrentProcess().Id;
+        string runnerRoot = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "CafeLauncher", "Runner");
+        string safeReleases = Path.Combine(runnerRoot, "releases").Replace("'", "''");
+        string safeInstalledRunner = Path.Combine(runnerRoot, "CafeLauncherWebRunner.exe").Replace("'", "''");
+        string script = "$parent = Get-Process -Id " + parentProcessId + " -ErrorAction SilentlyContinue; if ($null -ne $parent) { $parent.WaitForExit() }; Remove-Item -LiteralPath '" + safeReleases + "' -Force -Recurse -ErrorAction SilentlyContinue; Remove-Item -LiteralPath '" + safeInstalledRunner + "' -Force -ErrorAction Stop";
+        string encodedScript = Convert.ToBase64String(Encoding.Unicode.GetBytes(script));
+        ProcessStartInfo start = new ProcessStartInfo(powershell, "-NoLogo -NoProfile -NonInteractive -WindowStyle Hidden -EncodedCommand " + encodedScript);
+        start.UseShellExecute = false;
+        start.CreateNoWindow = true;
+        start.WindowStyle = ProcessWindowStyle.Hidden;
+        using (Process process = Process.Start(start))
+        {
+            if (process == null) throw new InvalidOperationException("Windows PowerShell could not finish uninstalling CafeLauncher.");
+        }
+    }
+
+    private static void RemoveManagedProtocolRegistration()
+    {
+        using (RegistryKey existing = Registry.CurrentUser.OpenSubKey(@"Software\Classes\cafelauncher\shell\open\command", false))
+        {
+            string registeredCommand = existing == null ? null : existing.GetValue(null) as string;
+            if (IsManagedRunnerCommand(registeredCommand))
+                Registry.CurrentUser.DeleteSubKeyTree(@"Software\Classes\cafelauncher", false);
+        }
+    }
+
+    private static bool IsManagedRunnerExecutable(string executable)
+    {
+        if (String.IsNullOrWhiteSpace(executable) || !String.Equals(Path.GetFileName(executable), "CafeLauncherWebRunner.exe", StringComparison.OrdinalIgnoreCase)) return false;
+        string fullPath;
+        try { fullPath = Path.GetFullPath(executable); }
+        catch { return false; }
+        string root = Path.GetFullPath(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "CafeLauncher", "Runner"));
+        string baseExecutable = Path.Combine(root, "CafeLauncherWebRunner.exe");
+        if (String.Equals(fullPath, baseExecutable, StringComparison.OrdinalIgnoreCase)) return true;
+        string releases = Path.Combine(root, "releases");
+        string prefix = releases.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
+        return fullPath.StartsWith(prefix, StringComparison.OrdinalIgnoreCase);
     }
 
     // Kept free of registry and environment access so copy/replace behavior can
@@ -226,6 +335,7 @@ internal static class CafeLauncherWebRunner
             finally { if (File.Exists(temporary)) File.Delete(temporary); }
         }
         WriteProtocolRegistration(destination, false);
+        WriteUninstallRegistration(destination);
         string resetMarker = PendingProfileResetPath();
         string resetTemporary = resetMarker + "." + Guid.NewGuid().ToString("N") + ".tmp";
         try
@@ -478,13 +588,44 @@ internal static class CafeLauncherWebRunner
     private static Dictionary<string, object> GetLatestGithubLauncher()
     {
         const string endpoint = "https://api.github.com/repos/fabjoncela/Cs-script/contents/cafe.bat?ref=main";
+        string cacheRoot = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "CafeLauncher", "Runner", "github");
+        Directory.CreateDirectory(cacheRoot);
+        string latestPath = Path.Combine(cacheRoot, "latest.json");
+        if (File.Exists(latestPath) && IsGithubLauncherMetadataCacheFresh(File.GetLastWriteTimeUtc(latestPath), DateTime.UtcNow))
+        {
+            try
+            {
+                Dictionary<string, object> latest = ParseJson(File.ReadAllText(latestPath, Encoding.UTF8));
+                string cachedVersion = RequiredString(latest, "version");
+                string cachedSha = RequiredString(latest, "sha").ToLowerInvariant();
+                int cachedSize = Convert.ToInt32(latest["size"]);
+                if (Regex.IsMatch(cachedVersion, @"^\d{4}\.\d{1,2}\.\d{1,2}\.\d+$", RegexOptions.CultureInvariant) &&
+                    cachedSize >= 10000 && cachedSize <= MaxLauncherBytes && Regex.IsMatch(cachedSha, @"^[0-9a-f]{40}$", RegexOptions.CultureInvariant))
+                {
+                    string cachedPath = Path.Combine(cacheRoot, cachedSha, "cafe.bat");
+                    if (File.Exists(cachedPath))
+                    {
+                        byte[] cachedBytes = File.ReadAllBytes(cachedPath);
+                        Match cachedMarker = Regex.Match(Encoding.UTF8.GetString(cachedBytes), @"(?m)^# CAFE_RELEASE=(\d{4}\.\d{1,2}\.\d{1,2}\.\d+)\s*$", RegexOptions.CultureInvariant);
+                        if (cachedBytes.Length == cachedSize && String.Equals(GitBlobSha(cachedBytes), cachedSha, StringComparison.Ordinal) &&
+                            cachedMarker.Success && cachedMarker.Groups[1].Value == cachedVersion)
+                            return new Dictionary<string, object> { { "path", cachedPath }, { "bytes", cachedBytes }, { "version", cachedVersion } };
+                    }
+                }
+            }
+            catch
+            {
+                // A stale or damaged cache must fall through to a fresh, verified GitHub response.
+            }
+        }
+
         Dictionary<string, object> metadata = ParseJson(Encoding.UTF8.GetString(GetBytes(CreateGithubRequest(new Uri(endpoint), "GET"), 2 * MaxLauncherBytes)));
         byte[] bytes = ValidateGithubLauncherPayload(metadata);
         Match version = Regex.Match(Encoding.UTF8.GetString(bytes), @"(?m)^# CAFE_RELEASE=(\d{4}\.\d{1,2}\.\d{1,2}\.\d+)\s*$", RegexOptions.CultureInvariant);
+        if (!version.Success) throw new InvalidOperationException("The current CafeLauncher source has no valid release marker.");
         string sha = RequiredString(metadata, "sha").ToLowerInvariant();
-        string cacheDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "CafeLauncher", "Runner", "github", sha);
-        Directory.CreateDirectory(cacheDir);
-        string cachePath = Path.Combine(cacheDir, "cafe.bat");
+        string cachePath = Path.Combine(cacheRoot, sha, "cafe.bat");
+        Directory.CreateDirectory(Path.GetDirectoryName(cachePath));
         if (File.Exists(cachePath) && !String.Equals(GitBlobSha(File.ReadAllBytes(cachePath)), sha, StringComparison.Ordinal))
             File.Delete(cachePath);
         if (!File.Exists(cachePath))
@@ -502,7 +643,28 @@ internal static class CafeLauncherWebRunner
                 if (File.Exists(temporaryPath)) File.Delete(temporaryPath);
             }
         }
+        Dictionary<string, object> latestMetadata = new Dictionary<string, object>
+        {
+            { "version", version.Groups[1].Value }, { "sha", sha }, { "size", bytes.Length }
+        };
+        string latestTemporaryPath = latestPath + "." + Guid.NewGuid().ToString("N") + ".tmp";
+        try
+        {
+            File.WriteAllText(latestTemporaryPath, Json.Serialize(latestMetadata), new UTF8Encoding(false));
+            if (File.Exists(latestPath)) File.Delete(latestPath);
+            File.Move(latestTemporaryPath, latestPath);
+        }
+        finally
+        {
+            if (File.Exists(latestTemporaryPath)) File.Delete(latestTemporaryPath);
+        }
         return new Dictionary<string, object> { { "path", cachePath }, { "bytes", bytes }, { "version", version.Groups[1].Value } };
+    }
+
+    internal static bool IsGithubLauncherMetadataCacheFresh(DateTime lastWriteUtc, DateTime nowUtc)
+    {
+        TimeSpan age = nowUtc - lastWriteUtc;
+        return age >= TimeSpan.Zero && age < TimeSpan.FromMinutes(3);
     }
 
     // Validate the public GitHub Contents API response independently of any
