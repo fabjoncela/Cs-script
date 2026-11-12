@@ -10456,6 +10456,43 @@ function Invoke-CafeWebApplyProfile {
     }
 }
 
+function Get-CafeVerifiedGraphicsModulePath {
+    param()
+    $expected='b6fa5619e13df559b40c02cd8a11d9d7cd99d7e8'
+    $cache=Join-Path $env:LOCALAPPDATA 'CafeLauncher\graphics-module.ps1'
+    $parent=Split-Path -Parent $cache
+    if(-not (Test-Path -LiteralPath $parent)){[void](New-Item -Path $parent -ItemType Directory -Force)}
+    $localModule=Join-Path (Split-Path -Parent $env:CAFE_SCRIPT) 'graphics\ApplyGraphics.ps1'
+    $loaded=$false
+    if((Test-Path -LiteralPath $localModule -PathType Leaf) -and (Get-GitBlobSha -Bytes ([IO.File]::ReadAllBytes($localModule))) -eq $expected){
+        $tokens=$null;$errors=$null
+        [void][System.Management.Automation.Language.Parser]::ParseFile($localModule,[ref]$tokens,[ref]$errors)
+        if(@($errors).Count){throw 'Local graphics module has invalid PowerShell syntax.'}
+        Copy-Item -LiteralPath $localModule -Destination $cache -Force -ErrorAction Stop
+        $loaded=$true
+    }
+    if(-not $loaded -and (Test-Path -LiteralPath $cache -PathType Leaf) -and (Get-GitBlobSha -Bytes ([IO.File]::ReadAllBytes($cache))) -eq $expected){$loaded=$true}
+    if(-not $loaded){
+        $source=Add-CafeCacheBust -Uri 'https://raw.githubusercontent.com/fabjoncela/Cs-script/main/graphics/ApplyGraphics.ps1'
+        $temp=Join-Path $env:TEMP ('CafeLauncher-graphics-module-'+[guid]::NewGuid().ToString('N')+'.ps1')
+        try{
+            [Net.ServicePointManager]::SecurityProtocol=[Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+            Invoke-WebRequest -Uri $source -OutFile $temp -UseBasicParsing -TimeoutSec 12 -ErrorAction Stop
+            $bytes=[IO.File]::ReadAllBytes($temp)
+            if((Get-GitBlobSha -Bytes $bytes) -ne $expected){throw 'Downloaded graphics helper failed its pinned Git blob SHA.'}
+            $tokens=$null;$errors=$null
+            [void][System.Management.Automation.Language.Parser]::ParseFile($temp,[ref]$tokens,[ref]$errors)
+            if(@($errors).Count){throw 'Downloaded graphics module has invalid PowerShell syntax.'}
+            Copy-Item -LiteralPath $temp -Destination $cache -Force -ErrorAction Stop
+        }finally{Remove-Item -LiteralPath $temp -Force -ErrorAction SilentlyContinue}
+    }
+    if((Get-GitBlobSha -Bytes ([IO.File]::ReadAllBytes($cache))) -ne $expected){throw 'Cached graphics helper failed its pinned Git blob SHA.'}
+    $tokens=$null;$errors=$null
+    [void][System.Management.Automation.Language.Parser]::ParseFile($cache,[ref]$tokens,[ref]$errors)
+    if(@($errors).Count){throw 'Cached graphics module has invalid PowerShell syntax.'}
+    return $cache
+}
+
 function Invoke-CafeWebApplyGraphics {
     param([Parameter(Mandatory=$true)][string]$ProfileName)
     $mayHaveChanged=$false
@@ -10756,42 +10793,7 @@ if($env:CAFE_WEB_ACTION -in @('apply-profile','apply-graphics')){
     }
 }
 
-function Get-CafeVerifiedGraphicsModulePath {
-    param()
-    $expected='b6fa5619e13df559b40c02cd8a11d9d7cd99d7e8'
-    $cache=Join-Path $env:LOCALAPPDATA 'CafeLauncher\graphics-module.ps1'
-    $parent=Split-Path -Parent $cache
-    if(-not (Test-Path -LiteralPath $parent)){[void](New-Item -Path $parent -ItemType Directory -Force)}
-    $localModule=Join-Path (Split-Path -Parent $env:CAFE_SCRIPT) 'graphics\ApplyGraphics.ps1'
-    $loaded=$false
-    if((Test-Path -LiteralPath $localModule -PathType Leaf) -and (Get-GitBlobSha -Bytes ([IO.File]::ReadAllBytes($localModule))) -eq $expected){
-        $tokens=$null;$errors=$null
-        [void][System.Management.Automation.Language.Parser]::ParseFile($localModule,[ref]$tokens,[ref]$errors)
-        if(@($errors).Count){throw 'Local graphics module has invalid PowerShell syntax.'}
-        Copy-Item -LiteralPath $localModule -Destination $cache -Force -ErrorAction Stop
-        $loaded=$true
-    }
-    if(-not $loaded -and (Test-Path -LiteralPath $cache -PathType Leaf) -and (Get-GitBlobSha -Bytes ([IO.File]::ReadAllBytes($cache))) -eq $expected){$loaded=$true}
-    if(-not $loaded){
-        $source=Add-CafeCacheBust -Uri 'https://raw.githubusercontent.com/fabjoncela/Cs-script/main/graphics/ApplyGraphics.ps1'
-        $temp=Join-Path $env:TEMP ('CafeLauncher-graphics-module-'+[guid]::NewGuid().ToString('N')+'.ps1')
-        try{
-            [Net.ServicePointManager]::SecurityProtocol=[Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
-            Invoke-WebRequest -Uri $source -OutFile $temp -UseBasicParsing -TimeoutSec 12 -ErrorAction Stop
-            $bytes=[IO.File]::ReadAllBytes($temp)
-            if((Get-GitBlobSha -Bytes $bytes) -ne $expected){throw 'Downloaded graphics helper failed its pinned Git blob SHA.'}
-            $tokens=$null;$errors=$null
-            [void][System.Management.Automation.Language.Parser]::ParseFile($temp,[ref]$tokens,[ref]$errors)
-            if(@($errors).Count){throw 'Downloaded graphics module has invalid PowerShell syntax.'}
-            Copy-Item -LiteralPath $temp -Destination $cache -Force -ErrorAction Stop
-        }finally{Remove-Item -LiteralPath $temp -Force -ErrorAction SilentlyContinue}
-    }
-    if((Get-GitBlobSha -Bytes ([IO.File]::ReadAllBytes($cache))) -ne $expected){throw 'Cached graphics helper failed its pinned Git blob SHA.'}
-    $tokens=$null;$errors=$null
-    [void][System.Management.Automation.Language.Parser]::ParseFile($cache,[ref]$tokens,[ref]$errors)
-    if(@($errors).Count){throw 'Cached graphics module has invalid PowerShell syntax.'}
-    return $cache
-}
+
 
 function Invoke-CafeGraphicsPresetCore {
     param([Parameter(Mandatory=$true)][string]$ModeName,[Parameter(Mandatory=$true)]$Preset,[switch]$WebAction,[string]$ModulePath='')
