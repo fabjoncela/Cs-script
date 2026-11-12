@@ -6,6 +6,7 @@ on:
     paths:
       - 'web-runner/**'
       - 'tools/Test-WebRunnerInstall.ps1'
+      - 'tools/Test-WebRunnerCompatibility.ps1'
       - '.github/workflows/web-runner-release.yml'
   workflow_dispatch:
 
@@ -22,6 +23,7 @@ jobs:
         shell: pwsh
         run: |
           ./tools/Test-WebRunnerInstall.ps1
+          ./tools/Test-WebRunnerCompatibility.ps1
           ./web-runner/Build-WebRunner.ps1 -OutputPath "$env:RUNNER_TEMP/CafeLauncherWebRunner.exe"
           $source = Get-Content web-runner/CafeLauncherWebRunner.cs -Raw
           if ($source -notmatch 'RunnerVersion = "(\d+\.\d+\.\d+)"') { throw 'RunnerVersion is missing or invalid.' }

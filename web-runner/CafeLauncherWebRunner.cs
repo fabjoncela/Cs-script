@@ -17,7 +17,7 @@ using Microsoft.Win32;
 internal static class CafeLauncherWebRunner
 {
     private const string BackendOrigin = "https://fabjon-hp.tail681ec9.ts.net:10000";
-    private const string RunnerVersion = "0.2.0";
+    private const string RunnerVersion = "0.3.0";
     private const int MaxLauncherBytes = 1000000;
     private static readonly JavaScriptSerializer Json = new JavaScriptSerializer { MaxJsonLength = 2 * 1024 * 1024 };
 
@@ -176,8 +176,21 @@ internal static class CafeLauncherWebRunner
         try
         {
             Dictionary<string, object> release = GetLatestVerifiedLauncher();
+            bool githubCompatibilityFallback = false;
+            if (!LauncherSupportsAction((byte[])release["bytes"], action))
+            {
+                SendEvent(requestId, capability, "RUNNING", "Launcher compatibility", "PENDING",
+                    "The server package predates web actions. Fetching the current CafeLauncher source and verifying its GitHub blob hash.", null);
+                release = GetLatestGithubLauncher();
+                githubCompatibilityFallback = true;
+                if (!LauncherSupportsAction((byte[])release["bytes"], action))
+                    throw new InvalidOperationException("The current CafeLauncher source does not support this web action yet.");
+            }
             string launcherPath = (string)release["path"];
-            SendEvent(requestId, capability, "RUNNING", "Launcher verification", "SUCCESS", "Downloaded launcher size and SHA-256 match the immutable release manifest.", null);
+            string verificationDetail = githubCompatibilityFallback
+                ? "The current CafeLauncher source matched the official GitHub Contents API size and Git blob SHA."
+                : "Downloaded launcher size and SHA-256 match the immutable release manifest.";
+            SendEvent(requestId, capability, "RUNNING", "Launcher verification", "SUCCESS", verificationDetail, null);
             actionMayHaveRun = action == "play-exec";
             Dictionary<string, object> detection = RunLauncherAction(launcherPath, requestId, action, profile);
             if (action == "play-exec")
@@ -287,6 +300,84 @@ internal static class CafeLauncherWebRunner
         if (!releaseMarker.Success || releaseMarker.Groups[1].Value != version)
             throw new InvalidOperationException("The launcher release marker did not match its manifest.");
         return new Dictionary<string, object> { { "path", cachePath }, { "bytes", bytes } };
+    }
+
+    private static Dictionary<string, object> GetLatestGithubLauncher()
+    {
+        const string endpoint = "https://api.github.com/repos/fabjoncela/Cs-script/contents/cafe.bat?ref=main";
+        Dictionary<string, object> metadata = ParseJson(Encoding.UTF8.GetString(GetBytes(CreateGithubRequest(new Uri(endpoint), "GET"), 2 * MaxLauncherBytes)));
+        byte[] bytes = ValidateGithubLauncherPayload(metadata);
+        Match version = Regex.Match(Encoding.UTF8.GetString(bytes), @"(?m)^# CAFE_RELEASE=(\d{4}\.\d{1,2}\.\d{1,2}\.\d+)\s*$", RegexOptions.CultureInvariant);
+        string sha = RequiredString(metadata, "sha").ToLowerInvariant();
+        string cacheDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "CafeLauncher", "Runner", "github", sha);
+        Directory.CreateDirectory(cacheDir);
+        string cachePath = Path.Combine(cacheDir, "cafe.bat");
+        if (File.Exists(cachePath) && !String.Equals(GitBlobSha(File.ReadAllBytes(cachePath)), sha, StringComparison.Ordinal))
+            File.Delete(cachePath);
+        if (!File.Exists(cachePath))
+        {
+            string temporaryPath = cachePath + "." + Guid.NewGuid().ToString("N") + ".tmp";
+            try
+            {
+                File.WriteAllBytes(temporaryPath, bytes);
+                if (!String.Equals(GitBlobSha(File.ReadAllBytes(temporaryPath)), sha, StringComparison.Ordinal))
+                    throw new InvalidOperationException("The cached CafeLauncher source failed its GitHub blob hash check.");
+                File.Move(temporaryPath, cachePath);
+            }
+            finally
+            {
+                if (File.Exists(temporaryPath)) File.Delete(temporaryPath);
+            }
+        }
+        return new Dictionary<string, object> { { "path", cachePath }, { "bytes", bytes }, { "version", version.Groups[1].Value } };
+    }
+
+    // Validate the public GitHub Contents API response independently of any
+    // network or filesystem access, so malformed and tampered payloads can be
+    // covered by temp-only tests.
+    internal static byte[] ValidateGithubLauncherPayload(Dictionary<string, object> metadata)
+    {
+        if (metadata == null || RequiredString(metadata, "path") != "cafe.bat" || RequiredString(metadata, "encoding") != "base64")
+            throw new InvalidOperationException("GitHub returned unexpected CafeLauncher file metadata.");
+        string expectedBlob = RequiredString(metadata, "sha").ToLowerInvariant();
+        int expectedSize = Convert.ToInt32(metadata["size"]);
+        string content = RequiredString(metadata, "content");
+        if (expectedSize < 10000 || expectedSize > MaxLauncherBytes || !Regex.IsMatch(expectedBlob, @"^[0-9a-f]{40}$", RegexOptions.CultureInvariant))
+            throw new InvalidOperationException("GitHub returned invalid CafeLauncher file metadata.");
+
+        byte[] bytes;
+        try { bytes = Convert.FromBase64String(Regex.Replace(content, @"\s", String.Empty)); }
+        catch (FormatException error) { throw new InvalidOperationException("GitHub returned invalid CafeLauncher file content.", error); }
+        if (bytes.Length != expectedSize || !String.Equals(GitBlobSha(bytes), expectedBlob, StringComparison.Ordinal))
+            throw new InvalidOperationException("The current CafeLauncher source failed its GitHub size and blob hash checks.");
+        string source = Encoding.UTF8.GetString(bytes);
+        Match release = Regex.Match(source, @"(?m)^# CAFE_RELEASE=(\d{4}\.\d{1,2}\.\d{1,2}\.\d+)\s*$", RegexOptions.CultureInvariant);
+        if (!source.StartsWith("@echo off", StringComparison.OrdinalIgnoreCase) ||
+            !Regex.IsMatch(source, @"(?m)^# POWERSHELL_GUI\s*$", RegexOptions.CultureInvariant) || !release.Success)
+            throw new InvalidOperationException("The current GitHub file is not a valid CafeLauncher release.");
+        return bytes;
+    }
+
+    internal static bool LauncherSupportsAction(byte[] bytes, string action)
+    {
+        if (bytes == null || (action != "detect-pc" && action != "play-exec")) return false;
+        string source = Encoding.UTF8.GetString(bytes);
+        string branch = @"(?m)^\s*if\s*\(\$env:CAFE_WEB_ACTION\s+-ceq\s+'" + Regex.Escape(action) + @"'\)\s*\{";
+        return Regex.IsMatch(source, branch, RegexOptions.CultureInvariant);
+    }
+
+    internal static string GitBlobSha(byte[] bytes)
+    {
+        byte[] header = Encoding.ASCII.GetBytes("blob " + bytes.Length + "\0");
+        byte[] blob = new byte[header.Length + bytes.Length];
+        Buffer.BlockCopy(header, 0, blob, 0, header.Length);
+        Buffer.BlockCopy(bytes, 0, blob, header.Length, bytes.Length);
+        using (SHA1 sha = SHA1.Create())
+        {
+            StringBuilder value = new StringBuilder(40);
+            foreach (byte item in sha.ComputeHash(blob)) value.Append(item.ToString("x2"));
+            return value.ToString();
+        }
     }
 
     private static Dictionary<string, object> RunLauncherAction(string launcherPath, string requestId, string action, string profile)
@@ -481,7 +572,11 @@ internal static class CafeLauncherWebRunner
 
     private static byte[] GetBytes(Uri uri, int maximum)
     {
-        HttpWebRequest request = CreateRequest(uri, "GET");
+        return GetBytes(CreateRequest(uri, "GET"), maximum);
+    }
+
+    private static byte[] GetBytes(HttpWebRequest request, int maximum)
+    {
         using (HttpWebResponse response = (HttpWebResponse)request.GetResponse())
         using (Stream stream = response.GetResponseStream())
         using (MemoryStream memory = new MemoryStream())
@@ -504,6 +599,22 @@ internal static class CafeLauncherWebRunner
         HttpWebRequest request = (HttpWebRequest)WebRequest.Create(uri);
         request.Method = method;
         request.UserAgent = "CafeLauncher-WebRunner/" + RunnerVersion;
+        request.Timeout = 15000;
+        request.ReadWriteTimeout = 15000;
+        request.AllowAutoRedirect = false;
+        request.MaximumResponseHeadersLength = 32;
+        return request;
+    }
+
+    private static HttpWebRequest CreateGithubRequest(Uri uri, string method)
+    {
+        if (uri.Scheme != Uri.UriSchemeHttps || !String.Equals(uri.GetLeftPart(UriPartial.Authority), "https://api.github.com", StringComparison.OrdinalIgnoreCase) ||
+            uri.AbsolutePath != "/repos/fabjoncela/Cs-script/contents/cafe.bat" || uri.Query != "?ref=main" || uri.Fragment.Length != 0 || uri.UserInfo.Length != 0)
+            throw new InvalidOperationException("CafeLauncher refused a request outside the trusted GitHub source endpoint.");
+        HttpWebRequest request = (HttpWebRequest)WebRequest.Create(uri);
+        request.Method = method;
+        request.UserAgent = "CafeLauncher-WebRunner/" + RunnerVersion;
+        request.Accept = "application/vnd.github+json";
         request.Timeout = 15000;
         request.ReadWriteTimeout = 15000;
         request.AllowAutoRedirect = false;
