@@ -41,10 +41,12 @@ jobs:
           $existing = gh release view $tag --json assets --jq '.assets[].name' 2>$null
           if ($LASTEXITCODE -eq 0) {
             if ($existing -notcontains 'CafeLauncherWebRunner.exe' -or $existing -notcontains 'CafeLauncherWebRunner.exe.sha256') { throw "Release $tag exists without the required assets; refusing to mutate it." }
-            gh release download $tag --pattern 'CafeLauncherWebRunner.exe' --pattern 'CafeLauncherWebRunner.exe.sha256' --dir $env:RUNNER_TEMP
+            $verifyDirectory = Join-Path $env:RUNNER_TEMP 'published-release'
+            New-Item -ItemType Directory -Path $verifyDirectory | Out-Null
+            gh release download $tag --pattern 'CafeLauncherWebRunner.exe' --pattern 'CafeLauncherWebRunner.exe.sha256' --dir $verifyDirectory
             if ($LASTEXITCODE -ne 0) { throw "Could not verify existing release $tag." }
-            $line = Get-Content -LiteralPath (Join-Path $env:RUNNER_TEMP 'CafeLauncherWebRunner.exe.sha256') -Raw
-            $publishedHash = (Get-FileHash -LiteralPath (Join-Path $env:RUNNER_TEMP 'CafeLauncherWebRunner.exe') -Algorithm SHA256).Hash.ToLowerInvariant()
+            $line = Get-Content -LiteralPath (Join-Path $verifyDirectory 'CafeLauncherWebRunner.exe.sha256') -Raw
+            $publishedHash = (Get-FileHash -LiteralPath (Join-Path $verifyDirectory 'CafeLauncherWebRunner.exe') -Algorithm SHA256).Hash.ToLowerInvariant()
             if ($line -notmatch '^([0-9a-f]{64})\s+CafeLauncherWebRunner\.exe\s*$' -or $Matches[1] -ne $expectedHash -or $publishedHash -ne $expectedHash) { throw "Runner bytes changed or the published asset is damaged without a RunnerVersion bump; refusing to replace $tag." }
             Write-Host "Release $tag already contains the exact runner bytes."
             exit 0
