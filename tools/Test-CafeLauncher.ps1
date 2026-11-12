@@ -283,6 +283,10 @@ $graphicsLoader=@($psAst.FindAll({
 if($graphicsLoader.Count -ne 1 -or $graphicsLoader[0].Extent.Text -notmatch 'Add-CafeCacheBust' -or $graphicsLoader[0].Extent.Text -notmatch 'Get-GitBlobSha'){
     throw 'The shared graphics loader must cache-bust remote fetches and enforce the pinned Git blob hash.'
 }
+$webGraphicsDispatchAt=$psSource.IndexOf("if(`$env:CAFE_WEB_ACTION -in @('apply-profile','apply-graphics')){",[StringComparison]::Ordinal)
+if($webGraphicsDispatchAt -lt 0 -or $graphicsLoader[0].Extent.StartOffset -ge $webGraphicsDispatchAt){
+    throw 'The verified graphics helper must be defined before the top-level web action dispatch can invoke it.'
+}
 $graphicsLoaderBody=$graphicsLoader[0].Extent.Text
 $cacheValidationAt=$graphicsLoaderBody.IndexOf('Get-GitBlobSha -Bytes ([IO.File]::ReadAllBytes($cache))',[StringComparison]::Ordinal)
 $networkFetchAt=$graphicsLoaderBody.IndexOf('Invoke-WebRequest -Uri $source',[StringComparison]::Ordinal)
