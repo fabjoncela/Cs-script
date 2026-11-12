@@ -8,7 +8,11 @@ if(-not $marker.Success){throw 'Missing embedded PowerShell marker.'}
 $tokens=$null;$errors=$null
 $ast=[System.Management.Automation.Language.Parser]::ParseInput($source.Substring($marker.Index+$marker.Length),[ref]$tokens,[ref]$errors)
 if($errors.Count){throw ('Launcher parse failed: '+$errors[0].Message)}
-foreach($name in @('New-CafeWebProfileActionEnvelope','Get-CafeWebPendingReason','Reset-CafeWebPendingEditsAfterRunnerUpdate','Complete-CafeWebRunnerProfileReset','Request-LogitechLiveDPI','Invoke-CafeWebApplyProfile','Invoke-CafeWebApplyGraphics')){
+if($source -notmatch 'if\s*\(\s*\$profile\.LaunchApps\s+-and\s+-not\s+\$WebAction\s*\)' -or
+   $source -notmatch 'Web Apply profile intentionally skipped Launch All'){
+    throw 'The web profile action must skip app launches while preserving normal Windows Launch All behavior.'
+}
+foreach($name in @('New-CafeWebProfileActionEnvelope','Get-CafeWebPendingReason','Reset-CafeWebPendingEditsAfterRunnerUpdate','Complete-CafeWebRunnerProfileReset','Request-LogitechLiveDPI','Write-CafeWebProgress','Start-CafeWebProgressStage','Complete-CafeWebProgressStage','Invoke-CafeWebApplyProfile','Invoke-CafeWebApplyGraphics')){
     $definition=@($ast.FindAll({param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst]},$true)|Where-Object{$_.Name -eq $name})
     if($definition.Count -ne 1){throw ('Expected one definition for '+$name)}
     Invoke-Expression $definition[0].Extent.Text
@@ -25,6 +29,7 @@ function Reset-ProfileActionTest {
     $script:SnapshotCalls=0;$script:ApplyCalls=0;$script:SteamUser=76561198000000000L
     $script:SteamAvailable=$true;$script:Cs2Available=$true;$script:ThrowSnapshot=$false
     $script:QueueClearCalls=0;$script:SaveSettingsCalls=0;$script:ResetMarkerCompleteCalls=0;$script:SnapshotImportCalls=0
+    $script:CafeWebProgressSequence=0;$script:CafeWebProgressTimers=@{};$script:CafeWebCurrentProgressStage=$null
     $env:CAFE_WEB_RUNNER_UPDATED=''
 }
 function Get-CafeBackendQueuePath { return (Join-Path $env:TEMP 'CafeLauncher-profile-action-test-absent.json') }
@@ -113,4 +118,24 @@ $script:PendingSync['FabMode']=$true
 $result=Invoke-CafeWebApplyGraphics -ProfileName FabMode
 if($result.state -cne 'SKIPPED' -or $script:SnapshotCalls -ne 0){throw 'Pending local edits did not stop web graphics before helper execution.'}
 
-'Web profile action checks passed: synchronous Logitech web path, verified result mapping, one-time profile reset marker, pending-edit block, Steam preflight, backend outage, and graphics pending-edit block.'
+$progressTestDirectory=Join-Path $env:TEMP ('CafeLauncher-WebProgressTest-'+[guid]::NewGuid().ToString('N'))
+try{
+    New-Item -ItemType Directory -Path $progressTestDirectory | Out-Null
+    $env:CAFE_WEB_PROGRESS_DIR=$progressTestDirectory
+    $script:CafeWebProgressSequence=0;$script:CafeWebProgressTimers=@{};$script:CafeWebCurrentProgressStage=$null
+    Start-CafeWebProgressStage -Name 'Test local step' -Detail 'A mock action stage started.'
+    Start-Sleep -Milliseconds 25
+    Complete-CafeWebProgressStage -Name 'Test local step' -Status 'SUCCESS' -Detail 'Mock action stage finished.'
+    $progressFiles=@(Get-ChildItem -LiteralPath $progressTestDirectory -Filter 'progress-*.json' | Sort-Object Name)
+    if($progressFiles.Count -ne 2){throw 'The web action did not write a start and finish progress event.'}
+    $started=Get-Content -LiteralPath $progressFiles[0].FullName -Raw|ConvertFrom-Json
+    $finished=Get-Content -LiteralPath $progressFiles[1].FullName -Raw|ConvertFrom-Json
+    if($started.status -cne 'RUNNING' -or $finished.status -cne 'SUCCESS' -or $finished.detail -notmatch 'Elapsed: [0-9.]+ seconds'){
+        throw 'The web progress events did not include the stage result and elapsed time.'
+    }
+}finally{
+    $env:CAFE_WEB_PROGRESS_DIR=''
+    if(Test-Path -LiteralPath $progressTestDirectory){Remove-Item -LiteralPath $progressTestDirectory -Recurse -Force}
+}
+
+'Web profile action checks passed: verified result mapping, progress start/end timing, pending-edit block, Steam preflight, and graphics pending-edit block.'

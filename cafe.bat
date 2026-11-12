@@ -11,7 +11,7 @@ del /q "%CAFE_RESTART_SIGNAL%" >nul 2>&1
 exit /b
 
 # POWERSHELL_GUI
-# CAFE_RELEASE=2026.11.12.3
+# CAFE_RELEASE=2026.11.12.4
 
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
@@ -10076,6 +10076,10 @@ function Invoke-GamingProfile {
     Clear-RunOutcomes -Run $ProfileName
     $profile = $script:GamingProfiles[$ProfileName]
     Write-Log "$ProfileName full routine started: mouse, NVIDIA, CS2 config, applications."
+    if($WebAction -and [bool]$profile.LaunchApps){
+        Write-Log 'Web Apply profile intentionally skipped Launch All; FACEIT, Steam startup, and configured helper apps were not launched.' 'INFO'
+        Write-CafeWebProgress -Name 'Launch profile apps' -Status 'SKIPPED' -Detail 'Not started by a web action; FACEIT, Steam startup, and configured helper apps were not launched.'
+    }
 
     $steps = @(
         @{ Name = 'Windows mouse speed/acceleration'; Action = {
@@ -10111,7 +10115,7 @@ function Invoke-GamingProfile {
             if(-not $cfgInstalled){throw ('CS2 CFG install was not verified: '+$profileCfgName)}
         } }
     }
-    if ($profile.LaunchApps) {
+    if ($profile.LaunchApps -and -not $WebAction) {
         $steps += @{ Name = 'Launch apps (without G HUB; including Mouse Pointer Options)'; Action = { Launch-ProfileApps -SkipGHub -ProfileName $ProfileName } }
     }
     # Profile launch never starts G HUB, which can overwrite the requested mouse DPI.
@@ -10120,6 +10124,7 @@ function Invoke-GamingProfile {
     $steps += @{ Name = 'Logitech live DPI'; Action = { Request-LogitechLiveDPI -DPI ([int]$profile.LogitechDPI) -WebAction:$WebAction } }
     foreach ($step in $steps) {
         Write-Log ("$ProfileName step started: " + $step.Name)
+        if($WebAction){Start-CafeWebProgressStage -Name $step.Name -Detail 'Applying this profile step on this PC.'}
         Start-StepScope -Run $ProfileName -Step $step.Name
         try {
             & ($step.Action)
@@ -10134,6 +10139,12 @@ function Invoke-GamingProfile {
                 $script:StepScope=$null
                 Set-StepResult -Run $ProfileName -Step $step.Name -Status PENDING -Detail 'Helper downloading; live DPI not yet applied.'
             }else{Complete-StepScope}
+            if($WebAction){
+                $stepResult=@($script:StepResults|Where-Object{$_.Run -eq $ProfileName -and $_.Step -eq $step.Name}|Select-Object -Last 1)
+                if($stepResult.Count){
+                    Complete-CafeWebProgressStage -Name $step.Name -Status ([string]$stepResult[0].Status) -Detail ([string]$stepResult[0].Detail)
+                }
+            }
         }
     }
     Write-RunSummary -Run $ProfileName
@@ -10393,10 +10404,13 @@ function Invoke-CafeWebApplyProfile {
     param([Parameter(Mandatory=$true)][string]$ProfileName)
     $run=$ProfileName
     try{
+        Start-CafeWebProgressStage -Name 'Check profile state and refresh verified snapshot' -Detail 'Checking pending edits and reading the selected profile from the backend.'
         $snapshot=Reset-CafeWebPendingEditsAfterRunnerUpdate -ProfileName $ProfileName
         $pending=Get-CafeWebPendingReason -ProfileName $ProfileName
-        if($pending){return (New-CafeWebProfileActionEnvelope -State 'SKIPPED' -Summary $pending -Steps @([ordered]@{name='Profile state';status='SKIPPED';detail=$pending}))}
+        if($pending){Complete-CafeWebProgressStage -Name 'Check profile state and refresh verified snapshot' -Status 'SKIPPED' -Detail $pending;return (New-CafeWebProfileActionEnvelope -State 'SKIPPED' -Summary $pending -Steps @([ordered]@{name='Profile state';status='SKIPPED';detail=$pending}))}
         if(-not $snapshot){$snapshot=Get-CafeWebActionSnapshot -ProfileName $ProfileName}
+        Complete-CafeWebProgressStage -Name 'Check profile state and refresh verified snapshot' -Status 'SUCCESS' -Detail 'The profile, graphics, and CFG snapshot is ready.'
+        Start-CafeWebProgressStage -Name 'Verify Steam and CS2 target' -Detail 'Checking the active Steam session and unique CS2 config folder.'
         $inventory=Get-PCDiagnostics -AsObject
         $steamUser=Get-CafeWebActiveSteamUserId
         $steamPath=[string]$inventory.Steam.Executable
@@ -10404,8 +10418,10 @@ function Invoke-CafeWebApplyProfile {
         if(-not $inventory.Steam.ActiveSessionPresent -or $steamUser -le 0 -or -not $steamPath -or
            $inventory.CS2.Status -cne 'DETECTED' -or -not $cfgPath){
             $detail='Sign in to Steam and ensure one CS2 install is detected before applying this profile. No profile settings were changed.'
+            Complete-CafeWebProgressStage -Name 'Verify Steam and CS2 target' -Status 'SKIPPED' -Detail $detail
             return (New-CafeWebProfileActionEnvelope -State 'SKIPPED' -Summary $detail -Steps @([ordered]@{name='Steam/CS2 preflight';status='SKIPPED';detail=$detail}))
         }
+        Complete-CafeWebProgressStage -Name 'Verify Steam and CS2 target' -Status 'SUCCESS' -Detail 'The active Steam session and CS2 config target were verified.'
         Invoke-GamingProfile -ProfileName $ProfileName -WebAction -WebSnapshot $snapshot -WebSteamUserId $steamUser -WebCfgDirectory $cfgPath -WebSteamPath $steamPath
         $items=@($script:StepResults|Where-Object{$_.Run -eq $run})
         $steps=@($items|Select-Object -First 24|ForEach-Object{[ordered]@{name=[string]$_.Step;status=[string]$_.Status;detail=[string]$_.Detail}})
@@ -10421,6 +10437,8 @@ function Invoke-CafeWebApplyProfile {
         $summary=$ProfileName+' profile apply finished. Review each reported setting, including any unsupported or still-pending device action.'
         return (New-CafeWebProfileActionEnvelope -State $state -Summary $summary -Steps $steps)
     }catch{
+        $activeProgressStage=Get-Variable -Name CafeWebCurrentProgressStage -Scope Script -ValueOnly -ErrorAction SilentlyContinue
+        if($activeProgressStage){Complete-CafeWebProgressStage -Name ([string]$activeProgressStage) -Status 'FAILED' -Detail 'This stage stopped with an error; see the final action result.'}
         $steps=@($script:StepResults|Where-Object{$_.Run -eq $run}|Select-Object -First 24|ForEach-Object{[ordered]@{name=[string]$_.Step;status=[string]$_.Status;detail=[string]$_.Detail}})
         $unknown=$steps.Count -gt 0
         $steps+=,[ordered]@{name='Apply profile';status=$(if($unknown){'PARTIAL'}else{'FAILED'});detail='The action stopped before CafeLauncher could confirm every setting.'}
@@ -10432,10 +10450,13 @@ function Invoke-CafeWebApplyGraphics {
     param([Parameter(Mandatory=$true)][string]$ProfileName)
     $mayHaveChanged=$false
     try{
+        Start-CafeWebProgressStage -Name 'Check graphics profile state and refresh snapshot' -Detail 'Checking pending edits and reading the selected graphics preset from the backend.'
         $snapshot=Reset-CafeWebPendingEditsAfterRunnerUpdate -ProfileName $ProfileName
         $pending=Get-CafeWebPendingReason -ProfileName $ProfileName
-        if($pending){return (New-CafeWebProfileActionEnvelope -State 'SKIPPED' -Summary $pending -Steps @([ordered]@{name='Profile state';status='SKIPPED';detail=$pending}))}
+        if($pending){Complete-CafeWebProgressStage -Name 'Check graphics profile state and refresh snapshot' -Status 'SKIPPED' -Detail $pending;return (New-CafeWebProfileActionEnvelope -State 'SKIPPED' -Summary $pending -Steps @([ordered]@{name='Profile state';status='SKIPPED';detail=$pending}))}
         if(-not $snapshot){$snapshot=Get-CafeWebActionSnapshot -ProfileName $ProfileName}
+        Complete-CafeWebProgressStage -Name 'Check graphics profile state and refresh snapshot' -Status 'SUCCESS' -Detail 'The selected graphics preset was read from a verified snapshot.'
+        Start-CafeWebProgressStage -Name 'Load and verify graphics helper' -Detail 'Checking the cached helper or downloading the pinned helper if needed.'
         $expected='b6fa5619e13df559b40c02cd8a11d9d7cd99d7e8'
         $source=Add-CafeCacheBust -Uri 'https://raw.githubusercontent.com/fabjoncela/Cs-script/main/graphics/ApplyGraphics.ps1'
         $cache=Join-Path $env:LOCALAPPDATA 'CafeLauncher\graphics-module.ps1'
@@ -10454,11 +10475,18 @@ function Invoke-CafeWebApplyGraphics {
         }finally{Remove-Item -LiteralPath $temp -Force -ErrorAction SilentlyContinue}
         if((Get-GitBlobSha -Bytes ([IO.File]::ReadAllBytes($cache))) -ne $expected){throw 'Cached graphics helper failed its pinned Git blob SHA.'}
         . $cache
+        Complete-CafeWebProgressStage -Name 'Load and verify graphics helper' -Status 'SUCCESS' -Detail 'The graphics helper passed its pinned hash check and loaded.'
+        Start-CafeWebProgressStage -Name 'Apply CS2 video and NVIDIA graphics settings' -Detail 'Applying and verifying the selected graphics preset on this PC.'
         $mayHaveChanged=$true
         $graphics=Apply-CS2ModeGraphics -ModeName $ProfileName -Preset $snapshot.Graphics -WebAction
         if(-not $graphics -or -not $graphics.state){throw 'Graphics helper did not return a structured result.'}
+        $graphicsState=[string]$graphics.state
+        $progressState=if($graphicsState -eq 'COMPLETED'){'SUCCESS'}elseif($graphicsState -eq 'PARTIAL'){'PARTIAL'}elseif($graphicsState -eq 'SKIPPED'){'SKIPPED'}else{'FAILED'}
+        Complete-CafeWebProgressStage -Name 'Apply CS2 video and NVIDIA graphics settings' -Status $progressState -Detail ([string]$graphics.summary)
         return (New-CafeWebProfileActionEnvelope -State ([string]$graphics.state) -Summary ([string]$graphics.summary) -Steps @($graphics.steps) -ExecutionOutcomeKnown ([bool]$graphics.data.executionOutcomeKnown))
     }catch{
+        $activeProgressStage=Get-Variable -Name CafeWebCurrentProgressStage -Scope Script -ValueOnly -ErrorAction SilentlyContinue
+        if($activeProgressStage){Complete-CafeWebProgressStage -Name ([string]$activeProgressStage) -Status $(if($mayHaveChanged){'PARTIAL'}else{'FAILED'}) -Detail 'This stage stopped before a complete result was confirmed.'}
         $step=[ordered]@{name='Apply game graphics';status=$(if($mayHaveChanged){'PARTIAL'}else{'FAILED'});detail='The graphics action stopped before a complete result was confirmed.'}
         return (New-CafeWebProfileActionEnvelope -State $(if($mayHaveChanged){'INTERRUPTED'}else{'FAILED'}) -Summary ('CafeLauncher could not confirm the graphics result. '+$_.Exception.Message) -Steps @($step) -ExecutionOutcomeKnown:(-not $mayHaveChanged))
     }
@@ -10475,6 +10503,50 @@ function Get-CafeWebActiveSteamUserId {
     return $activeUser
 }
 
+$script:CafeWebProgressSequence=0
+$script:CafeWebProgressTimers=@{}
+function Write-CafeWebProgress {
+    param([Parameter(Mandatory=$true)][string]$Name,[ValidateSet('RUNNING','SUCCESS','PARTIAL','SKIPPED','FAILED','PENDING')][string]$Status,[string]$Detail='')
+    if([string]::IsNullOrWhiteSpace($env:CAFE_WEB_PROGRESS_DIR)){return}
+    try{
+        $tempRoot=[IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd('\')+'\'
+        $progressDir=[IO.Path]::GetFullPath([string]$env:CAFE_WEB_PROGRESS_DIR)
+        if(-not $progressDir.StartsWith($tempRoot,[StringComparison]::OrdinalIgnoreCase)){return}
+        if(-not (Test-Path -LiteralPath $progressDir -PathType Container)){[void](New-Item -Path $progressDir -ItemType Directory -Force)}
+        if($Detail.Length -gt 900){$Detail=$Detail.Substring(0,900)}
+        $script:CafeWebProgressSequence++
+        $record=[ordered]@{name=$Name;status=$Status;detail=$Detail}
+        $json=ConvertTo-Json -InputObject $record -Depth 3 -Compress
+        $path=Join-Path $progressDir ('progress-'+$script:CafeWebProgressSequence.ToString('D4')+'.json')
+        $temp=$path+'.tmp'
+        [IO.File]::WriteAllText($temp,$json,(New-Object System.Text.UTF8Encoding($false)))
+        [IO.File]::Move($temp,$path)
+    }catch{
+        Write-Log 'A web-action progress update could not be recorded; the action will continue.' 'WARN'
+    }
+}
+function Start-CafeWebProgressStage {
+    param([Parameter(Mandatory=$true)][string]$Name,[string]$Detail='Started on this PC.')
+    $script:CafeWebProgressTimers[$Name]=[System.Diagnostics.Stopwatch]::StartNew()
+    $script:CafeWebCurrentProgressStage=$Name
+    Write-CafeWebProgress -Name $Name -Status 'RUNNING' -Detail $Detail
+}
+function Complete-CafeWebProgressStage {
+    param([Parameter(Mandatory=$true)][string]$Name,[ValidateSet('SUCCESS','PARTIAL','SKIPPED','FAILED','PENDING')][string]$Status,[string]$Detail='')
+    $elapsed=0.0
+    if($script:CafeWebProgressTimers.ContainsKey($Name)){
+        $timer=$script:CafeWebProgressTimers[$Name]
+        $timer.Stop()
+        $elapsed=$timer.Elapsed.TotalSeconds
+        $script:CafeWebProgressTimers.Remove($Name)
+    }
+    if($script:CafeWebCurrentProgressStage -ceq $Name){$script:CafeWebCurrentProgressStage=$null}
+    $elapsedText=$elapsed.ToString('0.00',[Globalization.CultureInfo]::InvariantCulture)
+    $prefix=if($Detail){$Detail.TrimEnd()+' '}else{''}
+    $timedDetail=$prefix+'Elapsed: '+$elapsedText+' seconds.'
+    Write-CafeWebProgress -Name $Name -Status $Status -Detail $timedDetail
+}
+
 function Invoke-CafeWebPlayExec {
     param([Parameter(Mandatory=$true)][string]$ProfileName)
     $steps=New-Object 'System.Collections.Generic.List[object]'
@@ -10489,6 +10561,7 @@ function Invoke-CafeWebPlayExec {
         $cfgName=[string]$profile.ConfigFile
         if($cfgName -notmatch '^[A-Za-z0-9_-]+\.cfg$'){throw 'The selected profile CFG name is invalid.'}
 
+        Start-CafeWebProgressStage -Name 'Check pending profile changes and Steam/CS2 session' -Detail 'Checking local profile edits, Steam login, and a unique CS2 config target.'
         $updatedSnapshot=Reset-CafeWebPendingEditsAfterRunnerUpdate -ProfileName $ProfileName
         $queuePath=Get-CafeBackendQueuePath -ProfileName $ProfileName
         if($script:PendingSync[$ProfileName] -or $script:PendingTarget[$ProfileName] -eq 'GitHubLegacy' -or
@@ -10497,6 +10570,7 @@ function Invoke-CafeWebPlayExec {
            $script:PendingProfileCfgRestore.ContainsKey($ProfileName) -or
            ($script:CapturedCS2Convars.ContainsKey($ProfileName) -and $script:CapturedCS2Convars[$ProfileName]) -or
            ($script:CapturedCS2Binds.ContainsKey($ProfileName) -and $script:CapturedCS2Binds[$ProfileName])){
+            Complete-CafeWebProgressStage -Name 'Check pending profile changes and Steam/CS2 session' -Status 'SKIPPED' -Detail 'Pending profile changes need review before Play + Exec.'
             [void]$steps.Add([ordered]@{name='Profile state';status='SKIPPED';detail='This profile has local changes awaiting review or sync. Open the Windows dashboard to resolve them before Play + Exec.'})
             return (New-CafeWebPlayExecEnvelope -State 'SKIPPED' -Summary 'No files were changed and Steam was not started because this profile has pending local changes.' -Steps $steps.ToArray() -CfgName $cfgName -Cs2AlreadyRunning $false -SteamLaunchRequested $false)
         }
@@ -10506,19 +10580,23 @@ function Invoke-CafeWebPlayExec {
         $initialCs2ConfigPath=[string]$inventory.CS2.ConfigPath
         $activeSteamUser=Get-CafeWebActiveSteamUserId
         if(-not $inventory.Steam.ActiveSessionPresent -or -not $steamPath -or $activeSteamUser -le 0){
+            Complete-CafeWebProgressStage -Name 'Check pending profile changes and Steam/CS2 session' -Status 'SKIPPED' -Detail 'No active Steam session was found.'
             [void]$steps.Add([ordered]@{name='Active Steam session';status='SKIPPED';detail='Sign in to Steam in this Windows session, then retry. No files were changed.'})
             return (New-CafeWebPlayExecEnvelope -State 'SKIPPED' -Summary 'An active Steam session was not detected. No files were changed and Steam was not started.' -Steps $steps.ToArray() -CfgName $cfgName -Cs2AlreadyRunning $false -SteamLaunchRequested $false)
         }
         [void]$steps.Add([ordered]@{name='Active Steam session';status='SUCCESS';detail='Steam is active for this Windows user.'})
         if($inventory.CS2.Status -cne 'DETECTED' -or -not $initialCs2ConfigPath){
+            Complete-CafeWebProgressStage -Name 'Check pending profile changes and Steam/CS2 session' -Status 'SKIPPED' -Detail 'A unique validated CS2 config target was not found.'
             [void]$steps.Add([ordered]@{name='CS2 config path';status='SKIPPED';detail='No unique validated CS2 config path was found. No files were changed.'})
             return (New-CafeWebPlayExecEnvelope -State 'SKIPPED' -Summary 'No unique CS2 install was found. No files were changed and Steam was not started.' -Steps $steps.ToArray() -CfgName $cfgName -Cs2AlreadyRunning $false -SteamLaunchRequested $false)
         }
         [void]$steps.Add([ordered]@{name='CS2 config path';status='SUCCESS';detail='A unique validated CS2 config path was detected.'})
         $cs2Running=[bool](Get-Process -Name 'cs2' -ErrorAction SilentlyContinue)
+        Complete-CafeWebProgressStage -Name 'Check pending profile changes and Steam/CS2 session' -Status 'SUCCESS' -Detail 'Steam and the CS2 config target are ready.'
 
         # Resolve the latest published revision once, then fetch the complete
         # immutable bundle for that revision instead of composing three latest reads.
+        Start-CafeWebProgressStage -Name 'Fetch and verify profile, graphics, and CFG bundle' -Detail 'Reading the latest backend revision and its matching profile, graphics preset, and CFG.'
         if($updatedSnapshot){
             $snapshot=$updatedSnapshot
             $revision=[int]$snapshot.Revision
@@ -10531,10 +10609,12 @@ function Invoke-CafeWebPlayExec {
             $snapshot=Get-CafeBackendProfileHistoryRevision -ProfileName $ProfileName -Revision $revision
         }
         if($script:BackendRevisions.ContainsKey($ProfileName) -and [int]$snapshot.Revision -lt [int]$script:BackendRevisions[$ProfileName]){
+            Complete-CafeWebProgressStage -Name 'Fetch and verify profile, graphics, and CFG bundle' -Status 'SKIPPED' -Detail 'The backend revision needs review in the Windows dashboard.'
             [void]$steps.Add([ordered]@{name='Profile snapshot';status='SKIPPED';detail='The backend revision is older than this PC has verified. Open the Windows dashboard to review the restore before retrying.'})
             return (New-CafeWebPlayExecEnvelope -State 'SKIPPED' -Summary 'The backend profile revision requires review in the Windows dashboard. No files were changed and Steam was not started.' -Steps $steps.ToArray() -CfgName $cfgName -Cs2AlreadyRunning $cs2Running -SteamLaunchRequested $false)
         }
         if([string]$snapshot.Source -cne 'Backend'){
+            Complete-CafeWebProgressStage -Name 'Fetch and verify profile, graphics, and CFG bundle' -Status 'SKIPPED' -Detail 'A current primary-backend snapshot was not verified.'
             [void]$steps.Add([ordered]@{name='Profile snapshot';status='SKIPPED';detail='A current primary-backend snapshot could not be verified. The public mirror and local fallback are not used for this web action.'})
             return (New-CafeWebPlayExecEnvelope -State 'SKIPPED' -Summary 'The current profile, graphics, and CFG bundle could not be verified from the primary backend. No files were changed and Steam was not started.' -Steps $steps.ToArray() -CfgName $cfgName -Cs2AlreadyRunning $cs2Running -SteamLaunchRequested $false)
         }
@@ -10549,7 +10629,9 @@ function Invoke-CafeWebPlayExec {
         Set-CafeCloudReadSourceDisplay -Source 'Backend'
         try{Save-ProfileSettings}catch{Write-Log ('Could not cache the verified web-action profile snapshot: '+$_.Exception.Message) 'WARN'}
         [void]$steps.Add([ordered]@{name='Profile snapshot';status='SUCCESS';detail=('Profile, graphics, and CFG verified together at backend revision '+$snapshot.Revision+'.')})
+        Complete-CafeWebProgressStage -Name 'Fetch and verify profile, graphics, and CFG bundle' -Status 'SUCCESS' -Detail 'The full bundle was verified at one backend revision.'
 
+        Start-CafeWebProgressStage -Name 'Recheck Steam session and CS2 config target' -Detail 'Confirming that the selected Steam account and config folder have not changed.'
         $preWriteInventory=Get-PCDiagnostics -AsObject
         $preWriteSteamUser=Get-CafeWebActiveSteamUserId
         $preWriteSteamPath=[string]$preWriteInventory.Steam.Executable
@@ -10558,37 +10640,48 @@ function Invoke-CafeWebPlayExec {
            -not [string]::Equals($preWriteSteamPath,$steamPath,[StringComparison]::OrdinalIgnoreCase) -or
            $preWriteInventory.CS2.Status -cne 'DETECTED' -or
            -not [string]::Equals($cfgDirectory,$initialCs2ConfigPath,[StringComparison]::OrdinalIgnoreCase)){
+            Complete-CafeWebProgressStage -Name 'Recheck Steam session and CS2 config target' -Status 'SKIPPED' -Detail 'The Steam session or CS2 config target changed; no game CFG files were changed.'
             [void]$steps.Add([ordered]@{name='PC session recheck';status='SKIPPED';detail='Steam or the CS2 config target changed during setup. No game CFG files were changed.'})
             return (New-CafeWebPlayExecEnvelope -State 'SKIPPED' -Summary 'The Steam session or CS2 install changed while CafeLauncher prepared the action. No game CFG files were changed and Steam was not started.' -Steps $steps.ToArray() -CfgName $cfgName -Cs2AlreadyRunning $cs2Running -SteamLaunchRequested $false)
         }
         [void]$steps.Add([ordered]@{name='PC session recheck';status='SUCCESS';detail='The active Steam session and CS2 config target still match the initial detection.'})
+        Complete-CafeWebProgressStage -Name 'Recheck Steam session and CS2 config target' -Status 'SUCCESS' -Detail 'The Steam session and config target still match.'
+        Start-CafeWebProgressStage -Name 'Install reset baseline CFG' -Detail 'Writing and verifying the known baseline CFG before the profile CFG.'
         $gameCfgWriteStarted=$true
         if(-not (Install-CS2ProfileBaselineCfg -CfgDirectory $cfgDirectory)){
+            Complete-CafeWebProgressStage -Name 'Install reset baseline CFG' -Status 'FAILED' -Detail 'The baseline install was not verified; Steam will not be started.'
             [void]$steps.Add([ordered]@{name='Reset baseline CFG';status='FAILED';detail='The reset baseline could not be installed and verified. Steam was not started.'})
             return (New-CafeWebPlayExecEnvelope -State 'INTERRUPTED' -Summary 'The reset baseline install did not return a verified result. Check this PC before retrying; Steam was not launched by a confirmed result.' -Steps $steps.ToArray() -CfgName $cfgName -Cs2AlreadyRunning $cs2Running -SteamLaunchRequested $false -ExecutionOutcomeKnown $false)
         }
         [void]$steps.Add([ordered]@{name='Reset baseline CFG';status='SUCCESS';detail='The baseline CFG was installed and verified.'})
+        Complete-CafeWebProgressStage -Name 'Install reset baseline CFG' -Status 'SUCCESS' -Detail 'The baseline CFG was installed and verified.'
 
         $downloadUrl=[string]$profile.CfgDownloadUrl
         if($ProfileName -eq 'FabMode' -and [string]::IsNullOrWhiteSpace($downloadUrl)){$downloadUrl=$script:FabCfgCloudUrl}
+        Start-CafeWebProgressStage -Name 'Install selected profile CFG' -Detail 'Writing the selected profile CFG from the verified backend bundle and checking the result.'
         $installed=Install-ProfileCfg -Silent -CfgName $cfgName -DownloadUrl $downloadUrl -CloudPreferred:$true -CloudSnapshot $snapshot -UseSnapshotOnly -CfgDirectory $cfgDirectory
         if($installed -ne $true){
+            Complete-CafeWebProgressStage -Name 'Install selected profile CFG' -Status 'FAILED' -Detail 'The selected CFG install was not verified; Steam will not be started.'
             [void]$steps.Add([ordered]@{name='Profile CFG';status='FAILED';detail=($cfgName+' could not be installed and verified. Steam was not started.')})
             return (New-CafeWebPlayExecEnvelope -State 'INTERRUPTED' -Summary ('The profile CFG '+$cfgName+' install did not return a verified result. Check this PC before retrying; Steam was not launched by a confirmed result.') -Steps $steps.ToArray() -CfgName $cfgName -Cs2AlreadyRunning $cs2Running -SteamLaunchRequested $false -ExecutionOutcomeKnown $false)
         }
         [void]$steps.Add([ordered]@{name='Profile CFG';status='SUCCESS';detail=($cfgName+' was installed from the same verified backend snapshot.')})
+        Complete-CafeWebProgressStage -Name 'Install selected profile CFG' -Status 'SUCCESS' -Detail 'The selected profile CFG was installed and verified.'
 
         $cs2Running=$cs2Running -or [bool](Get-Process -Name 'cs2' -ErrorAction SilentlyContinue)
         if($cs2Running){
+            Write-CafeWebProgress -Name 'Steam launch' -Status 'SKIPPED' -Detail 'CS2 is already running; the two exec commands are available in the result.'
             [void]$steps.Add([ordered]@{name='Steam launch';status='SKIPPED';detail='CS2 is already running. Run the two commands shown below in the CS2 developer console, or close CS2 and retry.'})
             $commands=@('exec cafelauncher_profile_baseline.cfg',('exec '+$cfgName))
             return (New-CafeWebPlayExecEnvelope -State 'PARTIAL' -Summary 'Both CFG files were installed, but CS2 was already running and could not execute them at startup.' -Steps $steps.ToArray() -CfgName $cfgName -Cs2AlreadyRunning $true -SteamLaunchRequested $false -ConsoleCommands $commands)
         }
 
+        Start-CafeWebProgressStage -Name 'Start CS2 through Steam' -Detail 'Rechecking the active Steam session, then asking Steam to start CS2.'
         $activeUserAfter=Get-CafeWebActiveSteamUserId
         $steamPathAfter=Get-SteamExecutable
         if($activeUserAfter -ne $activeSteamUser -or -not $steamPathAfter -or
            -not [string]::Equals($steamPathAfter,$steamPath,[StringComparison]::OrdinalIgnoreCase)){
+            Complete-CafeWebProgressStage -Name 'Start CS2 through Steam' -Status 'SKIPPED' -Detail 'The active Steam session changed; Steam was not started.'
             [void]$steps.Add([ordered]@{name='Steam launch';status='SKIPPED';detail='The active Steam session changed during setup. CFG files were installed but Steam was not started; check this PC before retrying.'})
             return (New-CafeWebPlayExecEnvelope -State 'PARTIAL' -Summary 'CFG files were installed, but the active Steam session changed before launch. Steam was not started.' -Steps $steps.ToArray() -CfgName $cfgName -Cs2AlreadyRunning $false -SteamLaunchRequested $false)
         }
@@ -10597,9 +10690,12 @@ function Invoke-CafeWebPlayExec {
         $steamLaunchAttempted=$true
         Start-Process -FilePath $steamPath -ArgumentList $launchArgs -ErrorAction Stop
         $steamLaunchRequested=$true
+        Complete-CafeWebProgressStage -Name 'Start CS2 through Steam' -Status 'SUCCESS' -Detail 'Steam accepted the CS2 launch request.'
         [void]$steps.Add([ordered]@{name='Steam launch';status='SUCCESS';detail='Steam was asked to start CS2 with the reset baseline followed by the selected profile CFG. Persistent Steam launch options were unchanged.'})
         return (New-CafeWebPlayExecEnvelope -State 'COMPLETED' -Summary 'The verified profile CFGs were installed and Steam was asked to start CS2.' -Steps $steps.ToArray() -CfgName $cfgName -Cs2AlreadyRunning $false -SteamLaunchRequested $steamLaunchRequested)
     }catch{
+        $activeProgressStage=Get-Variable -Name CafeWebCurrentProgressStage -Scope Script -ValueOnly -ErrorAction SilentlyContinue
+        if($activeProgressStage){Complete-CafeWebProgressStage -Name ([string]$activeProgressStage) -Status $(if($gameCfgWriteStarted -or $steamLaunchAttempted){'PARTIAL'}else{'FAILED'}) -Detail 'This stage stopped before a complete result was confirmed.'}
         [void]$steps.Add([ordered]@{name='Play + Exec';status='FAILED';detail='The action stopped on this PC before a verified launch result was obtained.'})
         Write-Log ('Web Play + Exec stopped for '+$ProfileName+': '+$_.Exception.Message) 'ERROR'
         $unknown=($gameCfgWriteStarted -or $steamLaunchAttempted)

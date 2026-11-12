@@ -6,6 +6,7 @@ using System.Collections;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
+using System.Globalization;
 using System.Net;
 using System.Security.Cryptography;
 using System.Text;
@@ -17,7 +18,7 @@ using Microsoft.Win32;
 internal static class CafeLauncherWebRunner
 {
     private const string BackendOrigin = "https://fabjon-hp.tail681ec9.ts.net:10000";
-    private const string RunnerVersion = "0.6.0";
+    private const string RunnerVersion = "0.7.0";
     private const int MaxLauncherBytes = 1000000;
     private const int MaxRunnerBytes = 8 * 1024 * 1024;
     private static readonly JavaScriptSerializer Json = new JavaScriptSerializer { MaxJsonLength = 2 * 1024 * 1024 };
@@ -570,6 +571,8 @@ internal static class CafeLauncherWebRunner
         Directory.CreateDirectory(workDir);
         string scriptPath = Path.Combine(workDir, "launcher.ps1");
         string resultPath = Path.Combine(workDir, "result.json");
+        string progressDirectory = Path.Combine(workDir, "progress");
+        Directory.CreateDirectory(progressDirectory);
         // Windows PowerShell 5.1 treats BOM-less scripts as the active ANSI
         // code page; preserve the verified launcher's Unicode source exactly.
         File.WriteAllText(scriptPath, script, new UTF8Encoding(true));
@@ -585,6 +588,7 @@ internal static class CafeLauncherWebRunner
             start.EnvironmentVariables["CAFE_WEB_ACTION"] = action;
             start.EnvironmentVariables["CAFE_WEB_REQUEST_ID"] = requestId;
             start.EnvironmentVariables["CAFE_WEB_RESULT_FILE"] = resultPath;
+            start.EnvironmentVariables["CAFE_WEB_PROGRESS_DIR"] = progressDirectory;
             if (runnerUpdated) start.EnvironmentVariables["CAFE_WEB_RUNNER_UPDATED"] = "1";
             if (profile != null) start.EnvironmentVariables["CAFE_WEB_PROFILE"] = profile;
             using (Process process = Process.Start(start))
@@ -592,8 +596,10 @@ internal static class CafeLauncherWebRunner
                 if (process == null) throw new InvalidOperationException("Windows PowerShell could not be started.");
                 DateTime deadline = DateTime.UtcNow.AddMilliseconds(120000);
                 DateTime nextControlCheck = DateTime.MinValue;
+                int nextProgressIndex = 1;
                 while (!process.WaitForExit(500))
                 {
+                    ForwardProgressEvents(progressDirectory, requestId, capability, ref nextProgressIndex);
                     if (DateTime.UtcNow >= nextControlCheck)
                     {
                         nextControlCheck = DateTime.UtcNow.AddSeconds(2);
@@ -601,15 +607,19 @@ internal static class CafeLauncherWebRunner
                         {
                             try { process.Kill(); } catch { }
                             process.WaitForExit(5000);
+                            ForwardProgressEvents(progressDirectory, requestId, capability, ref nextProgressIndex);
                             throw new ActionCanceledException();
                         }
                     }
                     if (DateTime.UtcNow >= deadline)
                     {
                         try { process.Kill(); } catch { }
+                        process.WaitForExit(5000);
+                        ForwardProgressEvents(progressDirectory, requestId, capability, ref nextProgressIndex);
                         throw new TimeoutException("The CafeLauncher action took too long and was stopped.");
                     }
                 }
+                ForwardProgressEvents(progressDirectory, requestId, capability, ref nextProgressIndex);
                 if (process.ExitCode != 0 || !File.Exists(resultPath) || new FileInfo(resultPath).Length > 64 * 1024)
                     throw new InvalidOperationException("The verified launcher could not return the PC detection result.");
             }
@@ -620,6 +630,50 @@ internal static class CafeLauncherWebRunner
         finally
         {
             try { Directory.Delete(workDir, true); } catch { }
+        }
+    }
+
+    private static void ForwardProgressEvents(string progressDirectory, string requestId, string capability, ref int nextProgressIndex)
+    {
+        // Leave event capacity for the runner milestones and one terminal result.
+        while (nextProgressIndex <= 48)
+        {
+            string path = Path.Combine(progressDirectory, "progress-" + nextProgressIndex.ToString("D4", CultureInfo.InvariantCulture) + ".json");
+            if (!File.Exists(path)) return;
+            try
+            {
+                Dictionary<string, object> progress = Json.Deserialize<Dictionary<string, object>>(File.ReadAllText(path, Encoding.UTF8));
+                string name = RequiredString(progress, "name");
+                string status = RequiredString(progress, "status");
+                string detail = RequiredString(progress, "detail");
+                TrySendProgressEvent(requestId, capability, name, status, detail);
+            }
+            catch
+            {
+                // Progress is best-effort. A diagnostic write must never stop the local action.
+            }
+            finally
+            {
+                nextProgressIndex++;
+            }
+        }
+    }
+
+    private static void TrySendProgressEvent(string requestId, string capability, string name, string status, string detail)
+    {
+        try
+        {
+            Dictionary<string, object> value = new Dictionary<string, object>
+            {
+                { "eventId", Guid.NewGuid().ToString("D") },
+                { "state", "RUNNING" },
+                { "step", Step(name, status, detail) }
+            };
+            PostRaw("/v1/actions/" + requestId + "/events", Json.Serialize(value), capability);
+        }
+        catch
+        {
+            // Skip an unavailable progress upload and keep running the user-requested action.
         }
     }
 
