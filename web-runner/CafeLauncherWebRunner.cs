@@ -17,7 +17,7 @@ using Microsoft.Win32;
 internal static class CafeLauncherWebRunner
 {
     private const string BackendOrigin = "https://fabjon-hp.tail681ec9.ts.net:10000";
-    private const string RunnerVersion = "0.3.0";
+    private const string RunnerVersion = "0.4.0";
     private const int MaxLauncherBytes = 1000000;
     private static readonly JavaScriptSerializer Json = new JavaScriptSerializer { MaxJsonLength = 2 * 1024 * 1024 };
 
@@ -49,11 +49,11 @@ internal static class CafeLauncherWebRunner
                 throw new InvalidOperationException("CafeLauncher returned a request that was not newly claimed.");
             if (!String.Equals(RequiredString(ticket, "requestId"), requestId, StringComparison.Ordinal))
                 throw new InvalidOperationException("CafeLauncher returned a different action request.");
-            if (action != "detect-pc" && action != "play-exec")
+            if (!IsSupportedAction(action))
                 throw new InvalidOperationException("This CafeLauncher action is not supported by the installed runner.");
             if (action == "detect-pc" && profile != null)
                 throw new InvalidOperationException("Detect PC must not include a profile.");
-            if (action == "play-exec") ProfileCfg(profile);
+            if (action != "detect-pc") ProfileCfg(profile);
             return ExecuteClaimedAction(requestId, action, profile, claimCapability);
         }
         catch (Exception error)
@@ -164,12 +164,12 @@ internal static class CafeLauncherWebRunner
     private static int ExecuteClaimedAction(string requestId, string action, string profile, string capability)
     {
         SendEvent(requestId, capability, "RUNNING", "Runner claimed request", "SUCCESS", "CafeLauncher runner is ready on this Windows session.", null);
-        if (action != "detect-pc" && action != "play-exec")
+        if (!IsSupportedAction(action))
         {
             SendEvent(requestId, capability, "FAILED", null, null, null, FailureResult(action, profile, "This action is not supported by the installed runner."));
             return 1;
         }
-        if (action == "play-exec") ProfileCfg(profile);
+        if (action != "detect-pc") ProfileCfg(profile);
 
         bool actionMayHaveRun = false;
         bool localPlayOutcomeKnown = false;
@@ -191,9 +191,9 @@ internal static class CafeLauncherWebRunner
                 ? "The current CafeLauncher source matched the official GitHub Contents API size and Git blob SHA."
                 : "Downloaded launcher size and SHA-256 match the immutable release manifest.";
             SendEvent(requestId, capability, "RUNNING", "Launcher verification", "SUCCESS", verificationDetail, null);
-            actionMayHaveRun = action == "play-exec";
+            actionMayHaveRun = action != "detect-pc";
             Dictionary<string, object> detection = RunLauncherAction(launcherPath, requestId, action, profile);
-            if (action == "play-exec")
+            if (action != "detect-pc")
             {
                 if (Convert.ToInt32(detection["schemaVersion"]) != 1)
                     throw new InvalidOperationException("The launcher action result used an unsupported schema.");
@@ -201,7 +201,8 @@ internal static class CafeLauncherWebRunner
                 if (terminalState != "COMPLETED" && terminalState != "PARTIAL" && terminalState != "SKIPPED" && terminalState != "FAILED" && terminalState != "INTERRUPTED")
                     throw new InvalidOperationException("The launcher returned an unsupported Play + Exec result state.");
                 Dictionary<string, object> playResult = GetDictionary(detection, "result");
-                ValidatePlayResult(playResult, profile, terminalState);
+                if (action == "play-exec") ValidatePlayResult(playResult, profile, terminalState);
+                else ValidateProfileActionResult(playResult, terminalState);
                 actionMayHaveRun = false;
                 localPlayOutcomeKnown = true;
                 SendEvent(requestId, capability, terminalState, null, null, null, playResult);
@@ -360,10 +361,17 @@ internal static class CafeLauncherWebRunner
 
     internal static bool LauncherSupportsAction(byte[] bytes, string action)
     {
-        if (bytes == null || (action != "detect-pc" && action != "play-exec")) return false;
+        if (bytes == null || !IsSupportedAction(action)) return false;
         string source = Encoding.UTF8.GetString(bytes);
         string branch = @"(?m)^\s*if\s*\(\$env:CAFE_WEB_ACTION\s+-ceq\s+'" + Regex.Escape(action) + @"'\)\s*\{";
-        return Regex.IsMatch(source, branch, RegexOptions.CultureInvariant);
+        if (Regex.IsMatch(source, branch, RegexOptions.CultureInvariant)) return true;
+        return (action == "apply-profile" || action == "apply-graphics") &&
+            Regex.IsMatch(source, @"\$env:CAFE_WEB_ACTION\s+-in\s+@\('apply-profile','apply-graphics'\)", RegexOptions.CultureInvariant);
+    }
+
+    private static bool IsSupportedAction(string action)
+    {
+        return action == "detect-pc" || action == "play-exec" || action == "apply-profile" || action == "apply-graphics";
     }
 
     internal static string GitBlobSha(byte[] bytes)
@@ -459,6 +467,16 @@ internal static class CafeLauncherWebRunner
             throw new InvalidOperationException("CS2 is already running but the launcher did not return its console commands.");
     }
 
+    private static void ValidateProfileActionResult(Dictionary<string, object> result, string state)
+    {
+        if (!result.ContainsKey("summary") || !(result["summary"] is string) ||
+            !result.ContainsKey("steps") || !result.ContainsKey("data"))
+            throw new InvalidOperationException("The launcher returned an incomplete profile action result.");
+        Dictionary<string, object> data = GetDictionary(result, "data");
+        if (data.Count != 1 || RequiredBoolean(data, "executionOutcomeKnown") == (state == "INTERRUPTED"))
+            throw new InvalidOperationException("The launcher profile action outcome certainty did not match its result state.");
+    }
+
     private static void SendEvent(string requestId, string capability, string state, string stepName, string stepStatus, string detail, Dictionary<string, object> result)
     {
         Dictionary<string, object> value = new Dictionary<string, object>
@@ -496,6 +514,15 @@ internal static class CafeLauncherWebRunner
                 { "summary", summary },
                 { "steps", new object[] { Step("Play + Exec", "FAILED", "The runner did not receive a local result. Check this PC before retrying.") } },
                 { "data", new Dictionary<string, object> { { "steamLaunchRequested", false }, { "cs2AlreadyRunning", false }, { "executionOutcomeKnown", true }, { "cfgName", ProfileCfg(profile) }, { "consoleCommands", new object[0] } } }
+            };
+        }
+        if (action == "apply-profile" || action == "apply-graphics")
+        {
+            return new Dictionary<string, object>
+            {
+                { "summary", summary },
+                { "steps", new object[] { Step(action == "apply-profile" ? "Apply profile" : "Apply game graphics", "FAILED", "The runner did not receive a local result. Check this PC before retrying.") } },
+                { "data", new Dictionary<string, object> { { "executionOutcomeKnown", true } } }
             };
         }
         return new Dictionary<string, object>

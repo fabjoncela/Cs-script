@@ -18,14 +18,17 @@ internal static class CompatibilityTests
     {
         string source = "@echo off\r\n# CAFE_RELEASE=2026.11.12.1\r\n# POWERSHELL_GUI\r\n" +
             "if($env:CAFE_WEB_ACTION -ceq 'detect-pc'){ exit 0 }\r\n" +
-            "if($env:CAFE_WEB_ACTION -ceq 'play-exec'){ exit 0 }\r\n# " + new string('x', 12000) + "\r\n";
+            "if($env:CAFE_WEB_ACTION -ceq 'play-exec'){ exit 0 }\r\n" +
+            "if($env:CAFE_WEB_ACTION -in @('apply-profile','apply-graphics')){ exit 0 }\r\n# " + new string('x', 12000) + "\r\n";
         byte[] bytes = Encoding.UTF8.GetBytes(source);
         Dictionary<string, object> metadata = Payload(bytes);
         byte[] validated = CafeLauncherWebRunner.ValidateGithubLauncherPayload(metadata);
         if (validated.Length != bytes.Length || CafeLauncherWebRunner.GitBlobSha(validated) != CafeLauncherWebRunner.GitBlobSha(bytes))
             throw new Exception("Verified GitHub payload bytes differ.");
         if (!CafeLauncherWebRunner.LauncherSupportsAction(validated, "detect-pc") ||
-            !CafeLauncherWebRunner.LauncherSupportsAction(validated, "play-exec"))
+            !CafeLauncherWebRunner.LauncherSupportsAction(validated, "play-exec") ||
+            !CafeLauncherWebRunner.LauncherSupportsAction(validated, "apply-profile") ||
+            !CafeLauncherWebRunner.LauncherSupportsAction(validated, "apply-graphics"))
             throw new Exception("Web action capability detection failed.");
         if (CafeLauncherWebRunner.LauncherSupportsAction(Encoding.UTF8.GetBytes("# legacy launcher"), "detect-pc"))
             throw new Exception("A legacy launcher was incorrectly marked compatible.");

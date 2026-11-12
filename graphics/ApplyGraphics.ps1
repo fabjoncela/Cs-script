@@ -322,7 +322,7 @@ function Save-CS2VideoFileWithBackup {
 }
 
 function Apply-CS2ModeGraphics {
-    param([string]$ModeName,$Preset)
+    param([string]$ModeName,$Preset,[switch]$WebAction)
     Write-Log ("Clicked: Apply Graphics "+$ModeName)
     try{
         if(Get-Process -Name cs2 -ErrorAction SilentlyContinue){throw 'CS2 is running. Close CS2 completely, then click Apply Graphics again.'}
@@ -483,11 +483,21 @@ function Apply-CS2ModeGraphics {
                 Write-Log ('Apply Graphics | '+$summaryLine) $summaryLevel
             }
         }
+        if($WebAction){
+            $resultSteps=@(
+                [pscustomobject]@{name='CS2 video settings';status=$(if($edit.Changed -or $edit.Applied.Count){'SUCCESS'}else{'SKIPPED'});detail=($appliedDetails -join '; ')},
+                [pscustomobject]@{name='NVIDIA scaling';status=$scalingStatus;detail=$scalingReport}
+            )
+            if($allSkipped.Count){$resultSteps+=,[pscustomobject]@{name='Compatibility checks';status='SKIPPED';detail=($allSkipped -join '; ')}}
+            $webSummary=$summary -replace '\(Steam account \d+\)','(Steam account)'
+            return [pscustomobject]@{state=$(if($allSkipped.Count -or -not $scalingVerified){'PARTIAL'}else{'COMPLETED'});summary=$webSummary;steps=$resultSteps;data=[ordered]@{executionOutcomeKnown=$true}}
+        }
         [void][System.Windows.Forms.MessageBox]::Show(
             ($summary+[Environment]::NewLine+[Environment]::NewLine+'Launch CS2 to use the video settings.'),
             'CS2 Graphics Result','OK',$(if($allSkipped.Count -gt 0 -or -not $scalingVerified){'Warning'}else{'Information'}))
     }catch{
         Write-Log ("Apply Graphics failed for "+$ModeName+': '+$_.Exception.Message) 'ERROR'
+        if($WebAction){throw}
         [void][System.Windows.Forms.MessageBox]::Show(
             ('Could not apply '+$ModeName+' graphics:'+[Environment]::NewLine+$_.Exception.Message+
              [Environment]::NewLine+'Original video settings were not intentionally changed. Check LIVE LOGS.'),

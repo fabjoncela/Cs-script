@@ -1,6 +1,6 @@
 # CafeLauncher Web Runner (development)
 
-This is the local runner for the optional web-action flow. It targets Windows PowerShell 5.1 and .NET Framework already present on supported Windows café PCs; it adds no runtime package. It supports **Detect PC** and **Play + Exec**. Play + Exec uses the verified `cafe.bat` release and its existing profile, baseline CFG, profile CFG, and Steam launch logic. Runner v0.2.0 and its first-run installer are published; the compatibility fallback described below is a local v0.3.0 change and is not published or café-validated yet.
+This is the local runner for the optional web-action flow. It targets Windows PowerShell 5.1 and .NET Framework already present on supported Windows café PCs; it adds no runtime package. The web page currently exposes **Apply profile**, **Apply game graphics**, and **Play + Exec** for one selected profile. The runner also retains Detect PC compatibility for older clients and diagnostics. It verifies a `cafe.bat` release and invokes only the requested allowlisted action. Runner v0.4.0 with the three profile actions is local work and is not published or café-validated yet.
 
 ## Build
 
@@ -29,7 +29,7 @@ The app cannot be installed silently by a browser. On a PC where user files surv
 - The protocol is registered for the current Windows account on this workstation. Its reboot and Deep Freeze persistence have not been tested on a café PC.
 - The runner's first-run self-install copies it under the current account's LocalAppData and registers the protocol. `tools/Test-WebRunnerInstall.ps1` exercises initial copy, same-version no-op, and replacement using temporary test files only.
 - `tools/Test-WebRunnerCompatibility.ps1` checks GitHub blob verification, requested-action support detection, and tampered-payload rejection using synthetic data only.
-- The backend web-action API is deployed and configured. Its latest immutable launcher artifact is currently `2026.11.08.4`, which predates web-action support; runner v0.3.0's GitHub-verified fallback is local and must be published before retrying the browser action.
+- The backend web-action API is deployed and configured. Its latest immutable launcher artifact is currently `2026.11.08.4`, which predates web-action support; runner v0.4.0's GitHub-verified fallback is local and must be published before retrying the browser action.
 - Play + Exec requires an active Steam session, a uniquely detected CS2 CFG path, no unresolved local profile edits, and a current primary-backend profile/graphics/CFG history bundle. It fails closed on a backend rollback or unavailable snapshot and does not silently use mirror or local fallback data.
 - CFG writes use the detected path pinned at the start of the action, revalidated immediately before each install. If a write or Steam launch may have happened but no complete result is available, the runner reports `INTERRUPTED`; the web page stays locked until the player confirms they checked the PC.
 - Deep Freeze persistence, protocol activation, real Steam/CS2 discovery, and the web result round trip remain unverified on a café PC.

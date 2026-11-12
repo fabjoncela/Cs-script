@@ -11,7 +11,7 @@ del /q "%CAFE_RESTART_SIGNAL%" >nul 2>&1
 exit /b
 
 # POWERSHELL_GUI
-# CAFE_RELEASE=2026.11.12.1
+# CAFE_RELEASE=2026.11.12.2
 
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
@@ -949,7 +949,8 @@ function Apply-ProfileMouse {
         [string]$ProfileName = 'FabMode',
         [ValidateRange(1,20)][int]$PointerSpeed = 10,
         [bool]$DisableAcceleration = $true,
-        [switch]$SkipPointerOptions
+        [switch]$SkipPointerOptions,
+        [switch]$WebAction
     )
     $mousePath = "HKCU:\Control Panel\Mouse"
     if ($DisableAcceleration) {
@@ -1077,15 +1078,16 @@ public static class FabMouseNotify {
             Write-Log "$ProfileName applied and verified live pointer speed $PointerSpeed." "INFO"
             if (-not $SkipPointerOptions) { Open-MousePointerOptions }
         } else {
-            [System.Windows.Forms.MessageBox]::Show(
+            if(-not $WebAction){[System.Windows.Forms.MessageBox]::Show(
                 "$ProfileName saved the registry values, but live pointer speed $PointerSpeed could not be confirmed. Check LIVE LOGS for SPI_SETMOUSESPEED and SPI_GETMOUSESPEED results.",
                 "$ProfileName - Apply Warning",
                 [System.Windows.Forms.MessageBoxButtons]::OK,
                 [System.Windows.Forms.MessageBoxIcon]::Warning
-            ) | Out-Null
+            ) | Out-Null}
         }
     } catch {
         Write-Log "$ProfileName mouse settings failed: $($_.Exception.Message)" "ERROR"
+        if($WebAction){throw}
         [System.Windows.Forms.MessageBox]::Show(
             "$ProfileName mouse settings error:`n$($_.Exception.Message)`n`nSee LIVE LOGS for details.",
             "$ProfileName",
@@ -3764,7 +3766,7 @@ if($env:CAFE_WEB_ACTION -ceq 'detect-pc'){
         exit 1
     }
 }
-if($env:CAFE_WEB_ACTION -and $env:CAFE_WEB_ACTION -cne 'play-exec'){exit 1}
+if($env:CAFE_WEB_ACTION -and $env:CAFE_WEB_ACTION -notin @('play-exec','apply-profile','apply-graphics')){exit 1}
 
 function Show-PCDiagnostics {
     Write-Log 'PC detection started.'
@@ -10009,19 +10011,25 @@ function Invoke-LogitechDpiButton {
 }
 
 function Invoke-GamingProfile {
-    param([Parameter(Mandatory=$true)][string]$ProfileName)
+    param([Parameter(Mandatory=$true)][string]$ProfileName,[switch]$WebAction,$WebSnapshot,[long]$WebSteamUserId=0,[string]$WebCfgDirectory='', [string]$WebSteamPath='')
     if (-not $script:GamingProfiles.Contains($ProfileName)) {
         Write-Log "Unknown gaming profile: $ProfileName" 'ERROR'
         return
     }
-    if(-not (Resolve-PendingProfileChanges -ProfileName $ProfileName)){return}
-    $refreshResult=Refresh-ProfileFromBackend -ProfileName $ProfileName -PassThruSnapshot
     $profileSnapshot=$null
-    if($refreshResult -and $refreshResult.PSObject.Properties['Profile'] -and $refreshResult.PSObject.Properties['Graphics'] -and $refreshResult.PSObject.Properties['Cfg']){
+    if($WebAction){
+        $profileSnapshot=$WebSnapshot
+        if(-not $profileSnapshot -or [string]$profileSnapshot.Source -cne 'Backend'){throw 'A verified primary-backend profile snapshot is required.'}
+        $profileSource='Backend'
+    }else{
+        if(-not (Resolve-PendingProfileChanges -ProfileName $ProfileName)){return}
+        $refreshResult=Refresh-ProfileFromBackend -ProfileName $ProfileName -PassThruSnapshot
+        if($refreshResult -and $refreshResult.PSObject.Properties['Profile'] -and $refreshResult.PSObject.Properties['Graphics'] -and $refreshResult.PSObject.Properties['Cfg']){
         $profileSnapshot=$refreshResult
         $profileSource=[string]$profileSnapshot.Source
-    }else{$profileSource=[string]$refreshResult}
-    if(-not (Confirm-LocalProfileApply -ProfileName $ProfileName -Source $profileSource)){return}
+        }else{$profileSource=[string]$refreshResult}
+        if(-not (Confirm-LocalProfileApply -ProfileName $ProfileName -Source $profileSource)){return}
+    }
     if([bool]$script:GamingProfiles[$ProfileName].ApplyNvidia){
         try{
             # ScalingMode is also stored in profiles/<Profile>.json for
@@ -10036,7 +10044,8 @@ function Invoke-GamingProfile {
         }catch{
             $message="Could not verify the latest cloud CS2 graphics settings for $ProfileName. No profile actions were applied, to avoid using a different scaling mode than Apply Graphics.`r`n`r`n$($_.Exception.Message)"
             Write-Log ("$ProfileName profile apply canceled: "+$message) 'ERROR'
-            [void][System.Windows.Forms.MessageBox]::Show($message,'Cloud Graphics Refresh Failed','OK','Warning')
+            if(-not $WebAction){[void][System.Windows.Forms.MessageBox]::Show($message,'Cloud Graphics Refresh Failed','OK','Warning')}
+            if($WebAction){throw $message}
             return
         }
     }
@@ -10048,7 +10057,7 @@ function Invoke-GamingProfile {
 
     $steps = @(
         @{ Name = 'Windows mouse speed/acceleration'; Action = {
-            Apply-ProfileMouse -ProfileName $ProfileName -PointerSpeed ([int]$profile.PointerSpeed) -DisableAcceleration ([bool]$profile.DisableAcceleration) -SkipPointerOptions
+            Apply-ProfileMouse -ProfileName $ProfileName -PointerSpeed ([int]$profile.PointerSpeed) -DisableAcceleration ([bool]$profile.DisableAcceleration) -SkipPointerOptions -WebAction:$WebAction
         } }
     )
     if ($profile.ApplyNvidia) {
@@ -10063,7 +10072,19 @@ function Invoke-GamingProfile {
         }
         # Profile Apply installs its CFG without editing any Steam launch options.
         $steps += @{ Name = "Install CS2 $profileCfgName"; Action = {
-            $cfgInstalled=Install-ProfileCfg -Silent -CfgName $profileCfgName -DownloadUrl $profileCfgUrl -CloudPreferred:([bool]$profileCfgUrl) -CloudSnapshot $profileCfgSnapshot -UseSnapshotOnly
+            if($WebAction){
+                $inventory=Get-PCDiagnostics -AsObject
+                $activeUser=Get-CafeWebActiveSteamUserId
+                if(-not $inventory.Steam.ActiveSessionPresent -or $activeUser -ne $WebSteamUserId -or
+                   -not [string]::Equals([string]$inventory.Steam.Executable,$WebSteamPath,[StringComparison]::OrdinalIgnoreCase) -or
+                   $inventory.CS2.Status -cne 'DETECTED' -or
+                   -not [string]::Equals([string]$inventory.CS2.ConfigPath,$WebCfgDirectory,[StringComparison]::OrdinalIgnoreCase)){
+                    throw 'Steam session or CS2 CFG path changed before profile CFG installation.'
+                }
+                $cfgInstalled=Install-ProfileCfg -Silent -CfgName $profileCfgName -DownloadUrl $profileCfgUrl -CloudPreferred:([bool]$profileCfgUrl) -CloudSnapshot $profileCfgSnapshot -UseSnapshotOnly -CfgDirectory $WebCfgDirectory
+            }else{
+                $cfgInstalled=Install-ProfileCfg -Silent -CfgName $profileCfgName -DownloadUrl $profileCfgUrl -CloudPreferred:([bool]$profileCfgUrl) -CloudSnapshot $profileCfgSnapshot -UseSnapshotOnly
+            }
             Set-RunOutcome -Run $ProfileName -Setting 'CS2 profile CFG' -Requested $profileCfgName -Target 'Active Steam CS2 cfg folder' -Status $(if($cfgInstalled){'APPLIED'}else{'FAILED'}) -Actual $(if($cfgInstalled){'SHA-256 verified'}else{'not installed'}) -Detail $(if($cfgInstalled){'Selected source copied and verified.'}else{'Install-ProfileCfg did not confirm installation.'})
             if(-not $cfgInstalled){throw ('CS2 CFG install was not verified: '+$profileCfgName)}
         } }
@@ -10073,7 +10094,13 @@ function Invoke-GamingProfile {
     }
     # Profile launch never starts G HUB, which can overwrite the requested mouse DPI.
     # Apply live DPI last via our better-logihub helper. Never write onboard here.
-    $steps += @{ Name = 'Logitech live DPI'; Action = { Request-LogitechLiveDPI -DPI ([int]$profile.LogitechDPI) } }
+    if($WebAction){
+        $steps += @{ Name = 'Logitech live DPI'; Action = {
+            Set-RunOutcome -Run $ProfileName -Setting 'Logitech live DPI' -Requested ([string]$profile.LogitechDPI) -Target 'Selected Superlight' -Status SKIPPED -Detail 'Web actions do not start the asynchronous device-helper download; use the Windows dashboard for live DPI.'
+        } }
+    }else{
+        $steps += @{ Name = 'Logitech live DPI'; Action = { Request-LogitechLiveDPI -DPI ([int]$profile.LogitechDPI) } }
+    }
     foreach ($step in $steps) {
         Write-Log ("$ProfileName step started: " + $step.Name)
         Start-StepScope -Run $ProfileName -Step $step.Name
@@ -10256,6 +10283,125 @@ function New-CafeWebPlayExecEnvelope {
     }
 }
 
+function New-CafeWebProfileActionEnvelope {
+    param([string]$State,[string]$Summary,[object[]]$Steps,[bool]$ExecutionOutcomeKnown=$true)
+    return [pscustomobject]@{schemaVersion=1;state=$State;result=[ordered]@{
+        summary=$Summary;steps=@($Steps);data=[ordered]@{executionOutcomeKnown=$ExecutionOutcomeKnown}
+    }}
+}
+
+function Get-CafeWebPendingReason {
+    param([Parameter(Mandatory=$true)][string]$ProfileName)
+    $queuePath=Get-CafeBackendQueuePath -ProfileName $ProfileName
+    if($script:PendingSync[$ProfileName] -or $script:PendingTarget[$ProfileName] -eq 'GitHubLegacy' -or
+       (Test-Path -LiteralPath $queuePath -PathType Leaf) -or
+       $script:PendingCfgSensitivity.ContainsKey($ProfileName) -or
+       $script:PendingProfileCfgRestore.ContainsKey($ProfileName) -or
+       ($script:CapturedCS2Convars.ContainsKey($ProfileName) -and $script:CapturedCS2Convars[$ProfileName]) -or
+       ($script:CapturedCS2Binds.ContainsKey($ProfileName) -and $script:CapturedCS2Binds[$ProfileName])){
+        return 'This profile has local changes awaiting review or sync. Open the Windows dashboard to resolve them before using this web action.'
+    }
+    return ''
+}
+
+function Get-CafeWebActionSnapshot {
+    param([Parameter(Mandatory=$true)][string]$ProfileName)
+    if(-not $script:GamingProfiles.Contains($ProfileName)){throw 'Unknown CafeLauncher profile.'}
+    $latest=Get-CafeHttpBytes -Uri ($script:BackendBaseUrl+'/v1/profiles/'+[Uri]::EscapeDataString($ProfileName)) -MaxBytes 2097152
+    $revision=0
+    if(-not [int]::TryParse([string]$latest.Headers['X-Profile-Revision'],[ref]$revision) -or $revision -lt 1){throw 'The primary backend did not provide a valid current profile revision.'}
+    $snapshot=Get-CafeBackendProfileHistoryRevision -ProfileName $ProfileName -Revision $revision
+    if([string]$snapshot.Source -cne 'Backend'){throw 'The web action requires a verified primary-backend snapshot.'}
+    if($script:BackendRevisions.ContainsKey($ProfileName) -and [int]$snapshot.Revision -lt [int]$script:BackendRevisions[$ProfileName]){
+        throw 'The backend profile revision is older than this PC has verified. Review the restore in the Windows dashboard before applying it.'
+    }
+    $cfgName=[string]$script:GamingProfiles[$ProfileName].ConfigFile
+    $remote=ConvertFrom-Json -InputObject ($snapshot.Profile|ConvertTo-Json -Depth 8 -Compress) -ErrorAction Stop
+    $remote.CfgDownloadUrl=$script:BackendBaseUrl+'/v1/cfg/'+$cfgName
+    [void](Import-ProfileValues -ProfileName $ProfileName -SavedProfile $remote -SourceLabel 'Backend')
+    $script:GraphicsPresets[$ProfileName]=$snapshot.Graphics
+    $script:GamingProfiles[$ProfileName].ScalingMode=[int]$snapshot.Graphics.ScalingMode
+    $script:BackendRevisions[$ProfileName]=[int]$snapshot.Revision
+    $script:BackendSnapshots[$ProfileName]=$snapshot
+    $script:ProfileRefreshStatus[$ProfileName]='Backend'
+    Set-CafeCloudReadSourceDisplay -Source 'Backend'
+    try{Save-ProfileSettings}catch{Write-Log ('Could not cache verified web-action profile: '+$_.Exception.Message) 'WARN'}
+    return $snapshot
+}
+
+function Invoke-CafeWebApplyProfile {
+    param([Parameter(Mandatory=$true)][string]$ProfileName)
+    $pending=Get-CafeWebPendingReason -ProfileName $ProfileName
+    if($pending){return (New-CafeWebProfileActionEnvelope -State 'SKIPPED' -Summary $pending -Steps @([ordered]@{name='Profile state';status='SKIPPED';detail=$pending}))}
+    $run=$ProfileName
+    try{
+        $snapshot=Get-CafeWebActionSnapshot -ProfileName $ProfileName
+        $inventory=Get-PCDiagnostics -AsObject
+        $steamUser=Get-CafeWebActiveSteamUserId
+        $steamPath=[string]$inventory.Steam.Executable
+        $cfgPath=[string]$inventory.CS2.ConfigPath
+        if(-not $inventory.Steam.ActiveSessionPresent -or $steamUser -le 0 -or -not $steamPath -or
+           $inventory.CS2.Status -cne 'DETECTED' -or -not $cfgPath){
+            $detail='Sign in to Steam and ensure one CS2 install is detected before applying this profile. No profile settings were changed.'
+            return (New-CafeWebProfileActionEnvelope -State 'SKIPPED' -Summary $detail -Steps @([ordered]@{name='Steam/CS2 preflight';status='SKIPPED';detail=$detail}))
+        }
+        Invoke-GamingProfile -ProfileName $ProfileName -WebAction -WebSnapshot $snapshot -WebSteamUserId $steamUser -WebCfgDirectory $cfgPath -WebSteamPath $steamPath
+        $items=@($script:StepResults|Where-Object{$_.Run -eq $run})
+        $steps=@($items|Select-Object -First 24|ForEach-Object{[ordered]@{name=[string]$_.Step;status=[string]$_.Status;detail=[string]$_.Detail}})
+        foreach($outcome in @($script:RunOutcomes|Where-Object{$_.Run -eq $run}|Select-Object -First 8)){
+            $status=switch([string]$outcome.Status){'APPLIED'{'SUCCESS'}'FALLBACK'{'PARTIAL'}'UNVERIFIED'{'PARTIAL'}'SKIPPED'{'SKIPPED'}'FAILED'{'FAILED'}'PENDING'{'PENDING'}default{'PARTIAL'}}
+            $detail=[string]$outcome.Detail
+            if(-not $detail){$detail=[string]$outcome.Actual}
+            $steps+=,[ordered]@{name=[string]$outcome.Setting;status=$status;detail=$detail}
+        }
+        if(-not $steps.Count){$steps=@([ordered]@{name='Apply profile';status='FAILED';detail='CafeLauncher did not report profile steps.'})}
+        $partial=@($steps|Where-Object{$_.status -in @('PARTIAL','SKIPPED','FAILED','PENDING')}).Count -gt 0
+        $state=if(@($steps|Where-Object{$_.status -eq 'SUCCESS'}).Count -eq 0 -and @($steps|Where-Object{$_.status -eq 'FAILED'}).Count){'FAILED'}elseif($partial){'PARTIAL'}else{'COMPLETED'}
+        $summary=$ProfileName+' profile apply finished. Review each reported setting, including any unsupported or still-pending device action.'
+        return (New-CafeWebProfileActionEnvelope -State $state -Summary $summary -Steps $steps)
+    }catch{
+        $steps=@($script:StepResults|Where-Object{$_.Run -eq $run}|Select-Object -First 24|ForEach-Object{[ordered]@{name=[string]$_.Step;status=[string]$_.Status;detail=[string]$_.Detail}})
+        $unknown=$steps.Count -gt 0
+        $steps+=,[ordered]@{name='Apply profile';status=$(if($unknown){'PARTIAL'}else{'FAILED'});detail='The action stopped before CafeLauncher could confirm every setting.'}
+        return (New-CafeWebProfileActionEnvelope -State $(if($unknown){'INTERRUPTED'}else{'FAILED'}) -Summary ('CafeLauncher could not confirm the complete '+$ProfileName+' profile apply. '+$_.Exception.Message) -Steps $steps -ExecutionOutcomeKnown:(-not $unknown))
+    }
+}
+
+function Invoke-CafeWebApplyGraphics {
+    param([Parameter(Mandatory=$true)][string]$ProfileName)
+    $pending=Get-CafeWebPendingReason -ProfileName $ProfileName
+    if($pending){return (New-CafeWebProfileActionEnvelope -State 'SKIPPED' -Summary $pending -Steps @([ordered]@{name='Profile state';status='SKIPPED';detail=$pending}))}
+    $mayHaveChanged=$false
+    try{
+        $snapshot=Get-CafeWebActionSnapshot -ProfileName $ProfileName
+        $expected='b6fa5619e13df559b40c02cd8a11d9d7cd99d7e8'
+        $source=Add-CafeCacheBust -Uri 'https://raw.githubusercontent.com/fabjoncela/Cs-script/main/graphics/ApplyGraphics.ps1'
+        $cache=Join-Path $env:LOCALAPPDATA 'CafeLauncher\graphics-module.ps1'
+        $parent=Split-Path -Parent $cache
+        if(-not (Test-Path -LiteralPath $parent)){[void](New-Item -Path $parent -ItemType Directory -Force)}
+        $temp=Join-Path $env:TEMP ('CafeLauncher-graphics-module-'+[guid]::NewGuid().ToString('N')+'.ps1')
+        try{
+            $localModule=Join-Path (Split-Path -Parent $env:CAFE_SCRIPT) 'graphics\ApplyGraphics.ps1'
+            if((Test-Path -LiteralPath $localModule -PathType Leaf) -and (Get-GitBlobSha -Bytes ([IO.File]::ReadAllBytes($localModule))) -eq $expected){Copy-Item -LiteralPath $localModule -Destination $cache -Force}
+            elseif(-not (Test-Path -LiteralPath $cache -PathType Leaf) -or (Get-GitBlobSha -Bytes ([IO.File]::ReadAllBytes($cache))) -ne $expected){
+                [Net.ServicePointManager]::SecurityProtocol=[Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+                Invoke-WebRequest -Uri $source -OutFile $temp -UseBasicParsing -TimeoutSec 15 -ErrorAction Stop
+                if((Get-GitBlobSha -Bytes ([IO.File]::ReadAllBytes($temp))) -ne $expected){throw 'Downloaded graphics helper failed its pinned Git blob SHA.'}
+                Copy-Item -LiteralPath $temp -Destination $cache -Force
+            }
+        }finally{Remove-Item -LiteralPath $temp -Force -ErrorAction SilentlyContinue}
+        if((Get-GitBlobSha -Bytes ([IO.File]::ReadAllBytes($cache))) -ne $expected){throw 'Cached graphics helper failed its pinned Git blob SHA.'}
+        . $cache
+        $mayHaveChanged=$true
+        $graphics=Apply-CS2ModeGraphics -ModeName $ProfileName -Preset $snapshot.Graphics -WebAction
+        if(-not $graphics -or -not $graphics.state){throw 'Graphics helper did not return a structured result.'}
+        return (New-CafeWebProfileActionEnvelope -State ([string]$graphics.state) -Summary ([string]$graphics.summary) -Steps @($graphics.steps) -ExecutionOutcomeKnown ([bool]$graphics.data.executionOutcomeKnown))
+    }catch{
+        $step=[ordered]@{name='Apply game graphics';status=$(if($mayHaveChanged){'PARTIAL'}else{'FAILED'});detail='The graphics action stopped before a complete result was confirmed.'}
+        return (New-CafeWebProfileActionEnvelope -State $(if($mayHaveChanged){'INTERRUPTED'}else{'FAILED'}) -Summary ('CafeLauncher could not confirm the graphics result. '+$_.Exception.Message) -Steps @($step) -ExecutionOutcomeKnown:(-not $mayHaveChanged))
+    }
+}
+
 function Get-CafeWebActiveSteamUserId {
     $activeUser=0L
     try{
@@ -10316,7 +10462,7 @@ function Invoke-CafeWebPlayExec {
             throw 'The primary backend did not provide a valid current profile revision.'
         }
         $snapshot=Get-CafeBackendProfileHistoryRevision -ProfileName $ProfileName -Revision $revision
-        if(-not (Confirm-CafeBackendRevisionRollback -ProfileName $ProfileName -Snapshot $snapshot)){
+        if($script:BackendRevisions.ContainsKey($ProfileName) -and [int]$snapshot.Revision -lt [int]$script:BackendRevisions[$ProfileName]){
             [void]$steps.Add([ordered]@{name='Profile snapshot';status='SKIPPED';detail='The backend revision is older than this PC has verified. Open the Windows dashboard to review the restore before retrying.'})
             return (New-CafeWebPlayExecEnvelope -State 'SKIPPED' -Summary 'The backend profile revision requires review in the Windows dashboard. No files were changed and Steam was not started.' -Steps $steps.ToArray() -CfgName $cfgName -Cs2AlreadyRunning $cs2Running -SteamLaunchRequested $false)
         }
@@ -10421,6 +10567,35 @@ if($env:CAFE_WEB_ACTION -ceq 'play-exec'){
     }
 }
 
+if($env:CAFE_WEB_ACTION -in @('apply-profile','apply-graphics')){
+    $webProfile=[string]$env:CAFE_WEB_PROFILE
+    try{
+        if($env:CAFE_WEB_REQUEST_ID -notmatch '^[A-Za-z0-9_-]{43}$' -or $webProfile -notmatch '^(FabMode|ArliMode|BrileMode|ArmlMode|OliMode|Provmode)$'){
+            throw 'Invalid CafeLauncher web action context.'
+        }
+        $resultPath=[IO.Path]::GetFullPath([string]$env:CAFE_WEB_RESULT_FILE)
+        $tempRoot=[IO.Path]::GetFullPath([IO.Path]::GetTempPath())
+        if(-not $resultPath.StartsWith($tempRoot,[StringComparison]::OrdinalIgnoreCase) -or [IO.Path]::GetExtension($resultPath) -cne '.json'){
+            throw 'CafeLauncher web result path is invalid.'
+        }
+        $webOutput=if($env:CAFE_WEB_ACTION -ceq 'apply-profile'){Invoke-CafeWebApplyProfile -ProfileName $webProfile}else{Invoke-CafeWebApplyGraphics -ProfileName $webProfile}
+        $json=ConvertTo-Json -InputObject $webOutput -Depth 12 -Compress
+        [IO.File]::WriteAllText($resultPath,$json,(New-Object System.Text.UTF8Encoding($false)))
+        exit 0
+    }catch{
+        try{
+            $errorPath=[IO.Path]::GetFullPath([string]$env:CAFE_WEB_RESULT_FILE)
+            $tempRoot=[IO.Path]::GetFullPath([IO.Path]::GetTempPath())
+            if($errorPath.StartsWith($tempRoot,[StringComparison]::OrdinalIgnoreCase)){
+                $failed=New-CafeWebProfileActionEnvelope -State 'FAILED' -Summary $_.Exception.Message -Steps @([ordered]@{name='CafeLauncher action';status='FAILED';detail='No profile changes were confirmed.'})
+                [IO.File]::WriteAllText($errorPath,(ConvertTo-Json -InputObject $failed -Depth 12 -Compress),(New-Object System.Text.UTF8Encoding($false)))
+                exit 0
+            }
+        }catch{}
+        exit 1
+    }
+}
+
 # Independent CS2 graphics module; loaded ONLY when Apply Graphics is clicked.
 # Strict hash pin prevents executing unreviewed modified remote module code.
 function Invoke-GraphicsOnly {
@@ -10430,7 +10605,7 @@ function Invoke-GraphicsOnly {
     Start-StepScope -Run $graphicsRun -Step 'Apply Graphics'
     try {
     if(-not (Resolve-PendingProfileChanges -ProfileName $ModeName)){return}
-    $expected='7bf452ef059b6a59678dfc98cfee64ce59d96a2a'
+    $expected='b6fa5619e13df559b40c02cd8a11d9d7cd99d7e8'
     $source=Add-CafeCacheBust -Uri 'https://raw.githubusercontent.com/fabjoncela/Cs-script/main/graphics/ApplyGraphics.ps1'
     $cache=Join-Path $env:LOCALAPPDATA 'CafeLauncher\graphics-module.ps1'
     $parent=Split-Path -Parent $cache
