@@ -11,7 +11,7 @@ $source=[string]::Join([Environment]::NewLine,[string[]]$lines[($marker+1)..($li
 $tokens=$null; $errors=$null
 $ast=[System.Management.Automation.Language.Parser]::ParseInput($source,[ref]$tokens,[ref]$errors)
 if(@($errors).Count -gt 0){throw "Launcher has syntax errors: $($errors[0].Message)"}
-$names=@('Get-CS2ProfileBaselineCfgText','Install-CS2ProfileBaselineCfg','Get-CS2SteamLaunchArguments','Start-CS2WithProfileCfg')
+$names=@('Get-CS2ProfileBaselineCfgText','Install-CS2ProfileBaselineCfg','Get-CS2SteamLaunchArguments','Install-CafePlayExecCfg','Start-CafePlayExecInSteam','Start-CS2WithProfileCfg')
 foreach($name in $names){
     $found=@($ast.FindAll({param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst]},$true) |
              Where-Object { $_.Name -eq $name })
@@ -82,9 +82,9 @@ try{
 }finally{
     Remove-Item -LiteralPath $script:BaselineFixture -Recurse -Force -ErrorAction SilentlyContinue
 }
-function Install-CS2ProfileBaselineCfg {$script:Events+='baseline';return $true}
+function Install-CS2ProfileBaselineCfg {param([string]$CfgDirectory);$script:Events+='baseline';return $true}
 function Install-ProfileCfg {
-    param([switch]$Silent,[string]$CfgName,[string]$DownloadUrl,[switch]$CloudPreferred)
+    param([switch]$Silent,[string]$CfgName,[string]$DownloadUrl,[switch]$CloudPreferred,$CloudSnapshot,[switch]$UseSnapshotOnly,[string]$CfgDirectory)
     $script:Installed+= $CfgName
     $script:InstalledUrls+=$DownloadUrl
     $script:CloudPreferredFlags+=[bool]$CloudPreferred
