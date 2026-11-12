@@ -80,7 +80,7 @@ if($confirm -notmatch "'GitHubMirror'" -or $confirm -notmatch 'at revision \$rev
 }
 if($graphicsOnly -notmatch 'Get-CafeCloudSnapshot -ProfileName \$ModeName' -or
    $graphicsOnly -notmatch 'Confirm-LocalProfileApply -ProfileName \$ModeName -Source \$cloudSnapshot\.Source' -or
-   $graphicsOnly.IndexOf('Confirm-LocalProfileApply -ProfileName $ModeName',[StringComparison]::Ordinal) -gt $graphicsOnly.IndexOf('Apply-CS2ModeGraphics -ModeName $ModeName',[StringComparison]::Ordinal)){
+   $graphicsOnly.IndexOf('Confirm-LocalProfileApply -ProfileName $ModeName',[StringComparison]::Ordinal) -gt $graphicsOnly.IndexOf('Invoke-CafeGraphicsPresetCore -ModeName $ModeName',[StringComparison]::Ordinal)){
     throw 'Apply Graphics must confirm mirror-sourced presets before changing CS2 settings.'
 }
 Write-Host 'PASS: stale mirror revisions are rejected; current/newer mirror data requires confirmation before profile actions or Apply Graphics.'
