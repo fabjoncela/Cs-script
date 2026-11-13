@@ -13,6 +13,15 @@ if($source -notmatch 'if\s*\(\s*\$profile\.LaunchApps\s*\)' -or
    $source -match 'Web Apply profile intentionally skipped Launch All'){
     throw 'Web and Windows Apply Profile must both honor LaunchApps and use the shared app-launch routine.'
 }
+$playStart=$source.IndexOf('function Invoke-CafeWebPlayExec {',[StringComparison]::Ordinal)
+$playEnd=$source.IndexOf('if($env:CAFE_WEB_ACTION -ceq ''play-exec'')',$playStart,[StringComparison]::Ordinal)
+if($playStart -lt 0 -or $playEnd -le $playStart){throw 'Could not isolate the Play + Exec web-action flow.'}
+$playSource=$source.Substring($playStart,$playEnd-$playStart)
+if($playSource -notmatch 'CAFE_WEB_PROFILE_REVISION' -or
+   $playSource -notmatch 'Get-CafeBackendProfileHistoryRevision -ProfileName \$ProfileName -Revision \$revision' -or
+   $playSource -match '\$latestResponse=Get-CafeHttpBytes'){
+    throw 'Play + Exec must fetch the exact ticket-pinned profile bundle without a separate latest-revision request.'
+}
 $resultStages=@('Build final action result','Serialize final action result','Write final action result')
 $stageOffsets=@($resultStages|ForEach-Object{$source.IndexOf("-Name '$_'",[StringComparison]::Ordinal)})
 if(@($stageOffsets|Where-Object{$_ -lt 0}).Count -or $stageOffsets[0] -ge $stageOffsets[1] -or $stageOffsets[1] -ge $stageOffsets[2]){
@@ -36,12 +45,13 @@ function Reset-ProfileActionTest {
     $script:CapturedCS2Convars=@{};$script:CapturedCS2Binds=@{}
     $script:StepResults=New-Object 'System.Collections.Generic.List[object]'
     $script:RunOutcomes=New-Object 'System.Collections.Generic.List[object]'
-    $script:SnapshotCalls=0;$script:ApplyCalls=0;$script:SteamUser=76561198000000000L
+    $script:SnapshotCalls=0;$script:SnapshotRequestedRevisions=New-Object 'System.Collections.Generic.List[int]';$script:ApplyCalls=0;$script:SteamUser=76561198000000000L
     $script:SteamAvailable=$true;$script:Cs2Available=$true;$script:ThrowSnapshot=$false
     $script:SteamPath=Join-Path $script:TargetRoot 'steam.exe';$script:CfgPath=Join-Path $script:TargetRoot 'game\csgo\cfg'
     $script:QueueClearCalls=0;$script:SaveSettingsCalls=0;$script:ResetMarkerCompleteCalls=0;$script:SnapshotImportCalls=0
     $script:CafeWebProgressSequence=0;$script:CafeWebProgressTimers=@{};$script:CafeWebCurrentProgressStage=$null
     $env:CAFE_WEB_RUNNER_UPDATED=''
+    $env:CAFE_WEB_PROFILE_REVISION='3'
 }
 function Get-CafeBackendQueuePath { return (Join-Path $env:TEMP 'CafeLauncher-profile-action-test-absent.json') }
 function Clear-CafeBackendQueue { param([string]$ProfileName);$script:QueueClearCalls++ }
@@ -51,10 +61,17 @@ function Assert-LogitechDPI { param([int]$DPI) }
 function Ensure-LogihubWebExecutable { $script:LogihubEnsureCalls++;return 'verified-helper.exe' }
 function Set-LogitechLiveDPI { param([int]$DPI,[switch]$WebAction);$script:LiveDpiCalls++;$script:WebLiveDpiSwitch=[bool]$WebAction }
 function Get-CafeWebActionSnapshot {
-    param([string]$ProfileName,[switch]$NoCache)
+    param([string]$ProfileName,[int]$Revision=0,[switch]$NoCache)
     $script:SnapshotCalls++
+    $script:SnapshotRequestedRevisions.Add($Revision)
     if($script:ThrowSnapshot -and $script:SnapshotCalls -ge 2){throw 'Simulated backend failure.'}
-    return [pscustomobject]@{Source='Backend';Revision=3;Graphics=[pscustomobject]@{ScalingMode=2}}
+    return [pscustomobject]@{Source='Backend';Revision=$(if($Revision){$Revision}else{3});Graphics=[pscustomobject]@{ScalingMode=2}}
+}
+function Get-CafeVerifiedGraphicsModulePath { return 'verified-graphics.ps1' }
+function Invoke-CafeGraphicsPresetCore {
+    param([string]$ModeName,$Preset,[switch]$WebAction,[string]$ModulePath='')
+    $script:GraphicsPresetRevision=$script:SnapshotRequestedRevisions[$script:SnapshotRequestedRevisions.Count-1]
+    return [pscustomobject]@{state='COMPLETED';summary='Graphics settings verified.';steps=@([ordered]@{name='Video settings';status='SUCCESS';detail='Verified.'});data=[pscustomobject]@{executionOutcomeKnown=$true}}
 }
 function Set-CafeWebActionSnapshot { param([string]$ProfileName,$Snapshot,[switch]$NoSave);$script:SnapshotImportCalls++ }
 function Get-PCDiagnostics {
@@ -88,8 +105,16 @@ if($script:LogihubEnsureCalls -ne 1 -or $script:LiveDpiCalls -ne 1 -or -not $scr
 
 Reset-ProfileActionTest
 $result=Invoke-CafeWebApplyProfile -ProfileName FabMode
-if($result.state -cne 'COMPLETED' -or -not $result.result.data.executionOutcomeKnown -or $script:ApplyCalls -ne 1){throw 'Normal web profile apply did not report its verified steps.'}
+if($result.state -cne 'COMPLETED' -or -not $result.result.data.executionOutcomeKnown -or $script:ApplyCalls -ne 1 -or
+   $script:SnapshotRequestedRevisions.Count -ne 1 -or $script:SnapshotRequestedRevisions[0] -ne 3){throw 'Normal web profile apply did not use the backend-pinned immutable revision.'}
 if(@($result.result.steps|Where-Object{$_.name -eq 'Logitech live DPI' -and $_.status -eq 'SUCCESS'}).Count -ne 1){throw 'Verified synchronous Logitech live DPI was not reported as applied.'}
+
+Reset-ProfileActionTest
+$result=Invoke-CafeWebApplyGraphics -ProfileName FabMode
+if($result.state -cne 'COMPLETED' -or $script:SnapshotRequestedRevisions.Count -ne 1 -or
+   $script:SnapshotRequestedRevisions[0] -ne 3 -or $script:GraphicsPresetRevision -ne 3){
+    throw 'Web graphics apply did not use the exact backend-pinned profile and graphics revision.'
+}
 
 Reset-ProfileActionTest
 $script:PendingSync['FabMode']=$true

@@ -4,6 +4,18 @@ if (-not (Test-Path -LiteralPath $compiler -PathType Leaf)) { throw 'The .NET Fr
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $runnerCode = [IO.File]::ReadAllText((Join-Path $repoRoot 'web-runner\CafeLauncherWebRunner.cs'))
 $launcherCode = [IO.File]::ReadAllText((Join-Path $repoRoot 'cafe.bat'))
+$requiredRevisionForwarding = 'start.EnvironmentVariables["CAFE_WEB_PROFILE_REVISION"] = profileRevision.ToString(CultureInfo.InvariantCulture);'
+if ($runnerCode -notmatch [regex]::Escape($requiredRevisionForwarding) -or
+    $runnerCode -notmatch 'The backend did not pin a valid profile revision to this action') {
+    throw 'The runner must forward the claimed revision and fail safely when an in-flight ticket has no revision.'
+}
+$graphicsLoader = [regex]::Match($launcherCode, '(?s)function Get-CafeVerifiedGraphicsModulePath\s*\{(.*?)\r?\n\}\s*\r?\nfunction Invoke-CafeGraphicsPresetCore')
+if (-not $graphicsLoader.Success -or
+    $graphicsLoader.Groups[1].Value -notmatch "\`$expected='[0-9a-f]{40}'" -or
+    $graphicsLoader.Groups[1].Value -notmatch 'https://raw\.githubusercontent\.com/fabjoncela/Cs-script/main/graphics/ApplyGraphics\.ps1' -or
+    $runnerCode -notmatch 'The downloaded graphics helper did not match the launcher-pinned Git blob SHA') {
+    throw 'The page-open warm-up must find the launcher pin and verify the downloaded graphics helper before caching it.'
+}
 $helperUrl = [regex]::Match($runnerCode, 'LogitechHelperUrl = "([^"]+)"')
 $helperHash = [regex]::Match($runnerCode, 'LogitechHelperSha256 = "([0-9a-f]{64})"')
 if (-not $helperUrl.Success -or -not $helperHash.Success -or
@@ -41,6 +53,10 @@ internal static class CompatibilityTests
             "if($env:CAFE_WEB_ACTION -ceq 'play-exec'){ exit 0 }\r\n" +
             "if($env:CAFE_WEB_ACTION -in @('apply-profile','apply-graphics')){ exit 0 }\r\n# " + new string('x', 12000) + "\r\n";
         byte[] bytes = Encoding.UTF8.GetBytes(source);
+        if (!CafeLauncherWebRunner.IsWarmupUri("cafelauncher://v1/warmup") ||
+            CafeLauncherWebRunner.IsWarmupUri("cafelauncher://v1/warmup?run=anything") ||
+            CafeLauncherWebRunner.IsWarmupUri("https://v1/warmup"))
+            throw new Exception("Background warm-up protocol URI validation accepted an invalid link or rejected the valid one.");
         Dictionary<string, object> metadata = Payload(bytes);
         byte[] validated = CafeLauncherWebRunner.ValidateGithubLauncherPayload(metadata);
         if (validated.Length != bytes.Length || CafeLauncherWebRunner.GitBlobSha(validated) != CafeLauncherWebRunner.GitBlobSha(bytes))
@@ -54,7 +70,7 @@ internal static class CompatibilityTests
             { "version", "0.7.0" }, { "sha256", new string('a', 64) }, { "size", 50000 }
         };
         Dictionary<string, object> checkedRelease = CafeLauncherWebRunner.ValidateRunnerReleaseMetadata(release);
-        if ((int)checkedRelease["size"] != 50000 || !CafeLauncherWebRunner.IsRunnerVersionNewer("0.7.5", "0.7.4") ||
+        if ((int)checkedRelease["size"] != 50000 || !CafeLauncherWebRunner.IsRunnerVersionNewer("0.7.6", "0.7.5") ||
             !CafeLauncherWebRunner.IsRunnerVersionNewer("0.7.0", "0.6.0") || CafeLauncherWebRunner.IsRunnerVersionNewer("0.6.0", "0.7.0"))
             throw new Exception("Runner release metadata validation or update ordering failed.");
         if (!CafeLauncherWebRunner.IsLauncherReleaseVersionNewer("2026.11.13.4", "2026.11.13.3") ||

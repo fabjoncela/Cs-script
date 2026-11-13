@@ -20,17 +20,18 @@ using Microsoft.Win32;
 [assembly: AssemblyDescription("Per-user Windows companion for CafeLauncher web actions.")]
 [assembly: AssemblyCompany("CafeLauncher")]
 [assembly: AssemblyProduct("CafeLauncher Web Runner")]
-[assembly: AssemblyVersion("0.7.5.0")]
-[assembly: AssemblyFileVersion("0.7.5.0")]
+[assembly: AssemblyVersion("0.7.6.0")]
+[assembly: AssemblyFileVersion("0.7.6.0")]
 
 internal static class CafeLauncherWebRunner
 {
     private const string BackendOrigin = "https://fabjon-hp.tail681ec9.ts.net:10000";
-    private const string RunnerVersion = "0.7.5";
+    private const string RunnerVersion = "0.7.6";
     private const string RunnerUninstallKey = @"Software\Microsoft\Windows\CurrentVersion\Uninstall\CafeLauncherWebRunner";
     private const int MaxLauncherBytes = 1000000;
     private const int MaxRunnerBytes = 8 * 1024 * 1024;
     private const int MaxLogitechHelperBytes = 10 * 1024 * 1024;
+    private const int MaxGraphicsModuleBytes = 8 * 1024 * 1024;
     private const string LogitechHelperUrl = "https://github.com/fabjoncela/better-logihub/releases/download/v0.1.0-c54d.1/logihub.exe";
     private const string LogitechHelperSha256 = "dc30e45d4ba1df7d043c7c9a0aacda4257e09f5f23bb980466b985b77aa7dda4";
     private static readonly JavaScriptSerializer Json = new JavaScriptSerializer { MaxJsonLength = 2 * 1024 * 1024 };
@@ -40,6 +41,7 @@ internal static class CafeLauncherWebRunner
     [STAThread]
     private static int Main(string[] args)
     {
+        bool warmupRequested = args != null && args.Length > 0 && IsWarmupUri(args[0]);
         try
         {
             if (args.Length == 0) return InstallForCurrentUser();
@@ -49,7 +51,7 @@ internal static class CafeLauncherWebRunner
             if (args.Length < 1 || args.Length > 2 || (args.Length == 2 && args[1] != "--after-update"))
                 throw new InvalidOperationException("Open CafeLauncher from the CafeLauncher website on this PC.");
 
-            string requestId = ParseRequestUri(args[0]);
+            string requestId = warmupRequested ? null : ParseRequestUri(args[0]);
             ServicePointManager.SecurityProtocol |= SecurityProtocolType.Tls12;
             ServicePointManager.Expect100Continue = false;
             WriteRunnerLog("Accepted a CafeLauncher web action link.");
@@ -58,12 +60,18 @@ internal static class CafeLauncherWebRunner
             bool profileResetPending = File.Exists(PendingProfileResetPath());
             if (!startedAfterUpdate)
             {
-                string updatedRunner = TryUpdateRunner(requestId);
+                string updatedRunner = TryUpdateRunner();
                 if (updatedRunner != null)
                 {
-                    StartUpdatedRunner(updatedRunner, requestId);
+                    StartUpdatedRunner(updatedRunner, args[0]);
                     return 0;
                 }
+            }
+
+            if (warmupRequested)
+            {
+                WarmupRunner();
+                return 0;
             }
 
             string claimCapability = RandomToken();
@@ -86,14 +94,124 @@ internal static class CafeLauncherWebRunner
             if (action == "detect-pc" && profile != null)
                 throw new InvalidOperationException("Detect PC must not include a profile.");
             if (action != "detect-pc") ProfileCfg(profile);
-            return ExecuteClaimedAction(requestId, action, profile, claimCapability, startedAfterUpdate || profileResetPending);
+            int profileRevision = 0;
+            if (action != "detect-pc")
+            {
+                if (!ticket.ContainsKey("profileRevision") || ticket["profileRevision"] == null ||
+                    !Int32.TryParse(Convert.ToString(ticket["profileRevision"], CultureInfo.InvariantCulture), NumberStyles.None, CultureInfo.InvariantCulture, out profileRevision) ||
+                    profileRevision < 1)
+                {
+                    SendEvent(requestId, claimCapability, "FAILED", null, null, null,
+                        FailureResult(action, profile, "The backend did not pin a valid profile revision to this action. Update the backend before retrying."));
+                    return 1;
+                }
+            }
+            return ExecuteClaimedAction(requestId, action, profile, profileRevision, claimCapability, startedAfterUpdate || profileResetPending);
         }
         catch (Exception error)
         {
             WriteRunnerLog("Runner stopped before completing the action handler (" + error.GetType().Name + ").");
-            MessageBox.Show(SafeMessage(error), "CafeLauncher", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            if (!warmupRequested) MessageBox.Show(SafeMessage(error), "CafeLauncher", MessageBoxButtons.OK, MessageBoxIcon.Warning);
             return 1;
         }
+    }
+
+    internal static bool IsWarmupUri(string raw)
+    {
+        Uri uri;
+        return raw != null && raw.Length <= 128 && Uri.TryCreate(raw, UriKind.Absolute, out uri) &&
+            String.Equals(uri.Scheme, "cafelauncher", StringComparison.OrdinalIgnoreCase) &&
+            String.Equals(uri.Host, "v1", StringComparison.Ordinal) && uri.UserInfo.Length == 0 && uri.Port == -1 &&
+            uri.Query.Length == 0 && uri.Fragment.Length == 0 && uri.AbsolutePath == "/warmup";
+    }
+
+    private static void WarmupRunner()
+    {
+        WriteRunnerLog("Starting background preparation requested by the CafeLauncher page.");
+        try
+        {
+            Dictionary<string, object> launcher = GetLatestActionLauncher("apply-graphics");
+            WriteRunnerLog("Prepared verified CafeLauncher " + RequiredString(launcher, "version") + " (" + RequiredString(launcher, "source") + ") for the next action.");
+            try
+            {
+                bool graphicsDownloaded = WarmupGraphicsModule((byte[])launcher["bytes"]);
+                WriteRunnerLog(graphicsDownloaded ? "Downloaded and pinned-hash verified the graphics helper for the next action." : "The cached graphics helper passed its pinned Git blob check.");
+            }
+            catch (Exception error)
+            {
+                WriteRunnerLog("Could not prefetch the graphics helper (" + error.GetType().Name + "); Apply Game Graphics will retry it.");
+            }
+            try
+            {
+                bool helperDownloaded = EnsurePinnedLogitechHelper();
+                WriteRunnerLog(helperDownloaded ? "Downloaded and SHA-256 verified the Logitech helper for the next action." : "The cached Logitech helper passed its pinned SHA-256 check.");
+            }
+            catch (Exception error)
+            {
+                WriteRunnerLog("Could not prefetch the Logitech helper (" + error.GetType().Name + "); Apply Profile will retry it.");
+            }
+        }
+        catch (Exception error)
+        {
+            WriteRunnerLog("Could not prefetch CafeLauncher during background preparation (" + error.GetType().Name + "); the next action will retry.");
+        }
+    }
+
+    private static bool WarmupGraphicsModule(byte[] launcherBytes)
+    {
+        if (launcherBytes == null || launcherBytes.Length == 0) throw new InvalidOperationException("The verified launcher source was empty.");
+        string source = Encoding.UTF8.GetString(launcherBytes);
+        Match function = Regex.Match(source,
+            @"(?s)function Get-CafeVerifiedGraphicsModulePath\s*\{(.*?)\r?\n\}\s*\r?\nfunction Invoke-CafeGraphicsPresetCore",
+            RegexOptions.CultureInvariant);
+        if (!function.Success) throw new InvalidOperationException("The verified launcher has no supported graphics helper loader.");
+        Match hash = Regex.Match(function.Groups[1].Value, @"\$expected='([0-9a-f]{40})'", RegexOptions.CultureInvariant);
+        Match url = Regex.Match(function.Groups[1].Value,
+            @"https://raw\.githubusercontent\.com/fabjoncela/Cs-script/main/graphics/ApplyGraphics\.ps1",
+            RegexOptions.CultureInvariant);
+        if (!hash.Success || !url.Success) throw new InvalidOperationException("The verified launcher has invalid graphics helper pins.");
+        string destination = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "CafeLauncher", "graphics-module.ps1");
+        if (File.Exists(destination) && new FileInfo(destination).Length <= MaxGraphicsModuleBytes &&
+            String.Equals(GitBlobSha(File.ReadAllBytes(destination)), hash.Groups[1].Value, StringComparison.Ordinal)) return false;
+
+        Uri uri = new Uri(url.Value);
+        HttpWebRequest request = (HttpWebRequest)WebRequest.Create(uri);
+        request.Method = "GET";
+        request.UserAgent = "CafeLauncher-WebRunner/" + RunnerVersion;
+        request.Timeout = 20000;
+        request.ReadWriteTimeout = 20000;
+        request.AllowAutoRedirect = true;
+        request.MaximumResponseHeadersLength = 32;
+        byte[] bytes;
+        using (HttpWebResponse response = (HttpWebResponse)request.GetResponse())
+        using (Stream input = response.GetResponseStream())
+        using (MemoryStream output = new MemoryStream())
+        {
+            if (!String.Equals(response.ResponseUri.Host, "raw.githubusercontent.com", StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException("GitHub redirected the graphics helper to an untrusted host.");
+            byte[] buffer = new byte[8192];
+            int read;
+            while ((read = input.Read(buffer, 0, buffer.Length)) > 0)
+            {
+                if (output.Length + read > MaxGraphicsModuleBytes) throw new InvalidOperationException("The graphics helper exceeded its size limit.");
+                output.Write(buffer, 0, read);
+            }
+            bytes = output.ToArray();
+        }
+        if (!String.Equals(GitBlobSha(bytes), hash.Groups[1].Value, StringComparison.Ordinal))
+            throw new InvalidOperationException("The downloaded graphics helper did not match the launcher-pinned Git blob SHA.");
+        Directory.CreateDirectory(Path.GetDirectoryName(destination));
+        string temporary = destination + "." + Guid.NewGuid().ToString("N") + ".tmp";
+        try
+        {
+            File.WriteAllBytes(temporary, bytes);
+            if (!String.Equals(GitBlobSha(File.ReadAllBytes(temporary)), hash.Groups[1].Value, StringComparison.Ordinal))
+                throw new InvalidOperationException("The cached graphics helper failed its Git blob SHA check.");
+            if (File.Exists(destination)) File.Replace(temporary, destination, null);
+            else File.Move(temporary, destination);
+        }
+        finally { if (File.Exists(temporary)) File.Delete(temporary); }
+        return true;
     }
 
     private static int InstallForCurrentUser()
@@ -314,7 +432,7 @@ internal static class CafeLauncherWebRunner
         return Version.TryParse(candidate, out candidateVersion) && Version.TryParse(current, out currentVersion) && candidateVersion > currentVersion;
     }
 
-    private static string TryUpdateRunner(string requestId)
+    private static string TryUpdateRunner()
     {
         const string metadataUrl = "https://github.com/fabjoncela/Cs-script/releases/latest/download/CafeLauncherWebRunner.release.json";
         byte[] metadataBytes;
@@ -475,10 +593,9 @@ internal static class CafeLauncherWebRunner
         return InstallPinnedLogitechHelper(bytes, destination);
     }
 
-    private static void StartUpdatedRunner(string executable, string requestId)
+    private static void StartUpdatedRunner(string executable, string protocolUri)
     {
-        string uri = "cafelauncher://v1/run/" + requestId;
-        ProcessStartInfo start = new ProcessStartInfo(executable, "\"" + uri + "\" --after-update");
+        ProcessStartInfo start = new ProcessStartInfo(executable, "\"" + protocolUri + "\" --after-update");
         start.UseShellExecute = false;
         start.CreateNoWindow = true;
         start.WorkingDirectory = Path.GetDirectoryName(executable);
@@ -516,7 +633,7 @@ internal static class CafeLauncherWebRunner
         return match.Groups[1].Value;
     }
 
-    private static int ExecuteClaimedAction(string requestId, string action, string profile, string capability, bool runnerUpdated)
+    private static int ExecuteClaimedAction(string requestId, string action, string profile, int profileRevision, string capability, bool runnerUpdated)
     {
         SendEvent(requestId, capability, "RUNNING", "Runner claimed request", "SUCCESS", "CafeLauncher runner is ready on this Windows session.", null);
         if (!IsSupportedAction(action))
@@ -577,7 +694,7 @@ internal static class CafeLauncherWebRunner
                 return 1;
             }
             actionMayHaveRun = action != "detect-pc";
-            Dictionary<string, object> detection = RunLauncherAction(launcherPath, requestId, action, profile, runnerUpdated, capability);
+            Dictionary<string, object> detection = RunLauncherAction(launcherPath, requestId, action, profile, profileRevision, runnerUpdated, capability);
             if (action != "detect-pc")
             {
                 if (Convert.ToInt32(detection["schemaVersion"]) != 1)
@@ -955,7 +1072,7 @@ internal static class CafeLauncherWebRunner
         }
     }
 
-    private static Dictionary<string, object> RunLauncherAction(string launcherPath, string requestId, string action, string profile, bool runnerUpdated, string capability)
+    private static Dictionary<string, object> RunLauncherAction(string launcherPath, string requestId, string action, string profile, int profileRevision, bool runnerUpdated, string capability)
     {
         byte[] sourceBytes = File.ReadAllBytes(launcherPath);
         string source = Encoding.UTF8.GetString(sourceBytes);
@@ -984,6 +1101,7 @@ internal static class CafeLauncherWebRunner
             start.EnvironmentVariables["CAFE_WEB_REQUEST_ID"] = requestId;
             start.EnvironmentVariables["CAFE_WEB_RESULT_FILE"] = resultPath;
             start.EnvironmentVariables["CAFE_WEB_PROGRESS_DIR"] = progressDirectory;
+            if (action != "detect-pc") start.EnvironmentVariables["CAFE_WEB_PROFILE_REVISION"] = profileRevision.ToString(CultureInfo.InvariantCulture);
             if (runnerUpdated) start.EnvironmentVariables["CAFE_WEB_RUNNER_UPDATED"] = "1";
             if (profile != null) start.EnvironmentVariables["CAFE_WEB_PROFILE"] = profile;
             using (Process process = Process.Start(start))

@@ -11,7 +11,7 @@ del /q "%CAFE_RESTART_SIGNAL%" >nul 2>&1
 exit /b
 
 # POWERSHELL_GUI
-# CAFE_RELEASE=2026.11.13.9
+# CAFE_RELEASE=2026.11.13.10
 
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
@@ -10527,12 +10527,14 @@ function Get-CafeWebPendingReason {
 }
 
 function Get-CafeWebActionSnapshot {
-    param([Parameter(Mandatory=$true)][string]$ProfileName,[switch]$NoCache)
+    param([Parameter(Mandatory=$true)][string]$ProfileName,[int]$Revision=0,[switch]$NoCache)
     if(-not $script:GamingProfiles.Contains($ProfileName)){throw 'Unknown CafeLauncher profile.'}
-    $latest=Get-CafeHttpBytes -Uri ($script:BackendBaseUrl+'/v1/profiles/'+[Uri]::EscapeDataString($ProfileName)) -MaxBytes 2097152
-    $revision=0
-    if(-not [int]::TryParse([string]$latest.Headers['X-Profile-Revision'],[ref]$revision) -or $revision -lt 1){throw 'The primary backend did not provide a valid current profile revision.'}
-    $snapshot=Get-CafeBackendProfileHistoryRevision -ProfileName $ProfileName -Revision $revision
+    $revisionToRead=$Revision
+    if($revisionToRead -lt 1){
+        $latest=Get-CafeHttpBytes -Uri ($script:BackendBaseUrl+'/v1/profiles/'+[Uri]::EscapeDataString($ProfileName)) -MaxBytes 2097152
+        if(-not [int]::TryParse([string]$latest.Headers['X-Profile-Revision'],[ref]$revisionToRead) -or $revisionToRead -lt 1){throw 'The primary backend did not provide a valid current profile revision.'}
+    }
+    $snapshot=Get-CafeBackendProfileHistoryRevision -ProfileName $ProfileName -Revision $revisionToRead
     if([string]$snapshot.Source -cne 'Backend'){throw 'The web action requires a verified primary-backend snapshot.'}
     if($script:BackendRevisions.ContainsKey($ProfileName) -and [int]$snapshot.Revision -lt [int]$script:BackendRevisions[$ProfileName]){
         throw 'The backend profile revision is older than this PC has verified. Review the restore in the Windows dashboard before applying it.'
@@ -10557,7 +10559,7 @@ function Set-CafeWebActionSnapshot {
 }
 
 function Reset-CafeWebPendingEditsAfterRunnerUpdate {
-    param([Parameter(Mandatory=$true)][string]$ProfileName)
+    param([Parameter(Mandatory=$true)][string]$ProfileName,[int]$PinnedRevision=0)
     if($env:CAFE_WEB_RUNNER_UPDATED -cne '1'){return $null}
     $pendingProfiles=New-Object 'System.Collections.Generic.List[string]'
     foreach($name in @($script:GamingProfiles.Keys)){
@@ -10568,7 +10570,10 @@ function Reset-CafeWebPendingEditsAfterRunnerUpdate {
     # validated as one revision for every pending profile. If any read fails,
     # keep the local draft and stop the action.
     $snapshots=@{}
-    foreach($name in $pendingProfiles){$snapshots[$name]=Get-CafeWebActionSnapshot -ProfileName $name -NoCache}
+    foreach($name in $pendingProfiles){
+        $revision=if($name -ceq $ProfileName){$PinnedRevision}else{0}
+        $snapshots[$name]=Get-CafeWebActionSnapshot -ProfileName $name -Revision $revision -NoCache
+    }
     foreach($name in $pendingProfiles){Set-CafeWebActionSnapshot -ProfileName $name -Snapshot $snapshots[$name] -NoSave}
     foreach($name in $pendingProfiles){
         $script:PendingSync[$name]=$false
@@ -10599,10 +10604,12 @@ function Invoke-CafeWebApplyProfile {
     $run=$ProfileName
     try{
         Start-CafeWebProgressStage -Name 'Check profile state and refresh verified snapshot' -Detail 'Checking pending edits and reading the selected profile from the backend.'
-        $snapshot=Reset-CafeWebPendingEditsAfterRunnerUpdate -ProfileName $ProfileName
+        $pinnedRevision=0
+        if(-not [int]::TryParse([string]$env:CAFE_WEB_PROFILE_REVISION,[ref]$pinnedRevision) -or $pinnedRevision -lt 1){throw 'The runner did not provide a valid backend-pinned profile revision.'}
+        $snapshot=Reset-CafeWebPendingEditsAfterRunnerUpdate -ProfileName $ProfileName -PinnedRevision $pinnedRevision
         $pending=Get-CafeWebPendingReason -ProfileName $ProfileName
         if($pending){Complete-CafeWebProgressStage -Name 'Check profile state and refresh verified snapshot' -Status 'SKIPPED' -Detail $pending;return (New-CafeWebProfileActionEnvelope -State 'SKIPPED' -Summary $pending -Steps @([ordered]@{name='Profile state';status='SKIPPED';detail=$pending}))}
-        if(-not $snapshot){$snapshot=Get-CafeWebActionSnapshot -ProfileName $ProfileName}
+        if(-not $snapshot){$snapshot=Get-CafeWebActionSnapshot -ProfileName $ProfileName -Revision $pinnedRevision}
         Complete-CafeWebProgressStage -Name 'Check profile state and refresh verified snapshot' -Status 'SUCCESS' -Detail 'The profile, graphics, and CFG snapshot is ready.'
         Start-CafeWebProgressStage -Name 'Verify Steam and CS2 target' -Detail 'Checking the active Steam session and unique CS2 config folder.'
         $inventory=Get-PCDiagnostics -AsObject
@@ -10690,10 +10697,12 @@ function Invoke-CafeWebApplyGraphics {
     $mayHaveChanged=$false
     try{
         Start-CafeWebProgressStage -Name 'Check graphics profile state and refresh snapshot' -Detail 'Checking pending edits and reading the selected graphics preset from the backend.'
-        $snapshot=Reset-CafeWebPendingEditsAfterRunnerUpdate -ProfileName $ProfileName
+        $pinnedRevision=0
+        if(-not [int]::TryParse([string]$env:CAFE_WEB_PROFILE_REVISION,[ref]$pinnedRevision) -or $pinnedRevision -lt 1){throw 'The runner did not provide a valid backend-pinned profile revision.'}
+        $snapshot=Reset-CafeWebPendingEditsAfterRunnerUpdate -ProfileName $ProfileName -PinnedRevision $pinnedRevision
         $pending=Get-CafeWebPendingReason -ProfileName $ProfileName
         if($pending){Complete-CafeWebProgressStage -Name 'Check graphics profile state and refresh snapshot' -Status 'SKIPPED' -Detail $pending;return (New-CafeWebProfileActionEnvelope -State 'SKIPPED' -Summary $pending -Steps @([ordered]@{name='Profile state';status='SKIPPED';detail=$pending}))}
-        if(-not $snapshot){$snapshot=Get-CafeWebActionSnapshot -ProfileName $ProfileName}
+        if(-not $snapshot){$snapshot=Get-CafeWebActionSnapshot -ProfileName $ProfileName -Revision $pinnedRevision}
         Complete-CafeWebProgressStage -Name 'Check graphics profile state and refresh snapshot' -Status 'SUCCESS' -Detail 'The selected graphics preset was read from a verified snapshot.'
         Start-CafeWebProgressStage -Name 'Load and verify graphics helper' -Detail 'Checking the cached helper or downloading the pinned helper if needed.'
         $cache=Get-CafeVerifiedGraphicsModulePath
@@ -10794,7 +10803,9 @@ function Invoke-CafeWebPlayExec {
         if($cfgName -notmatch '^[A-Za-z0-9_-]+\.cfg$'){throw 'The selected profile CFG name is invalid.'}
 
         Start-CafeWebProgressStage -Name 'Check pending profile changes and Steam/CS2 session' -Detail 'Checking local profile edits, Steam login, and a unique CS2 config target.'
-        $updatedSnapshot=Reset-CafeWebPendingEditsAfterRunnerUpdate -ProfileName $ProfileName
+        $pinnedRevision=0
+        if(-not [int]::TryParse([string]$env:CAFE_WEB_PROFILE_REVISION,[ref]$pinnedRevision) -or $pinnedRevision -lt 1){throw 'The runner did not provide a valid backend-pinned profile revision.'}
+        $updatedSnapshot=Reset-CafeWebPendingEditsAfterRunnerUpdate -ProfileName $ProfileName -PinnedRevision $pinnedRevision
         $queuePath=Get-CafeBackendQueuePath -ProfileName $ProfileName
         if($script:PendingSync[$ProfileName] -or $script:PendingTarget[$ProfileName] -eq 'GitHubLegacy' -or
            (Test-Path -LiteralPath $queuePath -PathType Leaf) -or
@@ -10833,11 +10844,7 @@ function Invoke-CafeWebPlayExec {
             $snapshot=$updatedSnapshot
             $revision=[int]$snapshot.Revision
         }else{
-            $latestResponse=Get-CafeHttpBytes -Uri ($script:BackendBaseUrl+'/v1/profiles/'+[Uri]::EscapeDataString($ProfileName)) -MaxBytes 2097152
-            $revision=0
-            if(-not [int]::TryParse([string]$latestResponse.Headers['X-Profile-Revision'],[ref]$revision) -or $revision -lt 1){
-                throw 'The primary backend did not provide a valid current profile revision.'
-            }
+            $revision=$pinnedRevision
             $snapshot=Get-CafeBackendProfileHistoryRevision -ProfileName $ProfileName -Revision $revision
         }
         if($script:BackendRevisions.ContainsKey($ProfileName) -and [int]$snapshot.Revision -lt [int]$script:BackendRevisions[$ProfileName]){
@@ -10932,7 +10939,7 @@ function Invoke-CafeWebPlayExec {
 
 if($env:CAFE_WEB_ACTION -ceq 'play-exec'){
     try{
-        if($env:CAFE_WEB_REQUEST_ID -notmatch '^[A-Za-z0-9_-]{43}$' -or $env:CAFE_WEB_PROFILE -notmatch '^(FabMode|ArliMode|BrileMode|ArmlMode|OliMode|Provmode)$'){
+        if($env:CAFE_WEB_REQUEST_ID -notmatch '^[A-Za-z0-9_-]{43}$' -or $env:CAFE_WEB_PROFILE -notmatch '^(FabMode|ArliMode|BrileMode|ArmlMode|OliMode|Provmode)$' -or $env:CAFE_WEB_PROFILE_REVISION -notmatch '^[1-9][0-9]{0,8}$'){
             throw 'Invalid CafeLauncher web action context.'
         }
         $resultPath=[IO.Path]::GetFullPath([string]$env:CAFE_WEB_RESULT_FILE)
@@ -10959,7 +10966,7 @@ if($env:CAFE_WEB_ACTION -ceq 'play-exec'){
 if($env:CAFE_WEB_ACTION -in @('apply-profile','apply-graphics')){
     $webProfile=[string]$env:CAFE_WEB_PROFILE
     try{
-        if($env:CAFE_WEB_REQUEST_ID -notmatch '^[A-Za-z0-9_-]{43}$' -or $webProfile -notmatch '^(FabMode|ArliMode|BrileMode|ArmlMode|OliMode|Provmode)$'){
+        if($env:CAFE_WEB_REQUEST_ID -notmatch '^[A-Za-z0-9_-]{43}$' -or $webProfile -notmatch '^(FabMode|ArliMode|BrileMode|ArmlMode|OliMode|Provmode)$' -or $env:CAFE_WEB_PROFILE_REVISION -notmatch '^[1-9][0-9]{0,8}$'){
             throw 'Invalid CafeLauncher web action context.'
         }
         $resultPath=[IO.Path]::GetFullPath([string]$env:CAFE_WEB_RESULT_FILE)
