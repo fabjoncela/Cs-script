@@ -3,7 +3,7 @@
 This file gives Codex and maintainers the operational context needed to work safely in this repository. **Always follow the checked-out source tree.** The generated state block below reports the launcher release marker, not whether that code has shipped to `main`.
 
 <!-- BEGIN GENERATED LAUNCHER STATE -->
-- Launcher release: `2026.11.13.6`
+- Launcher release: `2026.11.13.7`
 - Generated from the unique `# CAFE_RELEASE` marker in `cafe.bat` by `tools/Update-Context.ps1`.
 <!-- END GENERATED LAUNCHER STATE -->
 
@@ -184,7 +184,7 @@ Dashboard **Apply Graphics** is a separate action from the normal profile Apply 
 - Each profile card orders its actions as 1.Apply profile, 2.Game Graphics, 3.Play + Settings, Edit profile, and Capture CS2, with a 12 px gap before Edit and Capture.
 - The dashboard builds profile cards in the ordered `GamingProfiles` registry and displays five per page. Previous/Next changes only which cards are attached to the dashboard; it does not refresh profiles or make cloud requests. The sixth registered profile begins page 2. The current registry contains six profiles, so `Provmode` appears on page 2.
 - Profile-row hover feedback is active only while the launcher is the active window and the Dashboard tab is selected. Deactivating the launcher clears any hover color immediately, including when a modal profile editor opens.
-- The dashboard refreshes its initially selected `FabMode` from the backend or verified mirror before showing it. Edit, Apply, Play + Exec, and Graphics refresh the profile they act on. The selected-profile card distinguishes backend values, GitHub mirror values, local pending values, and local fallback values. Its pointer speed is displayed as the matching classic Windows level from `1/11` through `11/11`.
+- The dashboard refreshes its initially selected `FabMode` from the backend or verified mirror before showing it. Edit, Apply, Play + Exec, and Graphics refresh the profile they act on. The selected-profile card distinguishes backend values, GitHub mirror values, local pending values, and local fallback values. Its pointer speed is displayed as the matching classic Windows level from `1/11` through `11/11`, and its CS2 resolution comes from the graphics preset already loaded in memory, with no extra request.
 - Opening Edit fetches one complete profile/graphics/CFG snapshot and reuses it for the profile fields, graphics settings, sensitivity, and voice bind. If the backend read fails, that same open uses the one verified mirror snapshot; if both cloud sources fail, existing local fallback confirmations apply without repeating cloud reads.
 - Normal Apply reads the selected profile's graphics preset through the same backend-first adapter and uses its `ScalingMode` as authoritative. Mirror-sourced data requires explicit confirmation before profile actions. Apply Graphics fetches the preset immediately before changing CS2 and also confirms mirror data; local fallback requires explicit confirmation.
 - Before an action or editor open, `SyncPending` offers backend sync, deliberate discard after a fresh backend fetch, or cancel. Older GitHub pending edits are preserved and blocked until explicitly resolved. A failed backend or mirror read never silently discards local edits.
