@@ -8,9 +8,10 @@ if(-not $marker.Success){throw 'Missing embedded PowerShell marker.'}
 $tokens=$null;$errors=$null
 $ast=[System.Management.Automation.Language.Parser]::ParseInput($source.Substring($marker.Index+$marker.Length),[ref]$tokens,[ref]$errors)
 if($errors.Count){throw ('Launcher parse failed: '+$errors[0].Message)}
-if($source -notmatch 'if\s*\(\s*\$profile\.LaunchApps\s+-and\s+-not\s+\$WebAction\s*\)' -or
-   $source -notmatch 'Web Apply profile intentionally skipped Launch All'){
-    throw 'The web profile action must skip app launches while preserving normal Windows Launch All behavior.'
+if($source -notmatch 'if\s*\(\s*\$profile\.LaunchApps\s*\)' -or
+   $source -notmatch 'Launch-ProfileApps -SkipGHub -ProfileName \$ProfileName' -or
+   $source -match 'Web Apply profile intentionally skipped Launch All'){
+    throw 'Web and Windows Apply Profile must both honor LaunchApps and use the shared app-launch routine.'
 }
 foreach($name in @('Test-CafeWebPinnedActionTarget','New-CafeWebProfileActionEnvelope','Get-CafeWebPendingReason','Reset-CafeWebPendingEditsAfterRunnerUpdate','Complete-CafeWebRunnerProfileReset','Request-LogitechLiveDPI','Write-CafeWebProgress','Start-CafeWebProgressStage','Complete-CafeWebProgressStage','Invoke-CafeWebApplyProfile','Invoke-CafeWebApplyGraphics')){
     $definition=@($ast.FindAll({param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst]},$true)|Where-Object{$_.Name -eq $name})
