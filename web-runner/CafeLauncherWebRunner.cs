@@ -20,13 +20,13 @@ using Microsoft.Win32;
 [assembly: AssemblyDescription("Per-user Windows companion for CafeLauncher web actions.")]
 [assembly: AssemblyCompany("CafeLauncher")]
 [assembly: AssemblyProduct("CafeLauncher Web Runner")]
-[assembly: AssemblyVersion("0.7.2.0")]
-[assembly: AssemblyFileVersion("0.7.2.0")]
+[assembly: AssemblyVersion("0.7.3.0")]
+[assembly: AssemblyFileVersion("0.7.3.0")]
 
 internal static class CafeLauncherWebRunner
 {
     private const string BackendOrigin = "https://fabjon-hp.tail681ec9.ts.net:10000";
-    private const string RunnerVersion = "0.7.2";
+    private const string RunnerVersion = "0.7.3";
     private const string RunnerUninstallKey = @"Software\Microsoft\Windows\CurrentVersion\Uninstall\CafeLauncherWebRunner";
     private const int MaxLauncherBytes = 1000000;
     private const int MaxRunnerBytes = 8 * 1024 * 1024;
@@ -945,10 +945,26 @@ internal static class CafeLauncherWebRunner
                 if (process == null) throw new InvalidOperationException("Windows PowerShell could not be started.");
                 DateTime deadline = DateTime.UtcNow.AddMilliseconds(120000);
                 DateTime nextControlCheck = DateTime.MinValue;
+                DateTime resultFirstObserved = DateTime.MinValue;
                 int nextProgressIndex = 1;
-                while (!process.WaitForExit(500))
+                Dictionary<string, object> completedResult = null;
+                while (!process.WaitForExit(250))
                 {
                     ForwardProgressEvents(progressDirectory, requestId, capability, ref nextProgressIndex);
+                    if (action != "detect-pc")
+                    {
+                        Dictionary<string, object> candidate;
+                        if (TryReadCompletedLauncherResult(resultPath, out candidate))
+                        {
+                            if (resultFirstObserved == DateTime.MinValue) resultFirstObserved = DateTime.UtcNow;
+                            else if (TryStopLauncherAfterCompletedResult(process, resultPath, resultFirstObserved, DateTime.UtcNow, out candidate))
+                            {
+                                completedResult = candidate;
+                                break;
+                            }
+                        }
+                        else resultFirstObserved = DateTime.MinValue;
+                    }
                     if (DateTime.UtcNow >= nextControlCheck)
                     {
                         nextControlCheck = DateTime.UtcNow.AddSeconds(2);
@@ -969,8 +985,11 @@ internal static class CafeLauncherWebRunner
                     }
                 }
                 ForwardProgressEvents(progressDirectory, requestId, capability, ref nextProgressIndex);
-                if (process.ExitCode != 0 || !File.Exists(resultPath) || new FileInfo(resultPath).Length > 64 * 1024)
-                    throw new InvalidOperationException("The verified launcher could not return the PC detection result.");
+                if (completedResult == null && action != "detect-pc")
+                    TryReadCompletedLauncherResult(resultPath, out completedResult);
+                if ((process.ExitCode != 0 && completedResult == null) || !File.Exists(resultPath) || new FileInfo(resultPath).Length > 64 * 1024)
+                    throw new InvalidOperationException("The verified launcher could not return a valid action result.");
+                if (completedResult != null) return completedResult;
             }
             Dictionary<string, object> result = Json.Deserialize<Dictionary<string, object>>(File.ReadAllText(resultPath, Encoding.UTF8));
             if (result == null) throw new InvalidOperationException("The launcher returned an invalid action result.");
@@ -979,6 +998,49 @@ internal static class CafeLauncherWebRunner
         finally
         {
             try { Directory.Delete(workDir, true); } catch { }
+        }
+    }
+
+    internal static bool TryReadCompletedLauncherResult(string resultPath, out Dictionary<string, object> result)
+    {
+        result = null;
+        try
+        {
+            if (!File.Exists(resultPath)) return false;
+            FileInfo info = new FileInfo(resultPath);
+            if (info.Length <= 0 || info.Length > 64 * 1024) return false;
+            Dictionary<string, object> candidate = Json.Deserialize<Dictionary<string, object>>(File.ReadAllText(resultPath, Encoding.UTF8));
+            object schema;
+            object rawResult;
+            if (candidate == null || !candidate.TryGetValue("schemaVersion", out schema) || Convert.ToInt32(schema, CultureInfo.InvariantCulture) != 1 ||
+                !candidate.ContainsKey("state") || !candidate.TryGetValue("result", out rawResult)) return false;
+            string state = candidate["state"] as string;
+            Dictionary<string, object> payload = rawResult as Dictionary<string, object>;
+            if (state != "COMPLETED" && state != "PARTIAL" && state != "SKIPPED" && state != "FAILED" && state != "INTERRUPTED") return false;
+            if (payload == null || !payload.ContainsKey("summary") || !(payload["summary"] is string) ||
+                !payload.ContainsKey("steps") || !payload.ContainsKey("data")) return false;
+            result = candidate;
+            return true;
+        }
+        catch { return false; }
+    }
+
+    internal static bool TryStopLauncherAfterCompletedResult(Process process, string resultPath, DateTime firstObservedUtc, DateTime nowUtc, out Dictionary<string, object> result)
+    {
+        result = null;
+        if (nowUtc - firstObservedUtc < TimeSpan.FromSeconds(2) || !TryReadCompletedLauncherResult(resultPath, out result)) return false;
+        if (process == null) { result = null; return false; }
+        try
+        {
+            if (!process.HasExited) process.Kill();
+            if (!process.WaitForExit(5000))
+                throw new TimeoutException("CafeLauncher returned its result, but Windows PowerShell could not be stopped cleanly.");
+            return true;
+        }
+        catch
+        {
+            result = null;
+            throw;
         }
     }
 

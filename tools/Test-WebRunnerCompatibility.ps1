@@ -19,13 +19,23 @@ try {
     @'
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
+using System.Reflection;
 using System.Text;
+using System.Threading;
 
 internal static class CompatibilityTests
 {
-    private static int Main()
+    private static int Main(string[] args)
     {
+        if (args.Length == 2 && args[0] == "--linger")
+        {
+            File.WriteAllText(args[1], "{\"schemaVersion\":1,\"state\":\"COMPLETED\",\"result\":{\"summary\":\"finished\",\"steps\":[],\"data\":{\"executionOutcomeKnown\":true}}}", new UTF8Encoding(false));
+            Thread.Sleep(30000);
+            return 0;
+        }
+
         string source = "@echo off\r\n# CAFE_RELEASE=2026.11.12.1\r\n# POWERSHELL_GUI\r\n" +
             "if($env:CAFE_WEB_ACTION -ceq 'detect-pc'){ exit 0 }\r\n" +
             "if($env:CAFE_WEB_ACTION -ceq 'play-exec'){ exit 0 }\r\n" +
@@ -44,8 +54,8 @@ internal static class CompatibilityTests
             { "version", "0.7.0" }, { "sha256", new string('a', 64) }, { "size", 50000 }
         };
         Dictionary<string, object> checkedRelease = CafeLauncherWebRunner.ValidateRunnerReleaseMetadata(release);
-        if ((int)checkedRelease["size"] != 50000 || !CafeLauncherWebRunner.IsRunnerVersionNewer("0.7.0", "0.6.0") ||
-            CafeLauncherWebRunner.IsRunnerVersionNewer("0.6.0", "0.7.0"))
+        if ((int)checkedRelease["size"] != 50000 || !CafeLauncherWebRunner.IsRunnerVersionNewer("0.7.3", "0.7.2") ||
+            !CafeLauncherWebRunner.IsRunnerVersionNewer("0.7.0", "0.6.0") || CafeLauncherWebRunner.IsRunnerVersionNewer("0.6.0", "0.7.0"))
             throw new Exception("Runner release metadata validation or update ordering failed.");
         if (CafeLauncherWebRunner.IsPinnedLogitechHelper(new byte[0]))
             throw new Exception("An unverified Logitech helper was accepted as the pinned helper.");
@@ -82,8 +92,44 @@ internal static class CompatibilityTests
             CafeLauncherWebRunner.CanReuseGithubLauncherAfterNotModified(304, "\"etag-1\"", "\"etag-1\"", false))
             throw new Exception("Conditional GitHub ETag response handling was incorrect.");
 
-        Console.WriteLine("PASS: GitHub blob/ETag validation, verified fallback cache, action detection, and tamper rejection.");
+        TestCompletedResultStopsLingeringPowerShell();
+
+        Console.WriteLine("PASS: GitHub blob/ETag validation, verified fallback cache, result-file recovery, action detection, and tamper rejection.");
         return 0;
+    }
+
+    private static void TestCompletedResultStopsLingeringPowerShell()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "CafeLauncherLingeringProcessTest-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        string resultPath = Path.Combine(root, "result.json");
+        Process child = null;
+        try
+        {
+            ProcessStartInfo start = new ProcessStartInfo(Assembly.GetExecutingAssembly().Location, "--linger \"" + resultPath + "\"");
+            start.UseShellExecute = false;
+            start.CreateNoWindow = true;
+            child = Process.Start(start);
+            DateTime deadline = DateTime.UtcNow.AddSeconds(10);
+            while (!File.Exists(resultPath) && DateTime.UtcNow < deadline) Thread.Sleep(25);
+            if (!File.Exists(resultPath)) throw new Exception("The lingering result fixture did not write its result.");
+
+            Dictionary<string, object> result;
+            if (!CafeLauncherWebRunner.TryStopLauncherAfterCompletedResult(child, resultPath,
+                DateTime.UtcNow.AddSeconds(-3), DateTime.UtcNow, out result))
+                throw new Exception("A valid final result did not release the lingering PowerShell process.");
+            if (!child.HasExited || (string)result["state"] != "COMPLETED")
+                throw new Exception("The lingering process result was not safely returned after process cleanup.");
+        }
+        finally
+        {
+            if (child != null)
+            {
+                try { if (!child.HasExited) child.Kill(); } catch { }
+                child.Dispose();
+            }
+            try { Directory.Delete(root, true); } catch { }
+        }
     }
 
     private static Dictionary<string, object> Payload(byte[] bytes)
