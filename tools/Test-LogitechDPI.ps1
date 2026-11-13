@@ -16,7 +16,7 @@ $functions=@{}
 foreach($def in $ast.FindAll({param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst]},$true)){
     $functions[$def.Name]=$def.Extent.Text
 }
-foreach($name in @('Start-LogihubAsyncDownload','Request-LogitechLiveDPI','Get-LogihubExecutable','Invoke-Logihub','Set-LogitechLiveDPI','Set-LogitechOnboardDPI','Invoke-GamingProfile','Show-ProfileEditor','Import-ProfileValues','Export-ProfileValues')){
+foreach($name in @('Start-LogihubAsyncDownload','Request-LogitechLiveDPI','Get-LogihubExecutable','Invoke-Logihub','Invoke-LogitechDPISetAndReadback','Set-LogitechLiveDPI','Set-LogitechOnboardDPI','Invoke-GamingProfile','Show-ProfileEditor','Import-ProfileValues','Export-ProfileValues')){
     if(-not $functions.ContainsKey($name)){throw ('Missing function: '+$name)}
 }
 $apply=$functions['Invoke-GamingProfile']
@@ -27,6 +27,15 @@ if($apply -match 'Set-LogitechOnboardDPI|onboard.*set-dpi'){throw 'Profile apply
 $liveDpi=$functions['Set-LogitechLiveDPI']
 if($liveDpi -match "'onboard'\s*,\s*'set-dpi'|onboard.*set-dpi|Stop-Process|Stop-Service"){
     throw 'Live DPI must never write onboard DPI memory or stop G HUB.'
+}
+$dpiApply=$functions['Invoke-LogitechDPISetAndReadback']
+$dpiReadAt=$dpiApply.IndexOf('$before=Get-LogitechDPIReadback',[StringComparison]::Ordinal)
+$matchAt=$dpiApply.IndexOf('if($before -eq $DPI)',[StringComparison]::Ordinal)
+$writeAt=$dpiApply.IndexOf("'dpi','set'",[StringComparison]::Ordinal)
+if($dpiReadAt -lt 0 -or $matchAt -le $dpiReadAt -or $writeAt -le $matchAt -or
+   $dpiApply -notmatch 'Logitech DPI already matched.*no setter was called' -or
+   $dpiApply -notmatch 'changed during DPI read-back'){
+    throw 'Logitech DPI must read and verify the connected device before skipping an already-matching setter.'
 }
 foreach($phrase in @(
     'pro_x_wireless_mouse',

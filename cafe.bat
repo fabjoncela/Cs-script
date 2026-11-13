@@ -962,44 +962,106 @@ function Apply-ProfileMouse {
     Write-Log "$ProfileName mouse settings started."
 
     try {
-        # Write Windows mouse settings directly.
-        Set-ItemProperty -Path $mousePath -Name MouseSensitivity -Value ([string]$PointerSpeed) -ErrorAction Stop
-        Set-ItemProperty -Path $mousePath -Name MouseSpeed -Value $accelSetting -ErrorAction Stop
-        Set-ItemProperty -Path $mousePath -Name MouseThreshold1 -Value ([string]$threshold1) -ErrorAction Stop
-        Set-ItemProperty -Path $mousePath -Name MouseThreshold2 -Value ([string]$threshold2) -ErrorAction Stop
-        Write-Log "Mouse registry values written (speed $PointerSpeed; acceleration $accelDescription)."
+        $currentMouse=Get-ItemProperty -Path $mousePath -ErrorAction Stop
+        $pointerRegistryMatches=[string]$currentMouse.MouseSensitivity -eq [string]$PointerSpeed
+        $accelerationRegistryMatches=[string]$currentMouse.MouseSpeed -eq $accelSetting -and
+            [string]$currentMouse.MouseThreshold1 -eq [string]$threshold1 -and
+            [string]$currentMouse.MouseThreshold2 -eq [string]$threshold2
+        $liveSpeedReadOk=$false
+        $liveSpeed=-1
+        $liveSpeedPtr=[Runtime.InteropServices.Marshal]::AllocHGlobal(4)
+        try {
+            [Runtime.InteropServices.Marshal]::WriteInt32($liveSpeedPtr,0)
+            $liveSpeedReadOk=[FabMouseNative]::SystemParametersInfo(0x0070,0,$liveSpeedPtr,0)
+            if($liveSpeedReadOk){$liveSpeed=[Runtime.InteropServices.Marshal]::ReadInt32($liveSpeedPtr)}
+        } finally {[Runtime.InteropServices.Marshal]::FreeHGlobal($liveSpeedPtr)}
+        $liveMouseReadOk=$false
+        $liveMouse=@(-1,-1,-1)
+        $liveMousePtr=[Runtime.InteropServices.Marshal]::AllocHGlobal(12)
+        try {
+            [Runtime.InteropServices.Marshal]::WriteInt32($liveMousePtr,0,0)
+            [Runtime.InteropServices.Marshal]::WriteInt32($liveMousePtr,4,0)
+            [Runtime.InteropServices.Marshal]::WriteInt32($liveMousePtr,8,0)
+            $liveMouseReadOk=[FabMouseNative]::SystemParametersInfo(0x0003,0,$liveMousePtr,0)
+            if($liveMouseReadOk){$liveMouse=@(
+                [Runtime.InteropServices.Marshal]::ReadInt32($liveMousePtr,0),
+                [Runtime.InteropServices.Marshal]::ReadInt32($liveMousePtr,4),
+                [Runtime.InteropServices.Marshal]::ReadInt32($liveMousePtr,8))}
+        } finally {[Runtime.InteropServices.Marshal]::FreeHGlobal($liveMousePtr)}
+        $liveSpeedMatches=$liveSpeedReadOk -and $liveSpeed -eq $PointerSpeed
+        $liveAccelerationMatches=$liveMouseReadOk -and $liveMouse[0] -eq $threshold1 -and
+            $liveMouse[1] -eq $threshold2 -and $liveMouse[2] -eq $acceleration
+        $pointerAlreadyMatched=$pointerRegistryMatches -and $liveSpeedMatches
+        $accelerationAlreadyMatched=$accelerationRegistryMatches -and $liveAccelerationMatches
+        if($pointerAlreadyMatched){Write-Log "Windows pointer speed already matched $PointerSpeed in registry and live session; no write was needed."}
+        if($accelerationAlreadyMatched){Write-Log "Windows mouse acceleration already matched $accelDescription in registry and live session; no write was needed."}
+        if($pointerAlreadyMatched -and $accelerationAlreadyMatched){
+            $runName=if($script:ActiveRunName){$script:ActiveRunName}else{$ProfileName}
+            $accelActual=if($DisableAcceleration){'disabled'}else{'enabled'}
+            Set-RunOutcome -Run $runName -Setting 'Windows pointer speed' -Requested ([string]$PointerSpeed) `
+                -Target 'Current Windows user/session' -Status APPLIED -Actual ([string]$liveSpeed) `
+                -Detail 'Already matched in the registry and live Windows API; no write was needed.'
+            Set-RunOutcome -Run $runName -Setting 'Windows mouse acceleration' -Requested $accelDescription `
+                -Target 'Current Windows user/session' -Status APPLIED -Actual $accelActual `
+                -Detail 'Already matched in the registry and live Windows API; no write was needed.'
+            Write-Log "Windows mouse settings already matched speed $PointerSpeed and acceleration $accelDescription; no registry, session, or broadcast writes were sent."
+            if(-not $SkipPointerOptions){Open-MousePointerOptions}
+            return
+        }
+        if(-not $liveSpeedReadOk -or -not $liveMouseReadOk){
+            Write-Log 'Could not read all active Windows mouse values for the no-change check; continuing with the normal verified apply.'
+        }
+
+        # Write only the Windows registry values that do not already match.
+        if(-not $pointerRegistryMatches){Set-ItemProperty -Path $mousePath -Name MouseSensitivity -Value ([string]$PointerSpeed) -ErrorAction Stop}
+        if(-not $accelerationRegistryMatches){
+            Set-ItemProperty -Path $mousePath -Name MouseSpeed -Value $accelSetting -ErrorAction Stop
+            Set-ItemProperty -Path $mousePath -Name MouseThreshold1 -Value ([string]$threshold1) -ErrorAction Stop
+            Set-ItemProperty -Path $mousePath -Name MouseThreshold2 -Value ([string]$threshold2) -ErrorAction Stop
+        }
+        if(-not $pointerRegistryMatches -or -not $accelerationRegistryMatches){Write-Log "Only mismatched mouse registry values were written (speed $PointerSpeed; acceleration $accelDescription)."}
 
         # Apply the requested acceleration to the active Windows session.
         # SPI_SETMOUSE expects a pointer to three integers: threshold1, threshold2, acceleration.
-        $mouseData = [Runtime.InteropServices.Marshal]::AllocHGlobal(12)
-        try {
-            [Runtime.InteropServices.Marshal]::WriteInt32($mouseData, 0, $threshold1)
-            [Runtime.InteropServices.Marshal]::WriteInt32($mouseData, 4, $threshold2)
-            [Runtime.InteropServices.Marshal]::WriteInt32($mouseData, 8, $acceleration)
-            $accelOk = [FabMouseNative]::SystemParametersInfo(
-                0x0004, 0, $mouseData, 0x03
-            )
-            if ($accelOk) {
-                Write-Log "Windows accepted SPI_SETMOUSE: acceleration $accelDescription."
-            } else {
-                $accelError = [Runtime.InteropServices.Marshal]::GetLastWin32Error()
-                Write-Log "SPI_SETMOUSE failed; Win32 error=$accelError. Registry acceleration values remain saved." "WARN"
+        $accelOk=$liveAccelerationMatches
+        if($liveAccelerationMatches){
+            Write-Log "SPI_SETMOUSE skipped; active acceleration already matched $accelDescription."
+        }else{
+            $mouseData = [Runtime.InteropServices.Marshal]::AllocHGlobal(12)
+            try {
+                [Runtime.InteropServices.Marshal]::WriteInt32($mouseData, 0, $threshold1)
+                [Runtime.InteropServices.Marshal]::WriteInt32($mouseData, 4, $threshold2)
+                [Runtime.InteropServices.Marshal]::WriteInt32($mouseData, 8, $acceleration)
+                $accelOk = [FabMouseNative]::SystemParametersInfo(
+                    0x0004, 0, $mouseData, 0x03
+                )
+                if ($accelOk) {
+                    Write-Log "Windows accepted SPI_SETMOUSE: acceleration $accelDescription."
+                } else {
+                    $accelError = [Runtime.InteropServices.Marshal]::GetLastWin32Error()
+                    Write-Log "SPI_SETMOUSE failed; Win32 error=$accelError. Registry acceleration values remain saved." "WARN"
+                }
+            } finally {
+                [Runtime.InteropServices.Marshal]::FreeHGlobal($mouseData)
             }
-        } finally {
-            [Runtime.InteropServices.Marshal]::FreeHGlobal($mouseData)
         }
 
         # Apply pointer speed to the active Windows session.
         # IMPORTANT: For SPI_SETMOUSESPEED, pvParam is the numeric value itself
         # encoded as an IntPtr (1-20), NOT a pointer to a buffer.
-        $apiOk = [FabMouseNative]::SystemParametersInfo(
-            0x0071, 0, [IntPtr]$PointerSpeed, 0x03
-        )
-        if ($apiOk) {
-            Write-Log "Windows accepted SPI_SETMOUSESPEED speed $PointerSpeed."
-        } else {
-            $apiError = [Runtime.InteropServices.Marshal]::GetLastWin32Error()
-            Write-Log "SPI_SETMOUSESPEED failed; Win32 error=$apiError. Registry values are saved, but active speed may not have changed." "ERROR"
+        $apiOk=$liveSpeedMatches
+        if($liveSpeedMatches){
+            Write-Log "SPI_SETMOUSESPEED skipped; active speed already matched $PointerSpeed."
+        }else{
+            $apiOk = [FabMouseNative]::SystemParametersInfo(
+                0x0071, 0, [IntPtr]$PointerSpeed, 0x03
+            )
+            if ($apiOk) {
+                Write-Log "Windows accepted SPI_SETMOUSESPEED speed $PointerSpeed."
+            } else {
+                $apiError = [Runtime.InteropServices.Marshal]::GetLastWin32Error()
+                Write-Log "SPI_SETMOUSESPEED failed; Win32 error=$apiError. Registry values are saved, but active speed may not have changed." "ERROR"
+            }
         }
 
         # Read back the live speed using SPI_GETMOUSESPEED, which DOES require a pointer.
@@ -1361,8 +1423,8 @@ public static class FabDisplayNative {
         if (current.dmPelsWidth == candidate.dmPelsWidth &&
             current.dmPelsHeight == candidate.dmPelsHeight &&
             current.dmDisplayFrequency == candidate.dmDisplayFrequency) {
-            report = device + " already uses " + choice + " (requested " + requested +
-                "; " + reason + "). No change needed.";
+            report = "Already matched: " + device + " uses " + choice + " (requested " + requested +
+                "; " + reason + "). No display-mode write was needed.";
             return true;
         }
         candidate.dmFields |= 0x00040000 | 0x00080000 | 0x00100000 | 0x00400000;
@@ -1713,6 +1775,12 @@ public static class FabNvApi {
             // Map the requested Control Panel percentage onto the driver's
             // extended scale (normally 0-100), not the legacy 0-63 scale.
             int requested = info.minLevel + (int)Math.Round((info.maxLevel - info.minLevel) * (percentage / 100.0));
+            if (info.currentLevel == requested) {
+                report = "Digital Vibrance already matches " + info.currentLevel +
+                    "% (requested " + percentage + "%; driver range " + info.minLevel + "-" + info.maxLevel +
+                    "%). No driver write was needed for the NVIDIA display associated with DISPLAY1.";
+                return true;
+            }
             DvcInfoEx request = info;
             request.currentLevel = requested;
             int setStatus = setLevel(handle, 0, ref request);
@@ -1772,6 +1840,12 @@ public static class FabNvApi {
             if (info.maxLevel <= info.minLevel) throw new Exception("NVIDIA returned an invalid legacy Digital Vibrance range.");
 
             uint requested = MapLegacyDvcPercentage(percentage, info.minLevel, info.maxLevel);
+            if (info.currentLevel == requested) {
+                report = "Legacy Digital Vibrance already matches requested " + percentage +
+                    "% at driver level " + info.currentLevel + " (range " + info.minLevel + "-" + info.maxLevel +
+                    "). No driver write was needed.";
+                return true;
+            }
             int setStatus = setLevel(handle, 0, requested);
             if (setStatus != 0) throw new Exception("NvAPI_SetDVCLevel failed with status " + setStatus + ".");
 
@@ -1846,6 +1920,11 @@ public static class FabNvApi {
             int status = getInfo(handle, 0, ref info);
             if (status != 0) throw new Exception("NvAPI_GetHUEInfo failed with status " + status + ".");
             uint requestedAngle = hueAngle < 0 ? info.defaultAngle : (uint)hueAngle;
+            if (info.currentAngle == requestedAngle) {
+                report = "Hue already matches " + requestedAngle + " degrees" +
+                    (hueAngle < 0 ? " (the NVIDIA driver default)" : "") + ". No driver write was needed.";
+                return true;
+            }
             int setStatus = setAngle(handle, 0, requestedAngle);
             if (setStatus != 0) throw new Exception("NvAPI_SetHUEAngle failed with status " + setStatus + ".");
             HueInfo verify = new HueInfo();
@@ -2017,19 +2096,30 @@ public static class FabNvApi {
             if (result != 0 || profile == IntPtr.Zero) throw new Exception("DRS_GetCurrentGlobalProfile status=" + result);
 
             bool[] accepted = new bool[ids.Length];
+            bool anyChanged = false;
             for (int i = 0; i < ids.Length; i++) {
                 IntPtr p = IntPtr.Zero;
                 try {
                     p = NewDrsSetting(ids[i], null);
                     int getResult = get(session, profile, ids[i], p);
+                    uint previousValue = getResult == 0
+                        ? unchecked((uint)Marshal.ReadInt32(p, DrsSettingCurrentValueOffset))
+                        : UInt32.MaxValue;
                     string previous = getResult == 0
-                        ? "0x" + unchecked((uint)Marshal.ReadInt32(p, DrsSettingCurrentValueOffset)).ToString("X8")
+                        ? "0x" + previousValue.ToString("X8")
                         : "not found (status " + getResult + ")";
+                    if (getResult == 0 && previousValue == values[i]) {
+                        accepted[i] = true;
+                        messages.Add("INFO: Already matched " + names[i] + " (" + previous + "); no driver write was needed.");
+                        continue;
+                    }
                     Marshal.FreeHGlobal(p);
+                    p = IntPtr.Zero;
                     p = NewDrsSetting(ids[i], values[i]);
                     int setResult = set(session, profile, p);
                     if (setResult == 0) {
                         accepted[i] = true;
+                        anyChanged = true;
                         messages.Add("INFO: Submitted " + names[i] + "; previous=" + previous + ".");
                     } else {
                         messages.Add("WARN: Driver rejected " + names[i] + "; status=" + setResult + ".");
@@ -2045,9 +2135,13 @@ public static class FabNvApi {
             for (int i=0; i<accepted.Length; i++) if (accepted[i]) any = true;
             if (!any) throw new Exception("NVIDIA driver accepted none of the performance/G-SYNC settings.");
 
-            result = save(session);
-            if (result != 0) throw new Exception("DRS_SaveSettings failed with status=" + result);
-            messages.Add("INFO: NVIDIA global profile saved. Re-loading to verify persisted values.");
+            if (anyChanged) {
+                result = save(session);
+                if (result != 0) throw new Exception("DRS_SaveSettings failed with status=" + result);
+                messages.Add("INFO: NVIDIA global profile saved. Re-loading to verify persisted values.");
+            } else {
+                messages.Add("INFO: All requested global driver values already matched; skipped the profile save.");
+            }
 
             result = load(session);
             if (result != 0) throw new Exception("DRS_LoadSettings read-back status=" + result);
@@ -2265,6 +2359,15 @@ public static class FabNvApi {
                 throw new Exception("NVIDIA did not return advanced settings for the selected display.");
 
             int oldScaling = Marshal.ReadInt32(selectedTarget.details, 8);
+            if (oldScaling == requestedScaling) {
+                string alreadyName = requestedScaling == 2 ? "GPU full-screen stretch" :
+                    requestedScaling == 3 ? "centered, no scaling" : "preserve aspect ratio";
+                report = "Already matched: " + alreadyName + " (mode " + requestedScaling +
+                    ") is active on the selected NVIDIA display. No scaling write was needed; selected path " +
+                    targetPath + ", target " + targetIndex +
+                    (exactNameResolved ? ", matched DISPLAY1 by display ID." : ", matched Windows GDI-primary display because DISPLAY1 name could not be mapped.");
+                return true;
+            }
             Marshal.WriteInt32(selectedTarget.details, 8, requestedScaling);
 
             // Validate the updated current topology first. This is a dry run and
@@ -2616,12 +2719,19 @@ public static class CafeLowLatencyNvApi {
             IntPtr profile=FindCs2Profile(session);
             uint[] ids={PreRenderedFramesId,UltraLowLatencyEnableId,UltraLowLatencyModeId};
             uint[] values={1,1,2};
+            bool anyChanged=false;
             for(int i=0;i<ids.Length;i++) {
+                try {
+                    if(Read(session,profile,ids[i])==values[i]) continue;
+                } catch {}
                 status=Set(session,profile,ids[i],values[i]);
                 if(status!=0) throw new Exception("DRS_SetSetting(0x"+ids[i].ToString("X8")+") returned NVAPI status "+status+".");
+                anyChanged=true;
             }
-            status=Resolve<SaveSettingsFn>(0xFCBC7E14)(session);
-            if(status!=0) throw new Exception("DRS_SaveSettings returned NVAPI status "+status+".");
+            if(anyChanged) {
+                status=Resolve<SaveSettingsFn>(0xFCBC7E14)(session);
+                if(status!=0) throw new Exception("DRS_SaveSettings returned NVAPI status "+status+".");
+            }
             destroy(session); session=IntPtr.Zero;
             session=OpenLoadedSession(out destroy);
             profile=FindCs2Profile(session);
@@ -2629,7 +2739,9 @@ public static class CafeLowLatencyNvApi {
                 uint actual=Read(session,profile,ids[i]);
                 if(actual!=values[i]) throw new Exception("Saved setting 0x"+ids[i].ToString("X8")+" read back as "+actual+", expected "+values[i]+".");
             }
-            return "CS2 NVIDIA driver profile Low Latency Mode is set to Ultra and persisted values were verified (pre-rendered frames=1, Ultra Low Latency enabled=1, mode=2).";
+            return anyChanged
+                ? "CS2 NVIDIA driver profile Low Latency Mode Ultra values were updated and persisted values were verified (pre-rendered frames=1, Ultra Low Latency enabled=1, mode=2)."
+                : "Already matched: CS2 NVIDIA driver profile Low Latency Mode Ultra was already set; no driver writes or profile save were needed (pre-rendered frames=1, Ultra Low Latency enabled=1, mode=2).";
         } finally {
             if(session!=IntPtr.Zero && destroy!=null) { try { destroy(session); } catch {} }
             if(initialized && unload!=null) { try { unload(); } catch {} }
@@ -9887,6 +9999,15 @@ function Invoke-LogitechDPISetAndReadback {
     if(-not (Test-SameSuperlight -Expected $Target -Actual $current)){
         throw 'The connected Superlight changed before DPI apply; no write was attempted.'
     }
+    $before=Get-LogitechDPIReadback -DeviceIndex ([int]$current.Index)
+    if($before -eq $DPI){
+        $after=Get-SelectedSuperlight
+        if(-not (Test-SameSuperlight -Expected $current -Actual $after)){
+            throw 'The connected Superlight changed during DPI read-back; the matching value was not attributed to a different mouse.'
+        }
+        Write-Log ('Logitech DPI already matched '+$DPI+' DPI (device '+$current.Index+'); no setter was called.')
+        return [pscustomobject]@{Value=$before;AlreadyMatched=$true}
+    }
     [void](Invoke-Logihub -Arguments @('dpi','set',([string]$DPI),'--device',([string]$current.Index)))
     $after=Get-SelectedSuperlight
     if(-not (Test-SameSuperlight -Expected $current -Actual $after)){
@@ -9894,7 +10015,7 @@ function Invoke-LogitechDPISetAndReadback {
     }
     $actual=Get-LogitechDPIReadback -DeviceIndex ([int]$current.Index)
     if($actual -ne $DPI){throw ('DPI read-back was '+$actual+', expected '+$DPI)}
-    return $actual
+    return [pscustomobject]@{Value=$actual;AlreadyMatched=$false}
 }
 function Schedule-LogitechDpiVerification {
     param($Target,[int]$DPI,[int]$Generation,[string]$Run)
@@ -9933,13 +10054,13 @@ function Set-LogitechLiveDPI {
     param([int]$DPI=800,[switch]$WebAction)
     Assert-LogitechDPI $DPI
     if(@(Get-Process -Name lghub,lghub_agent -ErrorAction SilentlyContinue).Count -gt 0){
-        Write-Log 'G HUB detected; leaving it running. It may override the DPI later.' 'WARN'
+        Write-Log 'G HUB detected; applying the requested live DPI once. G HUB may override it while it is running.' 'WARN'
     }
     $target=Get-SelectedSuperlight
     $deviceIndex=[int]$target.Index
     $usedHostFallback=$false
     $standardFailure=$null
-    try{$readValue=Invoke-LogitechDPISetAndReadback -Target $target -DPI $DPI}
+    try{$dpiApply=Invoke-LogitechDPISetAndReadback -Target $target -DPI $DPI;$readValue=[int]$dpiApply.Value}
     catch{$standardFailure=$_.Exception.Message}
     if($standardFailure){
         if([string]$target.Model -cne 'pro_x_wireless_mouse'){
@@ -9961,7 +10082,7 @@ function Set-LogitechLiveDPI {
             }
             $verifiedMode=Get-LogitechOnboardMode -Target $current
             if($verifiedMode -ne 'host'){throw ('Host-mode switch was not verified; mode='+$verifiedMode)}
-            $readValue=Invoke-LogitechDPISetAndReadback -Target $current -DPI $DPI
+            $dpiApply=Invoke-LogitechDPISetAndReadback -Target $current -DPI $DPI;$readValue=[int]$dpiApply.Value
             $usedHostFallback=$true
             Write-Log ('Superlight 1 host-mode DPI fallback verified: requested '+$DPI+'; read-back '+$readValue+' (device '+$deviceIndex+'); mouse remains in host mode.')
         }catch{
@@ -9983,7 +10104,7 @@ function Set-LogitechLiveDPI {
         Write-Log ('Logitech live DPI verified: requested '+$DPI+'; read-back '+$readValue+' (device '+$deviceIndex+').')
     }
     $run=if($script:StepScope){$script:StepScope.Run}elseif($script:LogihubRequestedRun){$script:LogihubRequestedRun}else{'Manual DPI'}
-    $detail='Device identity was revalidated before applying and reading back DPI.'
+    $detail=if($dpiApply.AlreadyMatched){'Live DPI read-back already matched; device identity was revalidated and no DPI write was sent.'}else{'Device identity was revalidated before applying and reading back DPI.'}
     if($usedHostFallback){$detail='Standard path failed read-back; Superlight 1 host-mode fallback applied and verified DPI. Host mode remains active.'}
     Set-RunOutcome -Run $run -Setting 'Logitech live DPI' -Requested ([string]$DPI) -Target ($target.Name+' device '+$deviceIndex) -Status APPLIED -Actual ([string]$readValue) -Detail $detail
     if(-not $WebAction){Schedule-LogitechDpiVerification -Target $target -DPI $DPI -Generation $script:LogihubRequestGeneration -Run $run}
