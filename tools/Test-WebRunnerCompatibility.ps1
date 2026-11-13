@@ -54,9 +54,25 @@ internal static class CompatibilityTests
             { "version", "0.7.0" }, { "sha256", new string('a', 64) }, { "size", 50000 }
         };
         Dictionary<string, object> checkedRelease = CafeLauncherWebRunner.ValidateRunnerReleaseMetadata(release);
-        if ((int)checkedRelease["size"] != 50000 || !CafeLauncherWebRunner.IsRunnerVersionNewer("0.7.4", "0.7.3") ||
+        if ((int)checkedRelease["size"] != 50000 || !CafeLauncherWebRunner.IsRunnerVersionNewer("0.7.5", "0.7.4") ||
             !CafeLauncherWebRunner.IsRunnerVersionNewer("0.7.0", "0.6.0") || CafeLauncherWebRunner.IsRunnerVersionNewer("0.6.0", "0.7.0"))
             throw new Exception("Runner release metadata validation or update ordering failed.");
+        if (!CafeLauncherWebRunner.IsLauncherReleaseVersionNewer("2026.11.13.4", "2026.11.13.3") ||
+            CafeLauncherWebRunner.IsLauncherReleaseVersionNewer("2026.11.13.3", "2026.11.13.4") ||
+            CafeLauncherWebRunner.IsLauncherReleaseVersionNewer("invalid", "2026.11.13.4"))
+            throw new Exception("CafeLauncher release version ordering did not reject older or invalid versions.");
+        byte[] olderLauncher = Encoding.UTF8.GetBytes(source.Replace("2026.11.12.1", "2026.11.13.3"));
+        byte[] newerLauncher = Encoding.UTF8.GetBytes(source.Replace("2026.11.12.1", "2026.11.13.4"));
+        Dictionary<string, object> backendLauncher = new Dictionary<string, object> { { "version", "2026.11.13.3" }, { "bytes", olderLauncher }, { "source", "backend" } };
+        Dictionary<string, object> githubLauncher = new Dictionary<string, object> { { "version", "2026.11.13.4" }, { "bytes", newerLauncher }, { "source", "github" } };
+        if (!Object.ReferenceEquals(CafeLauncherWebRunner.SelectNewestLauncherSource(backendLauncher, githubLauncher, "apply-graphics"), githubLauncher))
+            throw new Exception("A newer action-compatible GitHub launcher was not selected over the older backend package.");
+        byte[] incompatibleNewLauncher = Encoding.UTF8.GetBytes(Encoding.UTF8.GetString(newerLauncher).Replace("$env:CAFE_WEB_ACTION -in @('apply-profile','apply-graphics')", "$env:CAFE_WEB_ACTION -ceq 'apply-profile'"));
+        Dictionary<string, object> incompatibleGithubLauncher = new Dictionary<string, object> { { "version", "2026.11.13.4" }, { "bytes", incompatibleNewLauncher }, { "source", "github" } };
+        if (!Object.ReferenceEquals(CafeLauncherWebRunner.SelectNewestLauncherSource(backendLauncher, incompatibleGithubLauncher, "apply-graphics"), backendLauncher))
+            throw new Exception("An incompatible newer GitHub launcher replaced a compatible backend package.");
+        if (!Object.ReferenceEquals(CafeLauncherWebRunner.SelectNewestLauncherSource(backendLauncher, backendLauncher, "apply-graphics"), backendLauncher))
+            throw new Exception("An equally versioned GitHub launcher unexpectedly replaced the immutable backend package.");
         if (CafeLauncherWebRunner.IsPinnedLogitechHelper(new byte[0]))
             throw new Exception("An unverified Logitech helper was accepted as the pinned helper.");
         bool invalidHelperRejected = false;
@@ -95,7 +111,7 @@ internal static class CompatibilityTests
         TestCompletedResultStopsLingeringPowerShell();
         TestTimeoutDiagnosticReportsSafeLocalState();
 
-        Console.WriteLine("PASS: GitHub blob/ETag validation, verified fallback cache, result-file recovery, safe timeout diagnostics, action detection, and tamper rejection.");
+        Console.WriteLine("PASS: GitHub blob/ETag validation, automatic newer-source selection, verified fallback cache, result-file recovery, safe timeout diagnostics, action detection, and tamper rejection.");
         return 0;
     }
 

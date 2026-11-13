@@ -20,13 +20,13 @@ using Microsoft.Win32;
 [assembly: AssemblyDescription("Per-user Windows companion for CafeLauncher web actions.")]
 [assembly: AssemblyCompany("CafeLauncher")]
 [assembly: AssemblyProduct("CafeLauncher Web Runner")]
-[assembly: AssemblyVersion("0.7.4.0")]
-[assembly: AssemblyFileVersion("0.7.4.0")]
+[assembly: AssemblyVersion("0.7.5.0")]
+[assembly: AssemblyFileVersion("0.7.5.0")]
 
 internal static class CafeLauncherWebRunner
 {
     private const string BackendOrigin = "https://fabjon-hp.tail681ec9.ts.net:10000";
-    private const string RunnerVersion = "0.7.4";
+    private const string RunnerVersion = "0.7.5";
     private const string RunnerUninstallKey = @"Software\Microsoft\Windows\CurrentVersion\Uninstall\CafeLauncherWebRunner";
     private const int MaxLauncherBytes = 1000000;
     private const int MaxRunnerBytes = 8 * 1024 * 1024;
@@ -552,7 +552,7 @@ internal static class CafeLauncherWebRunner
                 }
             }
 
-            Dictionary<string, object> release = GetLatestVerifiedLauncher();
+            Dictionary<string, object> release = GetLatestActionLauncher(action);
             bool githubCompatibilityFallback = false;
             if (!LauncherSupportsAction((byte[])release["bytes"], action))
             {
@@ -564,9 +564,12 @@ internal static class CafeLauncherWebRunner
                     throw new InvalidOperationException("The current CafeLauncher source does not support this web action yet.");
             }
             string launcherPath = (string)release["path"];
+            string releaseSource = OptionalString(release, "source");
             string verificationDetail = githubCompatibilityFallback
                 ? "The current CafeLauncher source matched the official GitHub Contents API size and Git blob SHA."
-                : "Downloaded launcher size and SHA-256 match the immutable release manifest.";
+                : releaseSource == "github"
+                    ? "The newer GitHub main launcher matched its official Git blob SHA; the backend package is older."
+                    : "Downloaded launcher size and SHA-256 match the immutable release manifest.";
             SendEvent(requestId, capability, "RUNNING", "Launcher verification", "SUCCESS", verificationDetail, null);
             if (action != "detect-pc" && IsCancellationRequested(requestId, capability))
             {
@@ -694,7 +697,46 @@ internal static class CafeLauncherWebRunner
         Match releaseMarker = Regex.Match(source, @"(?m)^# CAFE_RELEASE=(\d{4}\.\d{1,2}\.\d{1,2}\.\d+)\s*$", RegexOptions.CultureInvariant);
         if (!releaseMarker.Success || releaseMarker.Groups[1].Value != version)
             throw new InvalidOperationException("The launcher release marker did not match its manifest.");
-        return new Dictionary<string, object> { { "path", cachePath }, { "bytes", bytes } };
+        return new Dictionary<string, object> { { "path", cachePath }, { "bytes", bytes }, { "version", version }, { "source", "backend" } };
+    }
+
+    private static Dictionary<string, object> GetLatestActionLauncher(string action)
+    {
+        Dictionary<string, object> backend = GetLatestVerifiedLauncher();
+        try
+        {
+            Dictionary<string, object> github = GetLatestGithubLauncher();
+            Dictionary<string, object> selected = SelectNewestLauncherSource(backend, github, action);
+            if (Object.ReferenceEquals(selected, github))
+                WriteRunnerLog("Using a newer hash-verified CafeLauncher from GitHub main.");
+            return selected;
+        }
+        catch
+        {
+            WriteRunnerLog("Could not check GitHub for a newer CafeLauncher; continuing with the hash-verified backend package.");
+            return backend;
+        }
+    }
+
+    internal static Dictionary<string, object> SelectNewestLauncherSource(Dictionary<string, object> backend, Dictionary<string, object> github, string action)
+    {
+        if (backend == null) throw new ArgumentNullException("backend");
+        if (github == null) return backend;
+        string backendVersion = RequiredString(backend, "version");
+        string githubVersion = RequiredString(github, "version");
+        byte[] githubBytes = github.ContainsKey("bytes") ? github["bytes"] as byte[] : null;
+        if (IsLauncherReleaseVersionNewer(githubVersion, backendVersion) && LauncherSupportsAction(githubBytes, action))
+            return github;
+        return backend;
+    }
+
+    internal static bool IsLauncherReleaseVersionNewer(string candidate, string current)
+    {
+        if (!Regex.IsMatch(candidate ?? String.Empty, @"^\d{4}\.\d{1,2}\.\d{1,2}\.\d+$", RegexOptions.CultureInvariant) ||
+            !Regex.IsMatch(current ?? String.Empty, @"^\d{4}\.\d{1,2}\.\d{1,2}\.\d+$", RegexOptions.CultureInvariant)) return false;
+        Version candidateVersion;
+        Version currentVersion;
+        return Version.TryParse(candidate, out candidateVersion) && Version.TryParse(current, out currentVersion) && candidateVersion > currentVersion;
     }
 
     private static Dictionary<string, object> GetLatestGithubLauncher()
@@ -727,7 +769,7 @@ internal static class CafeLauncherWebRunner
                     string cachedPath = Path.Combine(cacheRoot, cachedSha, "cafe.bat");
                     if (File.Exists(cachedPath)) cachedBytes = File.ReadAllBytes(cachedPath);
                     if (IsValidGithubLauncherCache(cachedVersion, cachedSha, cachedSize, cachedBytes))
-                        cachedResult = new Dictionary<string, object> { { "path", cachedPath }, { "bytes", cachedBytes }, { "version", cachedVersion } };
+                        cachedResult = new Dictionary<string, object> { { "path", cachedPath }, { "bytes", cachedBytes }, { "version", cachedVersion }, { "source", "github" } };
                 }
                 if (cachedResult == null) cachedEtag = null;
             }
@@ -740,7 +782,7 @@ internal static class CafeLauncherWebRunner
         if (cachedResult != null && IsGithubLauncherMetadataCacheFresh(lastWriteUtc, DateTime.UtcNow))
             return cachedResult;
 
-        HttpWebRequest request = CreateGithubRequest(new Uri(endpoint), "GET");
+        HttpWebRequest request = CreateGithubRequest(new Uri(endpoint), "GET", 5000);
         if (cachedResult != null && !String.IsNullOrEmpty(cachedEtag))
             request.Headers[HttpRequestHeader.IfNoneMatch] = cachedEtag;
         HttpWebResponse response = null;
@@ -811,7 +853,7 @@ internal static class CafeLauncherWebRunner
                 }
             }
             WriteGithubLauncherLatestCache(latestPath, version.Groups[1].Value, sha, bytes.Length, responseEtag);
-            return new Dictionary<string, object> { { "path", cachePath }, { "bytes", bytes }, { "version", version.Groups[1].Value } };
+            return new Dictionary<string, object> { { "path", cachePath }, { "bytes", bytes }, { "version", version.Groups[1].Value }, { "source", "github" } };
         }
     }
 
@@ -1366,7 +1408,7 @@ internal static class CafeLauncherWebRunner
         return request;
     }
 
-    private static HttpWebRequest CreateGithubRequest(Uri uri, string method)
+    private static HttpWebRequest CreateGithubRequest(Uri uri, string method, int timeoutMilliseconds = 15000)
     {
         if (uri.Scheme != Uri.UriSchemeHttps || !String.Equals(uri.GetLeftPart(UriPartial.Authority), "https://api.github.com", StringComparison.OrdinalIgnoreCase) ||
             uri.AbsolutePath != "/repos/fabjoncela/Cs-script/contents/cafe.bat" || uri.Query != "?ref=main" || uri.Fragment.Length != 0 || uri.UserInfo.Length != 0)
@@ -1375,8 +1417,8 @@ internal static class CafeLauncherWebRunner
         request.Method = method;
         request.UserAgent = "CafeLauncher-WebRunner/" + RunnerVersion;
         request.Accept = "application/vnd.github+json";
-        request.Timeout = 15000;
-        request.ReadWriteTimeout = 15000;
+        request.Timeout = timeoutMilliseconds;
+        request.ReadWriteTimeout = timeoutMilliseconds;
         request.AllowAutoRedirect = false;
         request.MaximumResponseHeadersLength = 32;
         return request;
