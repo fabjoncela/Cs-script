@@ -11,7 +11,7 @@ del /q "%CAFE_RESTART_SIGNAL%" >nul 2>&1
 exit /b
 
 # POWERSHELL_GUI
-# CAFE_RELEASE=2026.11.13.5
+# CAFE_RELEASE=2026.11.13.6
 
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
@@ -11141,6 +11141,20 @@ function Style-CafeDashboardButton {
     $Button.Add_SizeChanged({Update-CafeDashboardRoundedRegion -Control $roundedButton -Radius 8}.GetNewClosure())
     Update-CafeDashboardRoundedRegion -Control $Button -Radius 8
 }
+function Get-CafePointerSpeedLevelLabel {
+    param([int]$Value)
+    $values=@(1,2,4,6,8,10,12,14,16,18,20)
+    $index=[Array]::IndexOf([int[]]$values,$Value)
+    if($index -lt 0){
+        $index=0
+        $distance=[Math]::Abs([int]$values[0]-$Value)
+        for($candidate=1;$candidate -lt $values.Count;$candidate++){
+            $nextDistance=[Math]::Abs([int]$values[$candidate]-$Value)
+            if($nextDistance -lt $distance){$distance=$nextDistance;$index=$candidate}
+        }
+    }
+    return [string]($index+1)+'/11'
+}
 function Update-SelectedProfileCard {
     param([string]$Name)
     if(-not $script:GamingProfiles.Contains($Name)){return}
@@ -11148,7 +11162,7 @@ function Update-SelectedProfileCard {
     $p=$script:GamingProfiles[$Name]
     if($script:SelectedProfileTitle){$script:SelectedProfileTitle.Text=$Name}
     if($script:SelectedProfileDetails){
-        $script:SelectedProfileDetails.Text=('DPI: '+[string]$p.LogitechDPI+'     Pointer: '+[string]$p.PointerSpeed+
+        $script:SelectedProfileDetails.Text=('DPI: '+[string]$p.LogitechDPI+'     Pointer: '+(Get-CafePointerSpeedLevelLabel -Value ([int]$p.PointerSpeed))+
             [Environment]::NewLine+'CFG: '+[string]$p.ConfigFile+
             [Environment]::NewLine+'Display: '+[string]$p.Width+'x'+[string]$p.Height+' @'+[string]$p.RefreshHz+' Hz')
     }
