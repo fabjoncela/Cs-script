@@ -11,7 +11,7 @@ del /q "%CAFE_RESTART_SIGNAL%" >nul 2>&1
 exit /b
 
 # POWERSHELL_GUI
-# CAFE_RELEASE=2026.11.13.8
+# CAFE_RELEASE=2026.11.13.9
 
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
@@ -11166,14 +11166,16 @@ function Get-CafeCS2ResolutionLabel {
        $width -lt 1 -or $height -lt 1){
         return 'Unavailable'
     }
+    $refreshPolicyProperty=$Preset.PSObject.Properties['RefreshPolicy']
+    $refreshPolicy=if($null -ne $refreshPolicyProperty){[string]$refreshPolicyProperty.Value}else{''}
+    if($refreshPolicy -ceq 'Highest'){
+        return ([string]$width+'x'+[string]$height+' @ highest refresh')
+    }
     $refreshHzProperty=$settings.PSObject.Properties['RefreshHz']
-    if($null -ne $refreshHzProperty -and
+    if($refreshPolicy -ceq 'Exact' -and $null -ne $refreshHzProperty -and
        [int]::TryParse([string]$refreshHzProperty.Value,[ref]$refreshHz) -and
        $refreshHz -gt 0){
         return ([string]$width+'x'+[string]$height+' @'+[string]$refreshHz+' Hz')
-    }
-    if([string]$Preset.RefreshPolicy -ceq 'Highest'){
-        return ([string]$width+'x'+[string]$height+' @ highest refresh')
     }
     return 'Unavailable'
 }

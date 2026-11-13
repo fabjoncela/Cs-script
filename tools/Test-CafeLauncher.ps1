@@ -294,10 +294,12 @@ if($cs2ResolutionHelper.Count -ne 1 -or
     throw 'The selected-profile card must show the CS2 resolution from its already-loaded graphics preset.'
 }
 Invoke-Expression $cs2ResolutionHelper[0].Extent.Text
-$cs2Label=Get-CafeCS2ResolutionLabel -Preset ([pscustomobject]@{Settings=[pscustomobject]@{Width=1280;Height=960;RefreshHz=360}})
-$cs2HighestLabel=Get-CafeCS2ResolutionLabel -Preset ([pscustomobject]@{RefreshPolicy='Highest';Settings=[pscustomobject]@{Width=1280;Height=960}})
+$cs2Label=Get-CafeCS2ResolutionLabel -Preset ([pscustomobject]@{RefreshPolicy='Exact';Settings=[pscustomobject]@{Width=1280;Height=960;RefreshHz=360}})
+$cs2HighestLabel=Get-CafeCS2ResolutionLabel -Preset ([pscustomobject]@{RefreshPolicy='Highest';Settings=[pscustomobject]@{Width=1280;Height=960;RefreshHz=360}})
+$cs2UnknownPolicyLabel=Get-CafeCS2ResolutionLabel -Preset ([pscustomobject]@{Settings=[pscustomobject]@{Width=1280;Height=960;RefreshHz=360}})
 if($cs2Label -cne '1280x960 @360 Hz' -or
    $cs2HighestLabel -cne '1280x960 @ highest refresh' -or
+   $cs2UnknownPolicyLabel -cne 'Unavailable' -or
    (Get-CafeCS2ResolutionLabel -Preset $null) -cne 'Unavailable'){
     throw 'CS2 resolution display must format a valid preset and safely handle unavailable settings.'
 }
