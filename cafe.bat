@@ -10076,11 +10076,6 @@ function Invoke-GamingProfile {
     Clear-RunOutcomes -Run $ProfileName
     $profile = $script:GamingProfiles[$ProfileName]
     Write-Log "$ProfileName full routine started: mouse, NVIDIA, CS2 config, applications."
-    if($WebAction -and [bool]$profile.LaunchApps){
-        Write-Log 'Web Apply profile intentionally skipped Launch All; FACEIT, Steam startup, and configured helper apps were not launched.' 'INFO'
-        Write-CafeWebProgress -Name 'Launch profile apps' -Status 'SKIPPED' -Detail 'Not started by a web action; FACEIT, Steam startup, and configured helper apps were not launched.'
-    }
-
     $steps = @(
         @{ Name = 'Windows mouse speed/acceleration'; Action = {
             Apply-ProfileMouse -ProfileName $ProfileName -PointerSpeed ([int]$profile.PointerSpeed) -DisableAcceleration ([bool]$profile.DisableAcceleration) -SkipPointerOptions -WebAction:$WebAction
@@ -10110,7 +10105,7 @@ function Invoke-GamingProfile {
             if(-not $cfgInstalled){throw ('CS2 CFG install was not verified: '+$profileCfgName)}
         } }
     }
-    if ($profile.LaunchApps -and -not $WebAction) {
+    if ($profile.LaunchApps) {
         $steps += @{ Name = 'Launch apps (without G HUB; including Mouse Pointer Options)'; Action = { Launch-ProfileApps -SkipGHub -ProfileName $ProfileName } }
     }
     # Profile launch never starts G HUB, which can overwrite the requested mouse DPI.
