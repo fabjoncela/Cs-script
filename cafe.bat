@@ -11,7 +11,7 @@ del /q "%CAFE_RESTART_SIGNAL%" >nul 2>&1
 exit /b
 
 # POWERSHELL_GUI
-# CAFE_RELEASE=2026.11.13.7
+# CAFE_RELEASE=2026.11.13.8
 
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
@@ -11163,11 +11163,19 @@ function Get-CafeCS2ResolutionLabel {
     if($null -eq $settings -or
        -not [int]::TryParse([string]$settings.Width,[ref]$width) -or
        -not [int]::TryParse([string]$settings.Height,[ref]$height) -or
-       -not [int]::TryParse([string]$settings.RefreshHz,[ref]$refreshHz) -or
-       $width -lt 1 -or $height -lt 1 -or $refreshHz -lt 1){
+       $width -lt 1 -or $height -lt 1){
         return 'Unavailable'
     }
-    return ([string]$width+'x'+[string]$height+' @'+[string]$refreshHz+' Hz')
+    $refreshHzProperty=$settings.PSObject.Properties['RefreshHz']
+    if($null -ne $refreshHzProperty -and
+       [int]::TryParse([string]$refreshHzProperty.Value,[ref]$refreshHz) -and
+       $refreshHz -gt 0){
+        return ([string]$width+'x'+[string]$height+' @'+[string]$refreshHz+' Hz')
+    }
+    if([string]$Preset.RefreshPolicy -ceq 'Highest'){
+        return ([string]$width+'x'+[string]$height+' @ highest refresh')
+    }
+    return 'Unavailable'
 }
 function Update-SelectedProfileCard {
     param([string]$Name)
