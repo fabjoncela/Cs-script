@@ -10493,6 +10493,14 @@ function Get-CafeVerifiedGraphicsModulePath {
     return $cache
 }
 
+function Invoke-CafeGraphicsPresetCore {
+    param([Parameter(Mandatory=$true)][string]$ModeName,[Parameter(Mandatory=$true)]$Preset,[switch]$WebAction,[string]$ModulePath='')
+    if(-not $ModulePath){$ModulePath=Get-CafeVerifiedGraphicsModulePath}
+    . $ModulePath
+    if($WebAction){return (Apply-CS2ModeGraphics -ModeName $ModeName -Preset $Preset -WebAction)}
+    return (Apply-CS2ModeGraphics -ModeName $ModeName -Preset $Preset)
+}
+
 function Invoke-CafeWebApplyGraphics {
     param([Parameter(Mandatory=$true)][string]$ProfileName)
     $mayHaveChanged=$false
@@ -10791,16 +10799,6 @@ if($env:CAFE_WEB_ACTION -in @('apply-profile','apply-graphics')){
         }catch{}
         exit 1
     }
-}
-
-
-
-function Invoke-CafeGraphicsPresetCore {
-    param([Parameter(Mandatory=$true)][string]$ModeName,[Parameter(Mandatory=$true)]$Preset,[switch]$WebAction,[string]$ModulePath='')
-    if(-not $ModulePath){$ModulePath=Get-CafeVerifiedGraphicsModulePath}
-    . $ModulePath
-    if($WebAction){return (Apply-CS2ModeGraphics -ModeName $ModeName -Preset $Preset -WebAction)}
-    return (Apply-CS2ModeGraphics -ModeName $ModeName -Preset $Preset)
 }
 
 # Independent CS2 graphics module; loaded ONLY when Apply Graphics is clicked.

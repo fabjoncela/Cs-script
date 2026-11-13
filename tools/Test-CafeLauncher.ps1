@@ -61,6 +61,34 @@ if (@($parseErrors).Count -gt 0) {
     }
     throw ('PowerShell syntax check failed: {0} error(s). First error at cafe.bat line {1}, column {2}: {3}; text: {4}' -f @($parseErrors).Count, ($marker + 1 + $parseErrors[0].Extent.StartLineNumber), $parseErrors[0].Extent.StartColumnNumber, $parseErrors[0].Message, $parseErrors[0].Extent.Text)
 }
+function Assert-CafeActionCallsDefinedBeforeDispatch {
+    param(
+        [Parameter(Mandatory=$true)]$Ast,
+        [Parameter(Mandatory=$true)][string]$Action,
+        [Parameter(Mandatory=$true)][string]$EntryPoint,
+        [Parameter(Mandatory=$true)][int]$DispatchOffset
+    )
+    $functionMap=@{}
+    foreach($definition in @($Ast.FindAll({param($node)$node -is [System.Management.Automation.Language.FunctionDefinitionAst]},$true))){
+        $functionMap[$definition.Name]=$definition
+    }
+    $pending=New-Object System.Collections.Queue
+    $pending.Enqueue($EntryPoint)
+    $visited=@{}
+    while($pending.Count -gt 0){
+        $functionName=[string]$pending.Dequeue()
+        if($visited.ContainsKey($functionName) -or -not $functionMap.ContainsKey($functionName)){continue}
+        $visited[$functionName]=$true
+        $definition=$functionMap[$functionName]
+        if($definition.Extent.StartOffset -ge $DispatchOffset){
+            throw ("{0} can reach {1}, which is defined after the top-level action dispatcher." -f $Action,$functionName)
+        }
+        foreach($command in @($definition.Body.FindAll({param($node)$node -is [System.Management.Automation.Language.CommandAst]},$true))){
+            $calledName=$command.GetCommandName()
+            if($calledName -and $functionMap.ContainsKey($calledName)){$pending.Enqueue($calledName)}
+        }
+    }
+}
 $rateLimitFunctionNames=@('Set-CafeGitHubRateLimitDisplay','Update-CafeGitHubRateLimitFromHeaders','Invoke-CafeGitHubRestMethod','Set-CafeCloudReadSourceDisplay')
 foreach($functionName in $rateLimitFunctionNames){
     $functionAst=@($psAst.FindAll({param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $functionName},$true))
@@ -295,6 +323,10 @@ $webGraphics=@($psAst.FindAll({param($node) $node -is [System.Management.Automat
 $graphicsCore=@($psAst.FindAll({param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Invoke-CafeGraphicsPresetCore'},$true))
 $standardGraphics=@($psAst.FindAll({param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Invoke-GraphicsOnly'},$true))
 if($webGraphics.Count -ne 1 -or $graphicsCore.Count -ne 1 -or $standardGraphics.Count -ne 1 -or $webGraphics[0].Extent.Text -notmatch 'Invoke-CafeGraphicsPresetCore' -or $standardGraphics[0].Extent.Text -notmatch 'Invoke-CafeGraphicsPresetCore'){throw 'Windows and web Apply Graphics must use the same preset action core.'}
+$webPlayDispatchAt=$psSource.IndexOf("if(`$env:CAFE_WEB_ACTION -ceq 'play-exec'){",[StringComparison]::Ordinal)
+Assert-CafeActionCallsDefinedBeforeDispatch -Ast $psAst -Action 'Apply profile' -EntryPoint 'Invoke-CafeWebApplyProfile' -DispatchOffset $webGraphicsDispatchAt
+Assert-CafeActionCallsDefinedBeforeDispatch -Ast $psAst -Action 'Apply game graphics' -EntryPoint 'Invoke-CafeWebApplyGraphics' -DispatchOffset $webGraphicsDispatchAt
+Assert-CafeActionCallsDefinedBeforeDispatch -Ast $psAst -Action 'Play + Exec' -EntryPoint 'Invoke-CafeWebPlayExec' -DispatchOffset $webPlayDispatchAt
 $profileApiFunction=@($psAst.FindAll({
     param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
         $node.Name -eq 'Get-GitHubJsonFromContentsApi'
