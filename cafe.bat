@@ -11,7 +11,7 @@ del /q "%CAFE_RESTART_SIGNAL%" >nul 2>&1
 exit /b
 
 # POWERSHELL_GUI
-# CAFE_RELEASE=2026.11.13.4
+# CAFE_RELEASE=2026.11.13.5
 
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
@@ -10642,7 +10642,7 @@ function Invoke-CafeWebApplyProfile {
 
 function Get-CafeVerifiedGraphicsModulePath {
     param()
-    $expected='b6fa5619e13df559b40c02cd8a11d9d7cd99d7e8'
+    $expected='2c1839f936ec408ac7cd83246cf5511a472cddd6'
     $cache=Join-Path $env:LOCALAPPDATA 'CafeLauncher\graphics-module.ps1'
     $parent=Split-Path -Parent $cache
     if(-not (Test-Path -LiteralPath $parent)){[void](New-Item -Path $parent -ItemType Directory -Force)}

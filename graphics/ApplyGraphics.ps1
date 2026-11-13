@@ -253,6 +253,18 @@ function Format-CS2GraphicsResultSummary {
     if($BackupPath){$lines.Add(('Backup: '+$BackupPath))}
     return ($lines -join [Environment]::NewLine)
 }
+function ConvertTo-CafeWebGraphicsStepStatus {
+    param([string]$Status)
+    switch -CaseSensitive ($Status) {
+        'APPLIED' { return 'SUCCESS' }
+        'FALLBACK' { return 'PARTIAL' }
+        'UNVERIFIED' { return 'PARTIAL' }
+        'SKIPPED' { return 'SKIPPED' }
+        'FAILED' { return 'FAILED' }
+        'PENDING' { return 'PENDING' }
+        default { return 'PARTIAL' }
+    }
+}
 # Save a verified video update with two backups:
 # - permanent copy in CafeLauncher/graphics-backups for user recovery
 # - same-directory recovery copy required by .NET Framework File.Replace.
@@ -486,7 +498,7 @@ function Apply-CS2ModeGraphics {
         if($WebAction){
             $resultSteps=@(
                 [pscustomobject]@{name='CS2 video settings';status=$(if($edit.Changed -or $edit.Applied.Count){'SUCCESS'}else{'SKIPPED'});detail=($appliedDetails -join '; ')},
-                [pscustomobject]@{name='NVIDIA scaling';status=$scalingStatus;detail=$scalingReport}
+                [pscustomobject]@{name='NVIDIA scaling';status=(ConvertTo-CafeWebGraphicsStepStatus -Status $scalingStatus);detail=$scalingReport}
             )
             if($allSkipped.Count){$resultSteps+=,[pscustomobject]@{name='Compatibility checks';status='SKIPPED';detail=($allSkipped -join '; ')}}
             $webSummary=$summary -replace '\(Steam account \d+\)','(Steam account)'

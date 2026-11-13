@@ -31,6 +31,21 @@ $tok=$null;$errors=$null
 [void][System.Management.Automation.Language.Parser]::ParseInput($source,[ref]$tok,[ref]$errors)
 if(@($errors).Count -gt 0){throw ('Graphics module syntax error: '+$errors[0].Message)}
 . $module
+foreach($statusCase in @(
+    @{Input='APPLIED';Expected='SUCCESS'},
+    @{Input='FALLBACK';Expected='PARTIAL'},
+    @{Input='UNVERIFIED';Expected='PARTIAL'},
+    @{Input='SKIPPED';Expected='SKIPPED'},
+    @{Input='FAILED';Expected='FAILED'},
+    @{Input='PENDING';Expected='PENDING'},
+    @{Input='unexpected';Expected='PARTIAL'}
+)){
+    $mapped=ConvertTo-CafeWebGraphicsStepStatus -Status $statusCase.Input
+    if($mapped -cne $statusCase.Expected){throw ('Web graphics result status '+$statusCase.Input+' mapped to '+$mapped+' instead of '+$statusCase.Expected+'.')}
+}
+if($source -notmatch 'name=''NVIDIA scaling'';status=\(ConvertTo-CafeWebGraphicsStepStatus -Status \$scalingStatus\)'){
+    throw 'The web graphics result must convert internal scaling outcomes to the backend step-status vocabulary.'
+}
 function Write-Log {param([string]$Message,[string]$Level='INFO')}
 $script:AllowLocalGraphics=$true
 $script:LocalGraphicsConfirmCalls=New-Object System.Collections.ArrayList
