@@ -16,7 +16,7 @@ $functions=@{}
 foreach($def in $ast.FindAll({param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst]},$true)){
     $functions[$def.Name]=$def.Extent.Text
 }
-foreach($name in @('Start-LogihubAsyncDownload','Request-LogitechLiveDPI','Get-LogihubExecutable','Invoke-Logihub','Invoke-LogitechDPISetAndReadback','Set-LogitechLiveDPI','Set-LogitechOnboardDPI','Invoke-GamingProfile','Show-ProfileEditor','Import-ProfileValues','Export-ProfileValues')){
+foreach($name in @('Start-LogihubDownloadWorker','Start-LogihubAsyncDownload','Start-CafeWebLogitechPreparation','Complete-CafeWebLogitechPreparation','Request-LogitechLiveDPI','Get-LogihubExecutable','Invoke-Logihub','Invoke-LogitechDPISetAndReadback','Set-LogitechLiveDPI','Set-LogitechOnboardDPI','Invoke-GamingProfile','Show-ProfileEditor','Import-ProfileValues','Export-ProfileValues')){
     if(-not $functions.ContainsKey($name)){throw ('Missing function: '+$name)}
 }
 $apply=$functions['Invoke-GamingProfile']
@@ -95,7 +95,7 @@ foreach($invalid in @('',' ','abc','800.5','-800','99','0','25601','999999','1e3
     catch { $failed=$true }
     if(-not $failed){throw ('Expected manual DPI input rejection: '+$invalid)}
 }
-if($functions['Start-LogihubAsyncDownload'] -notmatch 'Start-Process' -or $functions['Start-LogihubAsyncDownload'] -notmatch 'LogihubDownloadTimer' -or $functions['Request-LogitechLiveDPI'] -notmatch 'LogihubRequestedDPI'){
+if($functions['Start-LogihubDownloadWorker'] -notmatch 'Start-Process' -or $functions['Start-LogihubAsyncDownload'] -notmatch 'LogihubDownloadTimer' -or $functions['Request-LogitechLiveDPI'] -notmatch 'LogihubRequestedDPI'){
     throw 'Hybrid async download or latest DPI pending state missing.'
 }
 if($functions['Show-ProfileEditor'] -notmatch '\$p\.LogitechDPI=\[int\]\$logitechDpi\.Value'){
@@ -120,8 +120,8 @@ $request=$functions['Request-LogitechLiveDPI']
 if($request -notmatch 'cacheReady' -or $request -notmatch 'checksum mismatch' -or $request -notmatch 'Start-LogihubAsyncDownload'){
     throw 'Outdated cached helpers must trigger an async verified replacement.'
 }
-if($functions['Start-LogihubAsyncDownload'] -notmatch [regex]::Escape($releaseUrl) -or
-   $functions['Start-LogihubAsyncDownload'] -notmatch 'Downloaded Logitech helper SHA-256 verification failed'){
+if($functions['Start-LogihubDownloadWorker'] -notmatch [regex]::Escape($releaseUrl) -or
+   $functions['Start-LogihubDownloadWorker'] -notmatch 'Downloaded Logitech helper SHA-256 verification failed'){
     throw 'Async helper download must use pinned fork URL and verify its SHA-256.'
 }
 if($request -match 'Remove-Item\s+-LiteralPath\s+\$script:LogihubExe'){

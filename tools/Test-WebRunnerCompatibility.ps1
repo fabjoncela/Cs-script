@@ -1,6 +1,16 @@
 $ErrorActionPreference = 'Stop'
 $compiler = Join-Path $env:WINDIR 'Microsoft.NET\Framework64\v4.0.30319\csc.exe'
 if (-not (Test-Path -LiteralPath $compiler -PathType Leaf)) { throw 'The .NET Framework C# compiler was not found.' }
+$repoRoot = Split-Path -Parent $PSScriptRoot
+$runnerCode = [IO.File]::ReadAllText((Join-Path $repoRoot 'web-runner\CafeLauncherWebRunner.cs'))
+$launcherCode = [IO.File]::ReadAllText((Join-Path $repoRoot 'cafe.bat'))
+$helperUrl = [regex]::Match($runnerCode, 'LogitechHelperUrl = "([^"]+)"')
+$helperHash = [regex]::Match($runnerCode, 'LogitechHelperSha256 = "([0-9a-f]{64})"')
+if (-not $helperUrl.Success -or -not $helperHash.Success -or
+    $launcherCode -notmatch [regex]::Escape($helperUrl.Groups[1].Value) -or
+    $launcherCode -notmatch [regex]::Escape($helperHash.Groups[1].Value)) {
+    throw 'Runner and launcher Logitech helper URL/SHA-256 pins must match.'
+}
 
 $testRoot = Join-Path ([IO.Path]::GetTempPath()) ('CafeLauncherCompatibilityTest-' + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $testRoot | Out-Null
@@ -37,6 +47,12 @@ internal static class CompatibilityTests
         if ((int)checkedRelease["size"] != 50000 || !CafeLauncherWebRunner.IsRunnerVersionNewer("0.7.0", "0.6.0") ||
             CafeLauncherWebRunner.IsRunnerVersionNewer("0.6.0", "0.7.0"))
             throw new Exception("Runner release metadata validation or update ordering failed.");
+        if (CafeLauncherWebRunner.IsPinnedLogitechHelper(new byte[0]))
+            throw new Exception("An unverified Logitech helper was accepted as the pinned helper.");
+        bool invalidHelperRejected = false;
+        try { CafeLauncherWebRunner.InstallPinnedLogitechHelper(new byte[] { 1, 2, 3 }, Path.Combine(Path.GetTempPath(), "CafeLauncher-invalid-logihub.exe")); }
+        catch (InvalidOperationException) { invalidHelperRejected = true; }
+        if (!invalidHelperRejected) throw new Exception("A Logitech helper with the wrong SHA-256 was accepted for caching.");
         release["sha256"] = "not-a-sha";
         bool invalidReleaseRejected = false;
         try { CafeLauncherWebRunner.ValidateRunnerReleaseMetadata(release); }

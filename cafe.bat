@@ -9773,13 +9773,11 @@ function Get-LogihubExecutable {
     }
     return $script:LogihubExe
 }
-function Start-LogihubAsyncDownload {
-    if($script:LogihubDownloadProcess -and -not $script:LogihubDownloadProcess.HasExited){return}
+function Start-LogihubDownloadWorker {
     [void](New-Item -ItemType Directory -Path $script:LogihubDirectory -Force -ErrorAction Stop)
     $id=[guid]::NewGuid().ToString('N')
-    $script:LogihubDownloadStatus=Join-Path $script:LogihubDirectory ('download-'+$id+'.status')
+    $status=Join-Path $script:LogihubDirectory ('download-'+$id+'.status')
     $temp=Join-Path $script:LogihubDirectory ('logihub-'+$id+'.tmp')
-    $status=$script:LogihubDownloadStatus
     $exe=$script:LogihubExe
     $expected=$script:LogihubExpectedSHA
     # Separate PowerShell process: no GUI-thread network I/O. Only this
@@ -9809,9 +9807,16 @@ try {
         '$Status='+("'"+$status.Replace("'","''")+"'")+'; '+
         '$Expected='+("'"+$expected+"'")))
     $encoded=[Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($worker))
+    try{$process=Start-Process -FilePath 'powershell.exe' -ArgumentList ('-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -EncodedCommand '+$encoded) -WindowStyle Hidden -PassThru -ErrorAction Stop}
+    catch{Remove-Item -LiteralPath $temp -Force -ErrorAction SilentlyContinue;throw}
+    return [pscustomobject]@{Process=$process;StatusPath=$status}
+}
+function Start-LogihubAsyncDownload {
+    if($script:LogihubDownloadProcess -and -not $script:LogihubDownloadProcess.HasExited){return}
+    $worker=Start-LogihubDownloadWorker
+    $script:LogihubDownloadStatus=$worker.StatusPath
+    $script:LogihubDownloadProcess=$worker.Process
     $script:LogihubTimingId=Start-CafeTimingOperation -Type 'External process' -Name 'Logitech helper download (app-observed)' -Uri 'https://github.com/fabjoncela/better-logihub/releases/download/v0.1.0-c54d.1/logihub.exe'
-    try{$script:LogihubDownloadProcess=Start-Process -FilePath 'powershell.exe' -ArgumentList ('-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -EncodedCommand '+$encoded) -WindowStyle Hidden -PassThru -ErrorAction Stop}
-    catch{Complete-CafeTimingOperation -Id $script:LogihubTimingId -Outcome 'Failed';$script:LogihubTimingId=0L;throw}
     Write-Log 'Logitech helper download started in background (pinned C54D release). Other profile actions continue.'
     if(-not $script:LogihubDownloadTimer){
         $script:LogihubDownloadTimer=New-Object System.Windows.Forms.Timer
@@ -9857,6 +9862,37 @@ try {
         })
     }
     $script:LogihubDownloadTimer.Start()
+}
+function Start-CafeWebLogitechPreparation {
+    if(Test-Path -LiteralPath $script:LogihubExe -PathType Leaf){
+        try{[void](Get-LogihubExecutable);return [pscustomobject]@{Ready=$true;Worker=$null;Error=$null}}
+        catch{
+            if($_.Exception.Message -notlike 'Cached logihub.exe checksum mismatch*'){throw}
+            Write-Log ('Web action found an outdated Logitech helper; starting pinned replacement download in background: '+$_.Exception.Message) 'WARN'
+        }
+    }
+    $worker=Start-LogihubDownloadWorker
+    Write-Log 'Web action started pinned Logitech helper preparation in the background; profile settings will continue while it downloads.' 'INFO'
+    return [pscustomobject]@{Ready=$false;Worker=$worker;Error=$null}
+}
+function Complete-CafeWebLogitechPreparation {
+    param($Preparation)
+    if(-not $Preparation){throw 'Logitech helper preparation was not started.'}
+    if($Preparation.Error){throw [string]$Preparation.Error}
+    if($Preparation.Ready){return}
+    $worker=$Preparation.Worker
+    if(-not $worker -or -not $worker.Process){throw 'Logitech helper download worker is unavailable.'}
+    try{
+        $worker.Process.WaitForExit()
+        $statusText=''
+        if(Test-Path -LiteralPath $worker.StatusPath -PathType Leaf){$statusText=[IO.File]::ReadAllText($worker.StatusPath)}
+        if($statusText -ne 'OK'){throw ('Logitech download failed: '+$(if($statusText){$statusText}else{'worker exited without completion status'}))}
+        [void](Get-LogihubExecutable)
+        Write-Log 'Web action Logitech helper download completed and passed SHA-256 verification.' 'INFO'
+    }finally{
+        $worker.Process.Dispose()
+        Remove-Item -LiteralPath $worker.StatusPath -Force -ErrorAction SilentlyContinue
+    }
 }
 function Ensure-LogihubWebExecutable {
     if(Test-Path -LiteralPath $script:LogihubExe -PathType Leaf){
@@ -10235,9 +10271,41 @@ function Invoke-GamingProfile {
         $steps += @{ Name = 'Launch apps (without G HUB; including Mouse Pointer Options)'; Action = { Launch-ProfileApps -SkipGHub -ProfileName $ProfileName } }
     }
     # Profile launch never starts G HUB, which can overwrite the requested mouse DPI.
-    # Web mode downloads and verifies synchronously so its result includes live DPI read-back.
+    # Web mode prepares the pinned helper in the background while profile settings run,
+    # then waits for verification before applying DPI and reporting the action result.
     # Neither entry point writes onboard memory here.
-    $steps += @{ Name = 'Logitech live DPI'; Action = { Request-LogitechLiveDPI -DPI ([int]$profile.LogitechDPI) -WebAction:$WebAction } }
+    $webLogitechPreparation=$null
+    if($WebAction){
+        Start-CafeWebProgressStage -Name 'Logitech helper preparation (background)' -Detail 'Checking the pinned helper cache; downloading and verifying it in parallel with profile settings if needed.'
+        try{
+            $webLogitechPreparation=Start-CafeWebLogitechPreparation
+            if($webLogitechPreparation.Ready){
+                Complete-CafeWebProgressStage -Name 'Logitech helper preparation (background)' -Status 'SUCCESS' -Detail 'The cached Logitech helper is already present and SHA-256 verified.'
+            }else{
+                Write-Log 'Pinned Logitech helper preparation is running alongside Windows, NVIDIA, and CS2 profile steps.' 'INFO'
+            }
+        }catch{
+            $webLogitechPreparation=[pscustomobject]@{Ready=$false;Worker=$null;Error=$_.Exception.Message}
+            Complete-CafeWebProgressStage -Name 'Logitech helper preparation (background)' -Status 'FAILED' -Detail ('Helper preparation could not start: '+$_.Exception.Message)
+            Write-Log ('Web Logitech helper preparation failed to start: '+$_.Exception.Message) 'ERROR'
+        }
+    }
+    $steps += @{ Name = 'Logitech live DPI'; Action = {
+        if($WebAction){
+            try{
+                Complete-CafeWebLogitechPreparation -Preparation $webLogitechPreparation
+                if($webLogitechPreparation -and -not $webLogitechPreparation.Ready -and -not $webLogitechPreparation.Error){
+                    Complete-CafeWebProgressStage -Name 'Logitech helper preparation (background)' -Status 'SUCCESS' -Detail 'Background download completed; the pinned helper passed SHA-256 verification.'
+                }
+            }catch{
+                if($webLogitechPreparation -and -not $webLogitechPreparation.Ready -and -not $webLogitechPreparation.Error){
+                    Complete-CafeWebProgressStage -Name 'Logitech helper preparation (background)' -Status 'FAILED' -Detail ('Background helper download or verification failed: '+$_.Exception.Message)
+                }
+                throw
+            }
+        }
+        Request-LogitechLiveDPI -DPI ([int]$profile.LogitechDPI) -WebAction:$WebAction
+    } }
     foreach ($step in $steps) {
         Write-Log ("$ProfileName step started: " + $step.Name)
         if($WebAction){Start-CafeWebProgressStage -Name $step.Name -Detail 'Applying this profile step on this PC.'}
