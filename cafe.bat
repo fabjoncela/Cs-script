@@ -11,7 +11,7 @@ del /q "%CAFE_RESTART_SIGNAL%" >nul 2>&1
 exit /b
 
 # POWERSHELL_GUI
-# CAFE_RELEASE=2026.11.13.6
+# CAFE_RELEASE=2026.11.13.7
 
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
@@ -11155,16 +11155,33 @@ function Get-CafePointerSpeedLevelLabel {
     }
     return [string]($index+1)+'/11'
 }
+function Get-CafeCS2ResolutionLabel {
+    param($Preset)
+    $settings=$null
+    if($null -ne $Preset){$settings=$Preset.Settings}
+    $width=0;$height=0;$refreshHz=0
+    if($null -eq $settings -or
+       -not [int]::TryParse([string]$settings.Width,[ref]$width) -or
+       -not [int]::TryParse([string]$settings.Height,[ref]$height) -or
+       -not [int]::TryParse([string]$settings.RefreshHz,[ref]$refreshHz) -or
+       $width -lt 1 -or $height -lt 1 -or $refreshHz -lt 1){
+        return 'Unavailable'
+    }
+    return ([string]$width+'x'+[string]$height+' @'+[string]$refreshHz+' Hz')
+}
 function Update-SelectedProfileCard {
     param([string]$Name)
     if(-not $script:GamingProfiles.Contains($Name)){return}
     $script:SelectedProfile=$Name
     $p=$script:GamingProfiles[$Name]
+    $cs2Preset=$null
+    if($script:GraphicsPresets.Contains($Name)){$cs2Preset=$script:GraphicsPresets[$Name]}
     if($script:SelectedProfileTitle){$script:SelectedProfileTitle.Text=$Name}
     if($script:SelectedProfileDetails){
         $script:SelectedProfileDetails.Text=('DPI: '+[string]$p.LogitechDPI+'     Pointer: '+(Get-CafePointerSpeedLevelLabel -Value ([int]$p.PointerSpeed))+
             [Environment]::NewLine+'CFG: '+[string]$p.ConfigFile+
-            [Environment]::NewLine+'Display: '+[string]$p.Width+'x'+[string]$p.Height+' @'+[string]$p.RefreshHz+' Hz')
+            [Environment]::NewLine+'Display: '+[string]$p.Width+'x'+[string]$p.Height+' @'+[string]$p.RefreshHz+' Hz'+
+            [Environment]::NewLine+'CS2: '+(Get-CafeCS2ResolutionLabel -Preset $cs2Preset))
     }
     if($script:SelectedProfileHint){
         $refreshStatus=[string]$script:ProfileRefreshStatus[$Name]

@@ -284,6 +284,21 @@ if((Get-CafePointerSpeedLevelLabel -Value 10) -cne '6/11' -or
    (Get-CafePointerSpeedLevelLabel -Value 3) -cne '2/11'){
     throw 'Pointer speed display must match the editor index and nearest-level behavior.'
 }
+$cs2ResolutionHelper=@($psAst.FindAll({
+    param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and
+        $node.Name -eq 'Get-CafeCS2ResolutionLabel'
+},$true))
+if($cs2ResolutionHelper.Count -ne 1 -or
+   $psSource -notmatch 'Get-CafeCS2ResolutionLabel -Preset \$cs2Preset' -or
+   $psSource -notmatch '\$script:GraphicsPresets\.Contains\(\$Name\)'){
+    throw 'The selected-profile card must show the CS2 resolution from its already-loaded graphics preset.'
+}
+Invoke-Expression $cs2ResolutionHelper[0].Extent.Text
+$cs2Label=Get-CafeCS2ResolutionLabel -Preset ([pscustomobject]@{Settings=[pscustomobject]@{Width=1280;Height=960;RefreshHz=360}})
+if($cs2Label -cne '1280x960 @360 Hz' -or
+   (Get-CafeCS2ResolutionLabel -Preset $null) -cne 'Unavailable'){
+    throw 'CS2 resolution display must format a valid preset and safely handle unavailable settings.'
+}
 $cacheBustFunctions=@($psAst.FindAll({
     param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
         $node.Name -eq 'Add-CafeCacheBust'
@@ -777,8 +792,10 @@ $PANEL=[System.Drawing.Color]::FromArgb(31,36,46)
 $BLUE=[System.Drawing.Color]::FromArgb(35,125,245)
 $MUTED=[System.Drawing.Color]::FromArgb(160,170,185)
 $script:GamingProfiles=[ordered]@{}
+$script:GraphicsPresets=[ordered]@{}
 foreach($name in @('FabMode','ArliMode','BrileMode','ArmlMode','OliMode','Provmode')){
     $script:GamingProfiles[$name]=@{LogitechDPI=800;PointerSpeed=10;Width=1920;Height=1080;RefreshHz=360;ConfigFile=($name.ToLower()+'.cfg')}
+    $script:GraphicsPresets[$name]=[pscustomobject]@{Settings=[pscustomobject]@{Width=1280;Height=960;RefreshHz=360}}
 }
 $script:PendingSync=@{}
 $script:ProfileRefreshStatus=@{}
