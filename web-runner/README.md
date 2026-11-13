@@ -1,6 +1,6 @@
 # CafeLauncher Web Runner (development)
 
-This is the local runner for the optional web-action flow. It targets Windows PowerShell 5.1 and .NET Framework already present on supported Windows café PCs; it adds no runtime package. The web page currently exposes **Apply profile**, **Apply game graphics**, and **Play + Exec** for one selected profile. The runner also retains Detect PC compatibility for older clients and diagnostics. It verifies a `cafe.bat` release and invokes only the requested allowlisted action. Runner v0.7.0 forwards local action-stage progress and elapsed times to the web page while the action is running.
+This is the local runner for the optional web-action flow. It targets Windows PowerShell 5.1 and .NET Framework already present on supported Windows café PCs; it adds no runtime package. The web page currently exposes **Apply profile**, **Apply game graphics**, and **Play + Exec** for one selected profile. The runner also retains Detect PC compatibility for older clients and diagnostics. It verifies a `cafe.bat` release and invokes only the requested allowlisted action. Runner v0.7.0 forwards local action-stage progress and elapsed times to the web page while the action is running. Runner v0.7.3 accepts a stable, schema-checked final result file and closes a lingering PowerShell host if it does not exit on its own.
 
 ## Build
 
