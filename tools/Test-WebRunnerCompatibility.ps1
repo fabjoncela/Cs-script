@@ -54,7 +54,7 @@ internal static class CompatibilityTests
             { "version", "0.7.0" }, { "sha256", new string('a', 64) }, { "size", 50000 }
         };
         Dictionary<string, object> checkedRelease = CafeLauncherWebRunner.ValidateRunnerReleaseMetadata(release);
-        if ((int)checkedRelease["size"] != 50000 || !CafeLauncherWebRunner.IsRunnerVersionNewer("0.7.3", "0.7.2") ||
+        if ((int)checkedRelease["size"] != 50000 || !CafeLauncherWebRunner.IsRunnerVersionNewer("0.7.4", "0.7.3") ||
             !CafeLauncherWebRunner.IsRunnerVersionNewer("0.7.0", "0.6.0") || CafeLauncherWebRunner.IsRunnerVersionNewer("0.6.0", "0.7.0"))
             throw new Exception("Runner release metadata validation or update ordering failed.");
         if (CafeLauncherWebRunner.IsPinnedLogitechHelper(new byte[0]))
@@ -93,8 +93,9 @@ internal static class CompatibilityTests
             throw new Exception("Conditional GitHub ETag response handling was incorrect.");
 
         TestCompletedResultStopsLingeringPowerShell();
+        TestTimeoutDiagnosticReportsSafeLocalState();
 
-        Console.WriteLine("PASS: GitHub blob/ETag validation, verified fallback cache, result-file recovery, action detection, and tamper rejection.");
+        Console.WriteLine("PASS: GitHub blob/ETag validation, verified fallback cache, result-file recovery, safe timeout diagnostics, action detection, and tamper rejection.");
         return 0;
     }
 
@@ -130,6 +131,24 @@ internal static class CompatibilityTests
             }
             try { Directory.Delete(root, true); } catch { }
         }
+    }
+
+    private static void TestTimeoutDiagnosticReportsSafeLocalState()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "CafeLauncherTimeoutDiagnosticTest-" + Guid.NewGuid().ToString("N"));
+        string progress = Path.Combine(root, "progress");
+        Directory.CreateDirectory(progress);
+        try
+        {
+            File.WriteAllText(Path.Combine(progress, "progress-0003.json"),
+                "{\"name\":\"Apply CS2 video and NVIDIA graphics settings\",\"status\":\"SUCCESS\",\"detail\":\"C:\\\\Users\\\\private\\\\path\"}", new UTF8Encoding(false));
+            string diagnostic = CafeLauncherWebRunner.BuildLocalActionTimeoutDiagnostic(Path.Combine(root, "result.json"), progress);
+            if (!diagnostic.Contains("result file: not present") ||
+                !diagnostic.Contains("Apply CS2 video and NVIDIA graphics settings (SUCCESS)") ||
+                diagnostic.Contains("C:\\Users") || diagnostic.Contains("private"))
+                throw new Exception("The timeout diagnostic did not report safe local state or exposed progress detail.");
+        }
+        finally { try { Directory.Delete(root, true); } catch { } }
     }
 
     private static Dictionary<string, object> Payload(byte[] bytes)

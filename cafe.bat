@@ -10967,9 +10967,15 @@ if($env:CAFE_WEB_ACTION -in @('apply-profile','apply-graphics')){
         if(-not $resultPath.StartsWith($tempRoot,[StringComparison]::OrdinalIgnoreCase) -or [IO.Path]::GetExtension($resultPath) -cne '.json'){
             throw 'CafeLauncher web result path is invalid.'
         }
+        Write-CafeWebProgress -Name 'Build final action result' -Status 'RUNNING' -Detail 'The local action finished its settings work; building the structured result.'
         $webOutput=if($env:CAFE_WEB_ACTION -ceq 'apply-profile'){Invoke-CafeWebApplyProfile -ProfileName $webProfile}else{Invoke-CafeWebApplyGraphics -ProfileName $webProfile}
+        Write-CafeWebProgress -Name 'Build final action result' -Status 'SUCCESS' -Detail 'The action routine returned its structured result.'
+        Write-CafeWebProgress -Name 'Serialize final action result' -Status 'RUNNING' -Detail 'Converting the structured result to JSON for the local runner.'
         $json=ConvertTo-Json -InputObject $webOutput -Depth 12 -Compress
+        Write-CafeWebProgress -Name 'Serialize final action result' -Status 'SUCCESS' -Detail ('The structured result was serialized ('+$json.Length+' characters).')
+        Write-CafeWebProgress -Name 'Write final action result' -Status 'RUNNING' -Detail 'Writing the final result file for the local runner.'
         [IO.File]::WriteAllText($resultPath,$json,(New-Object System.Text.UTF8Encoding($false)))
+        Write-CafeWebProgress -Name 'Write final action result' -Status 'SUCCESS' -Detail 'The final result file was written.'
         exit 0
     }catch{
         try{

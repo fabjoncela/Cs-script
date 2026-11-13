@@ -20,13 +20,13 @@ using Microsoft.Win32;
 [assembly: AssemblyDescription("Per-user Windows companion for CafeLauncher web actions.")]
 [assembly: AssemblyCompany("CafeLauncher")]
 [assembly: AssemblyProduct("CafeLauncher Web Runner")]
-[assembly: AssemblyVersion("0.7.3.0")]
-[assembly: AssemblyFileVersion("0.7.3.0")]
+[assembly: AssemblyVersion("0.7.4.0")]
+[assembly: AssemblyFileVersion("0.7.4.0")]
 
 internal static class CafeLauncherWebRunner
 {
     private const string BackendOrigin = "https://fabjon-hp.tail681ec9.ts.net:10000";
-    private const string RunnerVersion = "0.7.3";
+    private const string RunnerVersion = "0.7.4";
     private const string RunnerUninstallKey = @"Software\Microsoft\Windows\CurrentVersion\Uninstall\CafeLauncherWebRunner";
     private const int MaxLauncherBytes = 1000000;
     private const int MaxRunnerBytes = 8 * 1024 * 1024;
@@ -34,6 +34,7 @@ internal static class CafeLauncherWebRunner
     private const string LogitechHelperUrl = "https://github.com/fabjoncela/better-logihub/releases/download/v0.1.0-c54d.1/logihub.exe";
     private const string LogitechHelperSha256 = "dc30e45d4ba1df7d043c7c9a0aacda4257e09f5f23bb980466b985b77aa7dda4";
     private static readonly JavaScriptSerializer Json = new JavaScriptSerializer { MaxJsonLength = 2 * 1024 * 1024 };
+    private static readonly object RunnerLogLock = new object();
     private sealed class ActionCanceledException : Exception { }
 
     [STAThread]
@@ -51,6 +52,7 @@ internal static class CafeLauncherWebRunner
             string requestId = ParseRequestUri(args[0]);
             ServicePointManager.SecurityProtocol |= SecurityProtocolType.Tls12;
             ServicePointManager.Expect100Continue = false;
+            WriteRunnerLog("Accepted a CafeLauncher web action link.");
             bool startedAfterUpdate = args.Length == 2;
             WriteUninstallRegistrationIfInstalled(Process.GetCurrentProcess().MainModule.FileName);
             bool profileResetPending = File.Exists(PendingProfileResetPath());
@@ -74,6 +76,7 @@ internal static class CafeLauncherWebRunner
             Dictionary<string, object> ticket = ClaimWithRetry(requestId, claimBody);
             string action = RequiredString(ticket, "action");
             string profile = OptionalString(ticket, "profile");
+            WriteRunnerLog("Claimed web action " + action + ".");
             if (RequiredString(ticket, "state") != "CLAIMED")
                 throw new InvalidOperationException("CafeLauncher returned a request that was not newly claimed.");
             if (!String.Equals(RequiredString(ticket, "requestId"), requestId, StringComparison.Ordinal))
@@ -87,6 +90,7 @@ internal static class CafeLauncherWebRunner
         }
         catch (Exception error)
         {
+            WriteRunnerLog("Runner stopped before completing the action handler (" + error.GetType().Name + ").");
             MessageBox.Show(SafeMessage(error), "CafeLauncher", MessageBoxButtons.OK, MessageBoxIcon.Warning);
             return 1;
         }
@@ -636,7 +640,7 @@ internal static class CafeLauncherWebRunner
             if (actionMayHaveRun)
             {
                 Dictionary<string, object> interrupted = FailureResult(action, profile,
-                    "The runner could not confirm whether CFG files or Steam changed. Check this PC before retrying.");
+                    "The runner could not confirm whether the local action completed. " + SafeMessage(error) + " Check this PC before retrying.");
                 GetDictionary(interrupted, "data")["executionOutcomeKnown"] = false;
                 SendEvent(requestId, capability, "INTERRUPTED", null, null, null, interrupted);
                 return 1;
@@ -943,6 +947,7 @@ internal static class CafeLauncherWebRunner
             using (Process process = Process.Start(start))
             {
                 if (process == null) throw new InvalidOperationException("Windows PowerShell could not be started.");
+                WriteRunnerLog("Started the local PowerShell action host.");
                 DateTime deadline = DateTime.UtcNow.AddMilliseconds(120000);
                 DateTime nextControlCheck = DateTime.MinValue;
                 DateTime resultFirstObserved = DateTime.MinValue;
@@ -956,10 +961,15 @@ internal static class CafeLauncherWebRunner
                         Dictionary<string, object> candidate;
                         if (TryReadCompletedLauncherResult(resultPath, out candidate))
                         {
-                            if (resultFirstObserved == DateTime.MinValue) resultFirstObserved = DateTime.UtcNow;
+                            if (resultFirstObserved == DateTime.MinValue)
+                            {
+                                resultFirstObserved = DateTime.UtcNow;
+                                WriteRunnerLog("A valid final result file appeared; checking that it remains stable.");
+                            }
                             else if (TryStopLauncherAfterCompletedResult(process, resultPath, resultFirstObserved, DateTime.UtcNow, out candidate))
                             {
                                 completedResult = candidate;
+                                WriteRunnerLog("Stopped the lingering PowerShell host after validating its stable result.");
                                 break;
                             }
                         }
@@ -981,7 +991,9 @@ internal static class CafeLauncherWebRunner
                         try { process.Kill(); } catch { }
                         process.WaitForExit(5000);
                         ForwardProgressEvents(progressDirectory, requestId, capability, ref nextProgressIndex);
-                        throw new TimeoutException("The CafeLauncher action took too long and was stopped.");
+                        string diagnostic = BuildLocalActionTimeoutDiagnostic(resultPath, progressDirectory);
+                        WriteRunnerLog(diagnostic);
+                        throw new TimeoutException(diagnostic);
                     }
                 }
                 ForwardProgressEvents(progressDirectory, requestId, capability, ref nextProgressIndex);
@@ -989,7 +1001,11 @@ internal static class CafeLauncherWebRunner
                     TryReadCompletedLauncherResult(resultPath, out completedResult);
                 if ((process.ExitCode != 0 && completedResult == null) || !File.Exists(resultPath) || new FileInfo(resultPath).Length > 64 * 1024)
                     throw new InvalidOperationException("The verified launcher could not return a valid action result.");
-                if (completedResult != null) return completedResult;
+                if (completedResult != null)
+                {
+                    WriteRunnerLog("Returned the validated local action result.");
+                    return completedResult;
+                }
             }
             Dictionary<string, object> result = Json.Deserialize<Dictionary<string, object>>(File.ReadAllText(resultPath, Encoding.UTF8));
             if (result == null) throw new InvalidOperationException("The launcher returned an invalid action result.");
@@ -1023,6 +1039,47 @@ internal static class CafeLauncherWebRunner
             return true;
         }
         catch { return false; }
+    }
+
+    internal static string BuildLocalActionTimeoutDiagnostic(string resultPath, string progressDirectory)
+    {
+        string resultStatus = "not present";
+        try
+        {
+            if (File.Exists(resultPath))
+            {
+                FileInfo info = new FileInfo(resultPath);
+                Dictionary<string, object> result;
+                resultStatus = TryReadCompletedLauncherResult(resultPath, out result)
+                    ? "valid final result present"
+                    : "present but incomplete or invalid (" + info.Length.ToString(CultureInfo.InvariantCulture) + " bytes)";
+            }
+        }
+        catch { resultStatus = "could not be read"; }
+
+        string lastProgress = "none";
+        try
+        {
+            string[] files = Directory.GetFiles(progressDirectory, "progress-*.json");
+            Array.Sort(files, StringComparer.OrdinalIgnoreCase);
+            for (int index = files.Length - 1; index >= 0; index--)
+            {
+                try
+                {
+                    Dictionary<string, object> progress = Json.Deserialize<Dictionary<string, object>>(File.ReadAllText(files[index], Encoding.UTF8));
+                    string name = RequiredString(progress, "name");
+                    string status = RequiredString(progress, "status");
+                    if (name.Length > 100) name = name.Substring(0, 100);
+                    if (status.Length > 20) status = status.Substring(0, 20);
+                    lastProgress = name + " (" + status + ")";
+                    break;
+                }
+                catch { }
+            }
+        }
+        catch { }
+
+        return "The local CafeLauncher action exceeded 120 seconds and was stopped. Final result file: " + resultStatus + "; last local progress stage: " + lastProgress + ".";
     }
 
     internal static bool TryStopLauncherAfterCompletedResult(Process process, string resultPath, DateTime firstObservedUtc, DateTime nowUtc, out Dictionary<string, object> result)
@@ -1146,6 +1203,7 @@ internal static class CafeLauncherWebRunner
             try
             {
                 PostRaw(path, body, capability);
+                if (state != "RUNNING") WriteRunnerLog("Backend accepted final action state " + state + ".");
                 return;
             }
             catch (Exception error)
@@ -1154,6 +1212,7 @@ internal static class CafeLauncherWebRunner
                 System.Threading.Thread.Sleep(500 * (attempt + 1));
             }
         }
+        WriteRunnerLog("Backend did not confirm an action event after retries (" + (lastError == null ? "unknown error" : lastError.GetType().Name) + ").");
         throw new InvalidOperationException("CafeLauncher could not confirm an action result with the backend.", lastError);
     }
 
@@ -1383,5 +1442,29 @@ internal static class CafeLauncherWebRunner
                 ? error.Message
                 : error is InvalidOperationException ? error.Message
                 : "CafeLauncher could not complete this local action. Check the CafeLauncher log and retry.";
+    }
+
+    private static void WriteRunnerLog(string message)
+    {
+        try
+        {
+            string directory = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "CafeLauncher", "Runner", "logs");
+            Directory.CreateDirectory(directory);
+            string path = Path.Combine(directory, "runner.log");
+            lock (RunnerLogLock)
+            {
+                FileInfo info = new FileInfo(path);
+                if (info.Exists && info.Length > 512 * 1024)
+                {
+                    string previous = Path.Combine(directory, "runner.previous.log");
+                    if (File.Exists(previous)) File.Delete(previous);
+                    File.Move(path, previous);
+                }
+                string safeMessage = String.IsNullOrWhiteSpace(message) ? "Runner event." : message.Replace("\r", " ").Replace("\n", " ");
+                if (safeMessage.Length > 600) safeMessage = safeMessage.Substring(0, 600);
+                File.AppendAllText(path, DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ss.fffZ", CultureInfo.InvariantCulture) + " [" + RunnerVersion + "] " + safeMessage + Environment.NewLine, new UTF8Encoding(false));
+            }
+        }
+        catch { }
     }
 }
