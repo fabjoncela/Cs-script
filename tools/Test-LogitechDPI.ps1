@@ -16,7 +16,7 @@ $functions=@{}
 foreach($def in $ast.FindAll({param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst]},$true)){
     $functions[$def.Name]=$def.Extent.Text
 }
-foreach($name in @('Start-LogihubAsyncDownload','Request-LogitechLiveDPI','Get-LogihubExecutable','Invoke-Logihub','Set-LogitechLiveDPI','Set-LogitechOnboardDPI','Invoke-GamingProfile','Show-ProfileEditor','Import-ProfileValues','Export-ProfileValues')){
+foreach($name in @('Start-LogihubDownloadWorker','Start-LogihubAsyncDownload','Start-CafeWebLogitechPreparation','Complete-CafeWebLogitechPreparation','Request-LogitechLiveDPI','Get-LogihubExecutable','Invoke-Logihub','Invoke-LogitechDPISetAndReadback','Set-LogitechLiveDPI','Set-LogitechOnboardDPI','Invoke-GamingProfile','Show-ProfileEditor','Import-ProfileValues','Export-ProfileValues')){
     if(-not $functions.ContainsKey($name)){throw ('Missing function: '+$name)}
 }
 $apply=$functions['Invoke-GamingProfile']
@@ -27,6 +27,15 @@ if($apply -match 'Set-LogitechOnboardDPI|onboard.*set-dpi'){throw 'Profile apply
 $liveDpi=$functions['Set-LogitechLiveDPI']
 if($liveDpi -match "'onboard'\s*,\s*'set-dpi'|onboard.*set-dpi|Stop-Process|Stop-Service"){
     throw 'Live DPI must never write onboard DPI memory or stop G HUB.'
+}
+$dpiApply=$functions['Invoke-LogitechDPISetAndReadback']
+$dpiReadAt=$dpiApply.IndexOf('$before=Get-LogitechDPIReadback',[StringComparison]::Ordinal)
+$matchAt=$dpiApply.IndexOf('if($before -eq $DPI)',[StringComparison]::Ordinal)
+$writeAt=$dpiApply.IndexOf("'dpi','set'",[StringComparison]::Ordinal)
+if($dpiReadAt -lt 0 -or $matchAt -le $dpiReadAt -or $writeAt -le $matchAt -or
+   $dpiApply -notmatch 'Logitech DPI already matched.*no setter was called' -or
+   $dpiApply -notmatch 'changed during DPI read-back'){
+    throw 'Logitech DPI must read and verify the connected device before skipping an already-matching setter.'
 }
 foreach($phrase in @(
     'pro_x_wireless_mouse',
@@ -86,7 +95,7 @@ foreach($invalid in @('',' ','abc','800.5','-800','99','0','25601','999999','1e3
     catch { $failed=$true }
     if(-not $failed){throw ('Expected manual DPI input rejection: '+$invalid)}
 }
-if($functions['Start-LogihubAsyncDownload'] -notmatch 'Start-Process' -or $functions['Start-LogihubAsyncDownload'] -notmatch 'LogihubDownloadTimer' -or $functions['Request-LogitechLiveDPI'] -notmatch 'LogihubRequestedDPI'){
+if($functions['Start-LogihubDownloadWorker'] -notmatch 'Start-Process' -or $functions['Start-LogihubAsyncDownload'] -notmatch 'LogihubDownloadTimer' -or $functions['Request-LogitechLiveDPI'] -notmatch 'LogihubRequestedDPI'){
     throw 'Hybrid async download or latest DPI pending state missing.'
 }
 if($functions['Show-ProfileEditor'] -notmatch '\$p\.LogitechDPI=\[int\]\$logitechDpi\.Value'){
@@ -111,8 +120,8 @@ $request=$functions['Request-LogitechLiveDPI']
 if($request -notmatch 'cacheReady' -or $request -notmatch 'checksum mismatch' -or $request -notmatch 'Start-LogihubAsyncDownload'){
     throw 'Outdated cached helpers must trigger an async verified replacement.'
 }
-if($functions['Start-LogihubAsyncDownload'] -notmatch [regex]::Escape($releaseUrl) -or
-   $functions['Start-LogihubAsyncDownload'] -notmatch 'Downloaded Logitech helper SHA-256 verification failed'){
+if($functions['Start-LogihubDownloadWorker'] -notmatch [regex]::Escape($releaseUrl) -or
+   $functions['Start-LogihubDownloadWorker'] -notmatch 'Downloaded Logitech helper SHA-256 verification failed'){
     throw 'Async helper download must use pinned fork URL and verify its SHA-256.'
 }
 if($request -match 'Remove-Item\s+-LiteralPath\s+\$script:LogihubExe'){

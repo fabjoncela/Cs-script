@@ -8,7 +8,7 @@ $ast=[Management.Automation.Language.Parser]::ParseInput($body,[ref]$t,[ref]$err
 if(@($errors).Count){throw ('Syntax error: '+$errors[0].Message)}
 $functions=@{}
 foreach($f in $ast.FindAll({param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst]},$true)){$functions[$f.Name]=$f.Extent.Text}
-foreach($n in @('Set-StepResult','Set-RunOutcome','Clear-RunOutcomes','Start-StepScope','Complete-StepScope','Write-RunSummary','Invoke-GamingProfile','Invoke-GraphicsOnly')){
+foreach($n in @('Set-StepResult','Set-RunOutcome','Clear-RunOutcomes','Start-StepScope','Complete-StepScope','Write-RunSummary','Apply-ProfileMouse','Invoke-GamingProfile','Invoke-GraphicsOnly')){
     if(-not $functions.ContainsKey($n)){throw ('Missing '+$n)}
 }
 $script:StepResults=New-Object 'System.Collections.Generic.List[object]'
@@ -77,5 +77,9 @@ if($functions['Apply-NvidiaGamingSettings'] -notmatch 'Set-RunOutcome' -or
    $functions['Apply-ProfileMouse'] -notmatch 'Set-RunOutcome' -or
    $functions['Set-LogitechLiveDPI'] -notmatch 'Set-RunOutcome'){
     throw 'Profile device/display operations must feed verified outcomes into the run summary.'
+}
+$mouse=$functions['Apply-ProfileMouse']
+foreach($required in @('SPI_GETMOUSESPEED','0x0003','pointerAlreadyMatched','accelerationAlreadyMatched','SPI_SETMOUSE skipped','SPI_SETMOUSESPEED skipped','no registry, session, or broadcast writes were sent')){
+    if(-not $mouse.Contains($required)){throw ('Windows mouse apply must verify and log already-matching values: '+$required)}
 }
 Write-Host 'PASS: status tracking, per-setting requested/target/actual outcomes, fallbacks, skips, errors, and summary persistence format.'

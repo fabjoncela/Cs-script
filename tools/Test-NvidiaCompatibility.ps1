@@ -27,6 +27,9 @@ if($nvapiSource -notmatch 'TryCheckNvApiSupport'){
 if($nvapiSource -notmatch '0x1057EB71' -or $nvapiSource -notmatch '0x00000001  // PREFERRED_PSTATE_PREFER_MAX' -or $nvapiSource -notmatch 'Power management mode = Prefer maximum performance'){
     throw 'Global DRS profile must request and verify Prefer maximum performance.'
 }
+foreach($required in @('Digital Vibrance already matches','Legacy Digital Vibrance already matches','Hue already matches','bool anyChanged','Already matched ','skipped the profile save')){
+    if(-not $nvapiSource.Contains($required)){throw ('NVIDIA apply must skip matching live values and log the no-op: '+$required)}
+}
 foreach($required in @('0x1094F157','VRR_GLOBAL_FEATURE_DISABLED','G-SYNC global feature = off')){
     if(-not $nvapiSource.Contains($required)){throw ('Global DRS profile must disable and verify G-SYNC feature: '+$required)}
 }

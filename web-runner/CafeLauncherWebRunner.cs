@@ -20,16 +20,19 @@ using Microsoft.Win32;
 [assembly: AssemblyDescription("Per-user Windows companion for CafeLauncher web actions.")]
 [assembly: AssemblyCompany("CafeLauncher")]
 [assembly: AssemblyProduct("CafeLauncher Web Runner")]
-[assembly: AssemblyVersion("0.7.1.0")]
-[assembly: AssemblyFileVersion("0.7.1.0")]
+[assembly: AssemblyVersion("0.7.2.0")]
+[assembly: AssemblyFileVersion("0.7.2.0")]
 
 internal static class CafeLauncherWebRunner
 {
     private const string BackendOrigin = "https://fabjon-hp.tail681ec9.ts.net:10000";
-    private const string RunnerVersion = "0.7.1";
+    private const string RunnerVersion = "0.7.2";
     private const string RunnerUninstallKey = @"Software\Microsoft\Windows\CurrentVersion\Uninstall\CafeLauncherWebRunner";
     private const int MaxLauncherBytes = 1000000;
     private const int MaxRunnerBytes = 8 * 1024 * 1024;
+    private const int MaxLogitechHelperBytes = 10 * 1024 * 1024;
+    private const string LogitechHelperUrl = "https://github.com/fabjoncela/better-logihub/releases/download/v0.1.0-c54d.1/logihub.exe";
+    private const string LogitechHelperSha256 = "dc30e45d4ba1df7d043c7c9a0aacda4257e09f5f23bb980466b985b77aa7dda4";
     private static readonly JavaScriptSerializer Json = new JavaScriptSerializer { MaxJsonLength = 2 * 1024 * 1024 };
     private sealed class ActionCanceledException : Exception { }
 
@@ -98,7 +101,17 @@ internal static class CafeLauncherWebRunner
             InstallExecutable(source, installedPath);
         RegisterProtocol(installedPath);
         WriteUninstallRegistration(installedPath);
-        MessageBox.Show("CafeLauncher is ready for this Windows user. Return to the website and click an action.", "CafeLauncher installed", MessageBoxButtons.OK, MessageBoxIcon.Information);
+        string helperStatus;
+        try
+        {
+            bool downloaded = EnsurePinnedLogitechHelper();
+            helperStatus = downloaded ? " The pinned Logitech helper was downloaded and verified." : " The pinned Logitech helper is already verified and ready.";
+        }
+        catch (Exception error)
+        {
+            helperStatus = " The helper could not be cached now; Apply Profile will retry it when needed. " + SafeMessage(error);
+        }
+        MessageBox.Show("CafeLauncher is ready for this Windows user. Return to the website and click an action." + helperStatus, "CafeLauncher installed", MessageBoxButtons.OK, MessageBoxIcon.Information);
         return 0;
     }
 
@@ -385,6 +398,79 @@ internal static class CafeLauncherWebRunner
         }
     }
 
+    internal static bool IsPinnedLogitechHelper(byte[] bytes)
+    {
+        return bytes != null && String.Equals(Hash(bytes), LogitechHelperSha256, StringComparison.Ordinal);
+    }
+
+    internal static bool InstallPinnedLogitechHelper(byte[] bytes, string destination)
+    {
+        if (!IsPinnedLogitechHelper(bytes))
+            throw new InvalidOperationException("The downloaded Logitech helper did not match its pinned SHA-256.");
+        string destinationPath = Path.GetFullPath(destination);
+        Directory.CreateDirectory(Path.GetDirectoryName(destinationPath));
+        if (File.Exists(destinationPath) && new FileInfo(destinationPath).Length <= MaxLogitechHelperBytes &&
+            IsPinnedLogitechHelper(File.ReadAllBytes(destinationPath))) return false;
+
+        string temporaryPath = destinationPath + ".installing-" + Guid.NewGuid().ToString("N");
+        try
+        {
+            File.WriteAllBytes(temporaryPath, bytes);
+            if (!IsPinnedLogitechHelper(File.ReadAllBytes(temporaryPath)))
+                throw new InvalidOperationException("CafeLauncher could not verify the cached Logitech helper.");
+            if (File.Exists(destinationPath)) File.Replace(temporaryPath, destinationPath, null);
+            else File.Move(temporaryPath, destinationPath);
+            return true;
+        }
+        finally { if (File.Exists(temporaryPath)) File.Delete(temporaryPath); }
+    }
+
+    private static string LogitechHelperPath()
+    {
+        return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "CafeLauncher", "logihub", "logihub.exe");
+    }
+
+    private static bool EnsurePinnedLogitechHelper()
+    {
+        string destination = LogitechHelperPath();
+        if (File.Exists(destination) && new FileInfo(destination).Length <= MaxLogitechHelperBytes &&
+            IsPinnedLogitechHelper(File.ReadAllBytes(destination))) return false;
+
+        Uri uri = new Uri(LogitechHelperUrl);
+        if (uri.Scheme != Uri.UriSchemeHttps || !String.Equals(uri.Host, "github.com", StringComparison.OrdinalIgnoreCase) ||
+            uri.AbsolutePath != "/fabjoncela/better-logihub/releases/download/v0.1.0-c54d.1/logihub.exe" ||
+            uri.Query.Length != 0 || uri.Fragment.Length != 0 || uri.UserInfo.Length != 0)
+            throw new InvalidOperationException("CafeLauncher refused a Logitech helper URL outside the pinned release.");
+
+        ServicePointManager.SecurityProtocol |= SecurityProtocolType.Tls12;
+        HttpWebRequest request = (HttpWebRequest)WebRequest.Create(uri);
+        request.Method = "GET";
+        request.UserAgent = "CafeLauncher-WebRunner/" + RunnerVersion;
+        request.Timeout = 30000;
+        request.ReadWriteTimeout = 30000;
+        request.AllowAutoRedirect = true;
+        request.MaximumResponseHeadersLength = 32;
+        byte[] bytes;
+        using (HttpWebResponse response = (HttpWebResponse)request.GetResponse())
+        using (Stream stream = response.GetResponseStream())
+        using (MemoryStream memory = new MemoryStream())
+        {
+            string host = response.ResponseUri.Host;
+            if (host != "github.com" && host != "release-assets.githubusercontent.com" && host != "objects.githubusercontent.com")
+                throw new InvalidOperationException("GitHub redirected the Logitech helper download to an untrusted host.");
+            byte[] buffer = new byte[8192];
+            int read;
+            while ((read = stream.Read(buffer, 0, buffer.Length)) > 0)
+            {
+                if (memory.Length + read > MaxLogitechHelperBytes)
+                    throw new InvalidOperationException("The Logitech helper download exceeded its size limit.");
+                memory.Write(buffer, 0, read);
+            }
+            bytes = memory.ToArray();
+        }
+        return InstallPinnedLogitechHelper(bytes, destination);
+    }
+
     private static void StartUpdatedRunner(string executable, string requestId)
     {
         string uri = "cafelauncher://v1/run/" + requestId;
@@ -440,6 +526,28 @@ internal static class CafeLauncherWebRunner
         bool localPlayOutcomeKnown = false;
         try
         {
+            if (action == "apply-profile")
+            {
+                SendEvent(requestId, capability, "RUNNING", "Logitech helper setup", "RUNNING",
+                    "Checking the pinned Logitech helper cache before starting the profile action.", null);
+                try
+                {
+                    bool downloaded = EnsurePinnedLogitechHelper();
+                    SendEvent(requestId, capability, "RUNNING", "Logitech helper setup", "SUCCESS",
+                        downloaded ? "The pinned Logitech helper was downloaded, SHA-256 verified, and cached." : "The cached Logitech helper passed its pinned SHA-256 check.", null);
+                }
+                catch (Exception error)
+                {
+                    SendEvent(requestId, capability, "RUNNING", "Logitech helper setup", "FAILED", SafeMessage(error), null);
+                    throw new InvalidOperationException("The Logitech helper could not be prepared. Profile settings were not started.", error);
+                }
+                if (IsCancellationRequested(requestId, capability))
+                {
+                    SendEvent(requestId, capability, "CANCELED", null, null, null, CancellationResult(action, profile));
+                    return 1;
+                }
+            }
+
             Dictionary<string, object> release = GetLatestVerifiedLauncher();
             bool githubCompatibilityFallback = false;
             if (!LauncherSupportsAction((byte[])release["bytes"], action))
