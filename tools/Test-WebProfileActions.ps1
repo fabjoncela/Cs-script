@@ -13,6 +13,11 @@ if($source -notmatch 'if\s*\(\s*\$profile\.LaunchApps\s*\)' -or
    $source -match 'Web Apply profile intentionally skipped Launch All'){
     throw 'Web and Windows Apply Profile must both honor LaunchApps and use the shared app-launch routine.'
 }
+$resultStages=@('Build final action result','Serialize final action result','Write final action result')
+$stageOffsets=@($resultStages|ForEach-Object{$source.IndexOf("-Name '$_'",[StringComparison]::Ordinal)})
+if(@($stageOffsets|Where-Object{$_ -lt 0}).Count -or $stageOffsets[0] -ge $stageOffsets[1] -or $stageOffsets[1] -ge $stageOffsets[2]){
+    throw 'Web profile actions must report result construction, serialization, and result-file writing in order.'
+}
 foreach($name in @('Test-CafeWebPinnedActionTarget','New-CafeWebProfileActionEnvelope','Get-CafeWebPendingReason','Reset-CafeWebPendingEditsAfterRunnerUpdate','Complete-CafeWebRunnerProfileReset','Request-LogitechLiveDPI','Write-CafeWebProgress','Start-CafeWebProgressStage','Complete-CafeWebProgressStage','Invoke-CafeWebApplyProfile','Invoke-CafeWebApplyGraphics')){
     $definition=@($ast.FindAll({param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst]},$true)|Where-Object{$_.Name -eq $name})
     if($definition.Count -ne 1){throw ('Expected one definition for '+$name)}
