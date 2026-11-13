@@ -267,6 +267,23 @@ if($pointerValues.Count -ne 11 -or $pointerLabels.Count -ne 11 -or
    [Array]::IndexOf([int[]]$pointerValues,10) -ne 5){
     throw 'Pointer speed dropdown must have the 11 classic Windows levels and map its default 6/11 position to value 10.'
 }
+$pointerLevelHelper=@($psAst.FindAll({
+    param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and
+        $node.Name -eq 'Get-CafePointerSpeedLevelLabel'
+},$true))
+if($pointerLevelHelper.Count -ne 1 -or
+   $psSource -notmatch 'Pointer:\s*''\+\(Get-CafePointerSpeedLevelLabel -Value \(\[int\]\$p\.PointerSpeed\)\)'){
+    throw 'The selected-profile card must format pointer speed using the Windows 11-level mapping.'
+}
+Invoke-Expression $pointerLevelHelper[0].Extent.Text
+for($index=0;$index -lt $pointerValues.Count;$index++){
+    $label=Get-CafePointerSpeedLevelLabel -Value $pointerValues[$index]
+    if($label -cne ([string]($index+1)+'/11')){throw ('Pointer speed '+$pointerValues[$index]+' must display as '+($index+1)+'/11, not '+$label+'.')}
+}
+if((Get-CafePointerSpeedLevelLabel -Value 10) -cne '6/11' -or
+   (Get-CafePointerSpeedLevelLabel -Value 3) -cne '2/11'){
+    throw 'Pointer speed display must match the editor index and nearest-level behavior.'
+}
 $cacheBustFunctions=@($psAst.FindAll({
     param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
         $node.Name -eq 'Add-CafeCacheBust'
