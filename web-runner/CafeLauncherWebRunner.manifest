@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
-  <assemblyIdentity version="0.7.7.0" processorArchitecture="*" name="CafeLauncher.WebRunner" type="win32" />
+  <assemblyIdentity version="0.7.8.0" processorArchitecture="*" name="CafeLauncher.WebRunner" type="win32" />
   <description>CafeLauncher Web Runner</description>
   <trustInfo xmlns="urn:schemas-microsoft-com:asm.v3">
     <security>
