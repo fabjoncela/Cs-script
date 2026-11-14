@@ -94,6 +94,8 @@ function Write-Log { param($Message,$Level) }
 Reset-ProfileActionTest
 if(-not (Test-CafeWebPinnedActionTarget -SteamUserId $script:SteamUser -SteamPath $script:SteamPath -CfgDirectory $script:CfgPath)){throw 'The focused Steam/CS2 target check rejected its pinned fixture.'}
 if(Test-CafeWebPinnedActionTarget -SteamUserId ($script:SteamUser+1) -SteamPath $script:SteamPath -CfgDirectory $script:CfgPath){throw 'The focused target check accepted a different Steam account.'}
+if(-not (Test-CafeWebPinnedActionTarget -SteamUserId 0 -SteamPath $script:SteamPath -CfgDirectory $script:CfgPath)){throw 'The focused target check rejected a signed-out Steam session.'}
+if(Test-CafeWebPinnedActionTarget -SteamUserId 0 -SteamPath $script:SteamPath -CfgDirectory $script:CfgPath -and $script:SteamUser -ne 0){throw 'The signed-out target check accepted a changed Steam session.'}
 if(Test-CafeWebPinnedActionTarget -SteamUserId $script:SteamUser -SteamPath $script:SteamPath -CfgDirectory ($script:CfgPath+'\missing')){throw 'The focused target check accepted a missing config path.'}
 
 Reset-ProfileActionTest
@@ -140,8 +142,14 @@ if($result.state -cne 'COMPLETED' -or $script:SnapshotCalls -ne 1 -or $script:Re
 
 Reset-ProfileActionTest
 $script:SteamAvailable=$false
+$script:SteamUser=0
 $result=Invoke-CafeWebApplyProfile -ProfileName FabMode
-if($result.state -cne 'SKIPPED' -or $script:ApplyCalls -ne 0){throw 'Missing Steam session did not stop web profile apply before changes.'}
+if($result.state -cne 'COMPLETED' -or $script:ApplyCalls -ne 1){throw 'Web Apply Profile did not continue when Steam was signed out.'}
+
+Reset-ProfileActionTest
+$script:SteamPath=$null
+$result=Invoke-CafeWebApplyProfile -ProfileName FabMode
+if($result.state -cne 'SKIPPED' -or $script:ApplyCalls -ne 0){throw 'Missing Steam installation did not stop web profile apply safely.'}
 
 Reset-ProfileActionTest
 $script:ThrowSnapshot=$true
@@ -179,5 +187,5 @@ try{
     if(Test-Path -LiteralPath $progressTestDirectory){Remove-Item -LiteralPath $progressTestDirectory -Recurse -Force}
 }
 
-'Web profile action checks passed: result mapping, timed progress, pending-edit and Steam gates, pinned-target recheck, and graphics block.'
+'Web profile action checks passed: result mapping, timed progress, pending-edit gate, signed-out Steam support, Steam/CS2 target recheck, and graphics block.'
 Remove-Item -LiteralPath $script:TargetRoot -Recurse -Force
