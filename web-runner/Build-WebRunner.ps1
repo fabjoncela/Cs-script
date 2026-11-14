@@ -13,6 +13,12 @@ if (-not (Test-Path -LiteralPath $manifest -PathType Leaf)) {
     throw 'The explicit CafeLauncher Web Runner Windows manifest is missing.'
 }
 $manifestText = [IO.File]::ReadAllText($manifest)
+$runnerSource = [IO.File]::ReadAllText($source)
+$runnerVersion = [regex]::Match($runnerSource, 'RunnerVersion = "([0-9]+\.[0-9]+\.[0-9]+)"')
+$manifestVersion = [regex]::Match($manifestText, '<assemblyIdentity\s+version="([0-9]+\.[0-9]+\.[0-9]+)\.0"')
+if (-not $runnerVersion.Success -or -not $manifestVersion.Success -or $manifestVersion.Groups[1].Value -ne $runnerVersion.Groups[1].Value) {
+    throw 'The runner and Windows manifest versions must match exactly.'
+}
 if ($manifestText -notmatch '<requestedExecutionLevel\s+level="asInvoker"\s+uiAccess="false"\s*/>') {
     throw 'The runner manifest must explicitly declare asInvoker to prevent Windows installer detection.'
 }
