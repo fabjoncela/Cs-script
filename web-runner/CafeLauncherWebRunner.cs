@@ -20,13 +20,13 @@ using Microsoft.Win32;
 [assembly: AssemblyDescription("Per-user Windows companion for CafeLauncher web actions.")]
 [assembly: AssemblyCompany("CafeLauncher")]
 [assembly: AssemblyProduct("CafeLauncher Web Runner")]
-[assembly: AssemblyVersion("0.7.7.0")]
-[assembly: AssemblyFileVersion("0.7.7.0")]
+[assembly: AssemblyVersion("0.7.8.0")]
+[assembly: AssemblyFileVersion("0.7.8.0")]
 
 internal static class CafeLauncherWebRunner
 {
     private const string BackendOrigin = "https://fabjon-hp.tail681ec9.ts.net:10000";
-    private const string RunnerVersion = "0.7.7";
+    private const string RunnerVersion = "0.7.8";
     private const string RunnerUninstallKey = @"Software\Microsoft\Windows\CurrentVersion\Uninstall\CafeLauncherWebRunner";
     private const int MaxLauncherBytes = 1000000;
     private const int MaxRunnerBytes = 8 * 1024 * 1024;
