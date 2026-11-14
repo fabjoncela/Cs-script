@@ -1463,6 +1463,122 @@ public static class FabDisplayNative {
 }
 
 try {
+    if (-not ("FabDisplayColorNative" -as [type])) {
+        Add-Type -ErrorAction Stop @"
+using System;
+using System.Globalization;
+using System.Runtime.InteropServices;
+using System.Text;
+using System.Text.RegularExpressions;
+
+public static class FabDisplayColorNative {
+    [UnmanagedFunctionPointer(CallingConvention.Winapi, CharSet = CharSet.Ansi)]
+    private delegate uint DtcfgEx([In, Out, MarshalAs(UnmanagedType.LPStr)] StringBuilder command);
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern IntPtr LoadLibrary(string fileName);
+    [DllImport("kernel32.dll", CharSet = CharSet.Ansi, SetLastError = true)]
+    private static extern IntPtr GetProcAddress(IntPtr module, string procedureName);
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool FreeLibrary(IntPtr module);
+    [DllImport("gdi32.dll", EntryPoint = "CreateDCW", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern IntPtr CreateDC(string driver, string device, string output, IntPtr initData);
+    [DllImport("gdi32.dll", SetLastError = true)]
+    private static extern bool DeleteDC(IntPtr hdc);
+    [DllImport("gdi32.dll", SetLastError = true)]
+    private static extern bool SetDeviceGammaRamp(IntPtr hdc, [In] ushort[] ramp);
+    [DllImport("gdi32.dll", SetLastError = true)]
+    private static extern bool GetDeviceGammaRamp(IntPtr hdc, [Out] ushort[] ramp);
+
+    private static bool TryDtcfgValue(DtcfgEx dtcfg, string command, double expected, double tolerance, out string actual) {
+        StringBuilder buffer = new StringBuilder(command, 256);
+        dtcfg(buffer);
+        string result = buffer.ToString().Trim();
+        actual = result;
+        if (String.Equals(result, command, StringComparison.OrdinalIgnoreCase)) return false;
+        MatchCollection matches = Regex.Matches(result, @"[-+]?(?:\d+(?:\.\d*)?|\.\d+)");
+        if (matches.Count == 0) return false;
+        double parsed;
+        if (!Double.TryParse(matches[matches.Count - 1].Value, NumberStyles.Float, CultureInfo.InvariantCulture, out parsed)) return false;
+        actual = parsed.ToString("0.###", CultureInfo.InvariantCulture);
+        return Math.Abs(parsed - expected) <= tolerance;
+    }
+
+    private static bool TrySetNvidiaControlPanelNeutralValues(out string report) {
+        IntPtr module = IntPtr.Zero;
+        try {
+            module = LoadLibrary("nvcpl.dll");
+            if (module == IntPtr.Zero) throw new InvalidOperationException("NVIDIA Control Panel API library nvcpl.dll is unavailable.");
+            IntPtr entry = GetProcAddress(module, "dtcfgex");
+            if (entry == IntPtr.Zero) throw new InvalidOperationException("This NVIDIA driver does not export the legacy dtcfgex Control Panel API.");
+            DtcfgEx dtcfg = (DtcfgEx)Marshal.GetDelegateForFunctionPointer(entry, typeof(DtcfgEx));
+
+            // NVIDIA's legacy dtcfg API uses Windows display index 0 for the current primary display.
+            dtcfg(new StringBuilder("set_normalize_brightness 0 all 0.5", 256));
+            dtcfg(new StringBuilder("set_normalize_contrast 0 all 0.5", 256));
+            dtcfg(new StringBuilder("setgamma 0 all 1.0", 256));
+
+            string brightness, contrast, gamma;
+            bool brightnessOk = TryDtcfgValue(dtcfg, "get_normalize_brightnessvalue 0 all", 0.5, 0.01, out brightness);
+            bool contrastOk = TryDtcfgValue(dtcfg, "get_normalize_contrastvalue 0 all", 0.5, 0.01, out contrast);
+            bool gammaOk = TryDtcfgValue(dtcfg, "getgammavalue 0 all", 1.0, 0.01, out gamma);
+            if (!brightnessOk || !contrastOk || !gammaOk)
+                throw new InvalidOperationException("NVIDIA Control Panel read-back did not match brightness 50%, contrast 50%, gamma 1.00 (read: brightness=" + brightness + ", contrast=" + contrast + ", gamma=" + gamma + ").");
+            report = "NVIDIA Control Panel API set and verified brightness 50%, contrast 50%, and gamma 1.00 on the primary display.";
+            return true;
+        } catch (Exception ex) {
+            report = ex.Message;
+            return false;
+        } finally {
+            if (module != IntPtr.Zero) FreeLibrary(module);
+        }
+    }
+
+    public static bool TrySetDisplay1NeutralColorSettings(out string report) {
+        string nvidiaReport;
+        if (TrySetNvidiaControlPanelNeutralValues(out nvidiaReport)) {
+            report = nvidiaReport;
+            return true;
+        }
+        IntPtr hdc = IntPtr.Zero;
+        try {
+            hdc = CreateDC("DISPLAY", "\\\\.\\DISPLAY1", null, IntPtr.Zero);
+            if (hdc == IntPtr.Zero)
+                throw new InvalidOperationException("Could not open DISPLAY1 (Win32 error " + Marshal.GetLastWin32Error() + ").");
+            ushort[] ramp = new ushort[768];
+            for (int i = 0; i < 256; i++) {
+                ushort value = (ushort)(i * 257);
+                ramp[i] = value;
+                ramp[256 + i] = value;
+                ramp[512 + i] = value;
+            }
+            if (!SetDeviceGammaRamp(hdc, ramp))
+                throw new InvalidOperationException("The display driver rejected the neutral gamma ramp (Win32 error " + Marshal.GetLastWin32Error() + ").");
+            ushort[] verify = new ushort[768];
+            if (!GetDeviceGammaRamp(hdc, verify))
+                throw new InvalidOperationException("The display driver accepted the gamma ramp but read-back failed (Win32 error " + Marshal.GetLastWin32Error() + ").");
+            for (int i = 0; i < ramp.Length; i++) {
+                if (verify[i] != ramp[i]) {
+                    throw new InvalidOperationException("Gamma-ramp read-back did not match the neutral desktop color ramp.");
+                }
+            }
+            report = "NVIDIA Control Panel API unavailable or did not verify (" + nvidiaReport + "). DISPLAY1 linear Windows gamma ramp set and read back successfully as the neutral equivalent of brightness 50%, contrast 50%, and gamma 1.00; Control Panel slider values are not verified.";
+            return true;
+        } catch (Exception ex) {
+            report = ex.Message;
+            return false;
+        } finally {
+            if (hdc != IntPtr.Zero) DeleteDC(hdc);
+        }
+    }
+}
+"@
+        Write-Log "Windows display color helper loaded."
+    }
+} catch {
+    Write-Log "Windows display color helper could not compile/load: $($_.Exception.Message)" "ERROR"
+}
+
+try {
     if (-not ("FabNvApi" -as [type])) {
         Add-Type -ErrorAction Stop @"
 using System;
@@ -2986,6 +3102,54 @@ public static class CafePhysxNvApi {
     }
 }
 
+function Apply-NvidiaDesktopColorSettings {
+    $runName=if($script:StepScope){$script:StepScope.Run}elseif($script:ActiveRunName){$script:ActiveRunName}else{'Manual desktop color'}
+    if ("FabDisplayColorNative" -as [type]) {
+        try {
+            $colorReport = ""
+            $colorOk = [FabDisplayColorNative]::TrySetDisplay1NeutralColorSettings([ref]$colorReport)
+            if ($colorOk) {
+                foreach($colorSetting in @(
+                    @{Name='Desktop brightness';Requested='50% (neutral equivalent)'},
+                    @{Name='Desktop contrast';Requested='50% (neutral equivalent)'},
+                    @{Name='Desktop gamma';Requested='1.00 (neutral equivalent)'}
+                )){
+                    Set-RunOutcome -Run $runName -Setting $colorSetting.Name -Requested $colorSetting.Requested -Target 'NVIDIA primary display / Windows gamma-ramp fallback' -Status APPLIED -Actual 'Neutral value read-back verified' -Detail $colorReport
+                }
+                Write-Log $colorReport
+            } else {
+                foreach($colorSetting in @(
+                    @{Name='Desktop brightness';Requested='50% (neutral equivalent)'},
+                    @{Name='Desktop contrast';Requested='50% (neutral equivalent)'},
+                    @{Name='Desktop gamma';Requested='1.00 (neutral equivalent)'}
+                )){
+                    Set-RunOutcome -Run $runName -Setting $colorSetting.Name -Requested $colorSetting.Requested -Target 'NVIDIA primary display / Windows gamma-ramp fallback' -Status FAILED -Detail $colorReport
+                }
+                Write-Log ("Neutral desktop color ramp was not applied: "+$colorReport) "WARN"
+            }
+        } catch {
+            foreach($colorSetting in @(
+                @{Name='Desktop brightness';Requested='50% (neutral equivalent)'},
+                @{Name='Desktop contrast';Requested='50% (neutral equivalent)'},
+                @{Name='Desktop gamma';Requested='1.00 (neutral equivalent)'}
+            )){
+                Set-RunOutcome -Run $runName -Setting $colorSetting.Name -Requested $colorSetting.Requested -Target 'NVIDIA primary display / Windows gamma-ramp fallback' -Status FAILED -Detail $_.Exception.Message
+            }
+            Write-Log "Neutral desktop color ramp apply was not verified: $($_.Exception.Message)" "WARN"
+        }
+    } else {
+        foreach($colorSetting in @(
+            @{Name='Desktop brightness';Requested='50% (neutral equivalent)'},
+            @{Name='Desktop contrast';Requested='50% (neutral equivalent)'},
+            @{Name='Desktop gamma';Requested='1.00 (neutral equivalent)'}
+        )){
+            Set-RunOutcome -Run $runName -Setting $colorSetting.Name -Requested $colorSetting.Requested -Target 'NVIDIA primary display / Windows gamma-ramp fallback' -Status SKIPPED -Detail 'Windows display color helper is unavailable.'
+        }
+        Write-Log "Neutral desktop color ramp skipped because the Windows display color helper is unavailable." "WARN"
+    }
+
+}
+
 function Apply-NvidiaGamingSettings {
     param(
         [ValidateRange(640,7680)][int]$Width = 1920,
@@ -2997,7 +3161,7 @@ function Apply-NvidiaGamingSettings {
     )
     $runName=if($script:StepScope){$script:StepScope.Run}elseif($script:ActiveRunName){$script:ActiveRunName}else{'Manual NVIDIA'}
     $hueDescription=if($Hue -lt 0){'driver default'}else{"${Hue} degrees"}
-    Write-Log "NVIDIA gaming-settings apply started (profile resolution: ${Width}x${Height}; highest advertised refresh; configured refresh ${RefreshHz}Hz; vibrance ${Vibrance}%; hue $hueDescription; brightness unchanged, default is 50%)."
+    Write-Log "NVIDIA gaming-settings apply started (profile resolution: ${Width}x${Height}; highest advertised refresh; configured refresh ${RefreshHz}Hz; vibrance ${Vibrance}%; hue $hueDescription; applying neutral desktop color settings)."
     $compat=$null
     try{$compat=Write-NvidiaCompatibilityScan -Width $Width -Height $Height -RefreshHz $RefreshHz}
     catch{Write-Log ("NVIDIA preflight unavailable: "+$_.Exception.Message) "WARN"}
@@ -3033,6 +3197,7 @@ function Apply-NvidiaGamingSettings {
     }else{
         Set-RunOutcome -Run $runName -Setting 'Windows display mode' -Requested "${Width}x${Height} @ highest advertised Hz" -Target 'DISPLAY1' -Status SKIPPED -Detail 'Display-mode helper is unavailable.'
     }
+
 
     $gSyncFeatureVerified=$false
     if($null -eq $compat -or -not $compat.NVAPI -or -not ("FabNvApi" -as [type])){
@@ -6358,7 +6523,10 @@ function Get-CafeMirrorGraphicsHistoryJson {
     if($actual -cne $expectedHash.ToLowerInvariant()){throw 'Mirror graphics history hash mismatch.'}
     $json=(New-Object Text.UTF8Encoding($false,$true)).GetString($bytes)
     $parsed=ConvertFrom-Json -InputObject $json -ErrorAction Stop
-    if(@($parsed.revisions).Count -lt 1 -or [int]$parsed.revisions[0].revision -ne [int]$entry.revision){
+    $graphicsRevision=0
+    if(-not [int]::TryParse([string]$entry.graphicsRevision,[ref]$graphicsRevision) -or
+       $graphicsRevision -lt 1 -or $graphicsRevision -gt [int]$entry.revision -or
+       @($parsed.revisions).Count -lt 1 -or [int]$parsed.revisions[0].revision -ne $graphicsRevision){
         throw 'Mirror graphics history revision is inconsistent with the manifest.'
     }
     return $json
@@ -8932,7 +9100,7 @@ function Show-ProfileEditor {
     $vibrance=New-EditorTabNumber -Grid $displayGrid -Title 'NVIDIA Digital Vibrance (%)' -Column 1 -Row 1 -Min 0 -Max 100 -Value ([int]$p.Vibrance)
     $hue=New-EditorTabNumber -Grid $displayGrid -Title 'NVIDIA Hue (degrees)' -Column 0 -Row 2 -Min 0 -Max 359 -Value ([int]$p.Hue)
     $brightnessHint=New-Object System.Windows.Forms.Label
-    $brightnessHint.Text='Brightness is not changed by the profile; NVIDIA Control Panel default is 50%.'
+    $brightnessHint.Text='Apply XProfile tries NVIDIA Control Panel brightness 50%, contrast 50%, gamma 1.00 with read-back; if unsupported, it applies the neutral Windows gamma ramp, which may not update NVIDIA slider values.'
     $brightnessHint.ForeColor=$MUTED
     Add-EditorTabWide -Grid $displayGrid -Control $brightnessHint -Row 3
     $nv=New-Object System.Windows.Forms.CheckBox
@@ -10238,6 +10406,7 @@ function Invoke-GamingProfile {
             Apply-ProfileMouse -ProfileName $ProfileName -PointerSpeed ([int]$profile.PointerSpeed) -DisableAcceleration ([bool]$profile.DisableAcceleration) -SkipPointerOptions -WebAction:$WebAction
         } }
     )
+    $steps += @{ Name = 'Desktop color settings'; Action = { Apply-NvidiaDesktopColorSettings } }
     if ($profile.ApplyNvidia) {
         $steps += @{ Name = 'NVIDIA settings'; Action = { Apply-NvidiaGamingSettings -Width ([int]$profile.Width) -Height ([int]$profile.Height) -RefreshHz ([int]$profile.RefreshHz) -Vibrance ([int]$profile.Vibrance) -Hue ([int]$profile.Hue) -ScalingMode ([int]$profile.ScalingMode) } }
     }
