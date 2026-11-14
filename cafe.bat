@@ -1489,18 +1489,33 @@ public static class FabDisplayColorNative {
     [DllImport("gdi32.dll", SetLastError = true)]
     private static extern bool GetDeviceGammaRamp(IntPtr hdc, [Out] ushort[] ramp);
 
-    private static bool TryDtcfgValue(DtcfgEx dtcfg, string command, double expected, double tolerance, out string actual) {
+    private static bool TryReadDtcfgValue(DtcfgEx dtcfg, string command, out double value, out string actual) {
         StringBuilder buffer = new StringBuilder(command, 256);
-        dtcfg(buffer);
+        uint status = dtcfg(buffer);
         string result = buffer.ToString().Trim();
+        value = 0.0;
         actual = result;
+        if (status != 0) {
+            actual = result + " (dtcfgex status " + status.ToString(CultureInfo.InvariantCulture) + ")";
+            return false;
+        }
         if (String.Equals(result, command, StringComparison.OrdinalIgnoreCase)) return false;
         MatchCollection matches = Regex.Matches(result, @"[-+]?(?:\d+(?:\.\d*)?|\.\d+)");
         if (matches.Count == 0) return false;
-        double parsed;
-        if (!Double.TryParse(matches[matches.Count - 1].Value, NumberStyles.Float, CultureInfo.InvariantCulture, out parsed)) return false;
-        actual = parsed.ToString("0.###", CultureInfo.InvariantCulture);
-        return Math.Abs(parsed - expected) <= tolerance;
+        if (!Double.TryParse(matches[matches.Count - 1].Value, NumberStyles.Float, CultureInfo.InvariantCulture, out value)) return false;
+        actual = value.ToString("0.###", CultureInfo.InvariantCulture);
+        return true;
+    }
+
+    private static bool TryDtcfgSet(DtcfgEx dtcfg, string command, out string detail) {
+        StringBuilder buffer = new StringBuilder(command, 256);
+        uint status = dtcfg(buffer);
+        if (status == 0) {
+            detail = command;
+            return true;
+        }
+        detail = command + " (dtcfgex status " + status.ToString(CultureInfo.InvariantCulture) + ")";
+        return false;
     }
 
     private static bool TrySetNvidiaControlPanelNeutralValues(out string report) {
@@ -1513,16 +1528,39 @@ public static class FabDisplayColorNative {
             DtcfgEx dtcfg = (DtcfgEx)Marshal.GetDelegateForFunctionPointer(entry, typeof(DtcfgEx));
 
             // NVIDIA's legacy dtcfg API uses Windows display index 0 for the current primary display.
-            dtcfg(new StringBuilder("set_normalize_brightness 0 all 0.5", 256));
-            dtcfg(new StringBuilder("set_normalize_contrast 0 all 0.5", 256));
-            dtcfg(new StringBuilder("setgamma 0 all 1.0", 256));
-
+            // Read all existing values first: if this legacy driver cannot report them, don't risk
+            // changing values that cannot be restored. The getter spellings follow NVIDIA's API manual.
+            double oldBrightness, oldContrast, oldGamma;
             string brightness, contrast, gamma;
-            bool brightnessOk = TryDtcfgValue(dtcfg, "get_normalize_brightnessvalue 0 all", 0.5, 0.01, out brightness);
-            bool contrastOk = TryDtcfgValue(dtcfg, "get_normalize_contrastvalue 0 all", 0.5, 0.01, out contrast);
-            bool gammaOk = TryDtcfgValue(dtcfg, "getgammavalue 0 all", 1.0, 0.01, out gamma);
-            if (!brightnessOk || !contrastOk || !gammaOk)
-                throw new InvalidOperationException("NVIDIA Control Panel read-back did not match brightness 50%, contrast 50%, gamma 1.00 (read: brightness=" + brightness + ", contrast=" + contrast + ", gamma=" + gamma + ").");
+            bool brightnessReadable = TryReadDtcfgValue(dtcfg, "get_normalize_brightnessvalue 0 all", out oldBrightness, out brightness);
+            bool contrastReadable = TryReadDtcfgValue(dtcfg, "get_normalize_contrastvalue 0 all", out oldContrast, out contrast);
+            bool gammaReadable = TryReadDtcfgValue(dtcfg, "getgammavalue 0 all", out oldGamma, out gamma);
+            if (!brightnessReadable || !contrastReadable || !gammaReadable)
+                throw new InvalidOperationException("Legacy NVIDIA dtcfgex could not read the current slider values (brightness=" + brightness + ", contrast=" + contrast + ", gamma=" + gamma + "); no slider changes were attempted.");
+
+            string setDetail;
+            bool setOk = TryDtcfgSet(dtcfg, "set_normalize_brightness 0 all 0.5", out setDetail)
+                && TryDtcfgSet(dtcfg, "set_normalize_contrast 0 all 0.5", out setDetail)
+                && TryDtcfgSet(dtcfg, "setgamma 0 all 1.0", out setDetail);
+            if (!setOk) {
+                string ignored;
+                TryDtcfgSet(dtcfg, "set_normalize_brightness 0 all " + oldBrightness.ToString("0.###", CultureInfo.InvariantCulture), out ignored);
+                TryDtcfgSet(dtcfg, "set_normalize_contrast 0 all " + oldContrast.ToString("0.###", CultureInfo.InvariantCulture), out ignored);
+                TryDtcfgSet(dtcfg, "setgamma 0 all " + oldGamma.ToString("0.###", CultureInfo.InvariantCulture), out ignored);
+                throw new InvalidOperationException("Legacy NVIDIA dtcfgex rejected a neutral slider command (" + setDetail + "); previous values were restored where supported.");
+            }
+
+            double actualBrightness, actualContrast, actualGamma;
+            bool brightnessOk = TryReadDtcfgValue(dtcfg, "get_normalize_brightnessvalue 0 all", out actualBrightness, out brightness) && Math.Abs(actualBrightness - 0.5) <= 0.01;
+            bool contrastOk = TryReadDtcfgValue(dtcfg, "get_normalize_contrastvalue 0 all", out actualContrast, out contrast) && Math.Abs(actualContrast - 0.5) <= 0.01;
+            bool gammaOk = TryReadDtcfgValue(dtcfg, "getgammavalue 0 all", out actualGamma, out gamma) && Math.Abs(actualGamma - 1.0) <= 0.01;
+            if (!brightnessOk || !contrastOk || !gammaOk) {
+                string ignored;
+                TryDtcfgSet(dtcfg, "set_normalize_brightness 0 all " + oldBrightness.ToString("0.###", CultureInfo.InvariantCulture), out ignored);
+                TryDtcfgSet(dtcfg, "set_normalize_contrast 0 all " + oldContrast.ToString("0.###", CultureInfo.InvariantCulture), out ignored);
+                TryDtcfgSet(dtcfg, "setgamma 0 all " + oldGamma.ToString("0.###", CultureInfo.InvariantCulture), out ignored);
+                throw new InvalidOperationException("NVIDIA Control Panel read-back did not match brightness 50%, contrast 50%, gamma 1.00 (read: brightness=" + brightness + ", contrast=" + contrast + ", gamma=" + gamma + "); previous values were restored where supported.");
+            }
             report = "NVIDIA Control Panel API set and verified brightness 50%, contrast 50%, and gamma 1.00 on the primary display.";
             return true;
         } catch (Exception ex) {

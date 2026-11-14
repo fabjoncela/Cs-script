@@ -21,6 +21,21 @@ $nvapiStart=$cafeSource.IndexOf('public static class FabNvApi {',[StringComparis
 $nvapiEnd=$cafeSource.IndexOf('"@',[Math]::Max(0,$nvapiStart),[StringComparison]::Ordinal)
 if($nvapiStart -lt 0 -or $nvapiEnd -le $nvapiStart){throw 'Could not locate the embedded NVAPI wrapper source.'}
 $nvapiSource=$cafeSource.Substring($nvapiStart,$nvapiEnd-$nvapiStart)
+$displayColorStart=$cafeSource.IndexOf('public static class FabDisplayColorNative {',[StringComparison]::Ordinal)
+$displayColorEnd=$cafeSource.IndexOf('"@',[Math]::Max(0,$displayColorStart),[StringComparison]::Ordinal)
+if($displayColorStart -lt 0 -or $displayColorEnd -le $displayColorStart){throw 'Could not locate the embedded display-color helper source.'}
+$displayColorSource=$cafeSource.Substring($displayColorStart,$displayColorEnd-$displayColorStart)
+if($displayColorSource -notmatch 'TryReadDtcfgValue' -or
+   $displayColorSource -notmatch 'status != 0' -or
+   $displayColorSource -notmatch 'no slider changes were attempted' -or
+   $displayColorSource -notmatch 'previous values were restored where supported'){
+    throw 'Legacy dtcfg must require readable current values, check return status, and restore captured values on failure.'
+}
+$firstColorRead=$displayColorSource.IndexOf('TryReadDtcfgValue(dtcfg',[StringComparison]::Ordinal)
+$firstColorWrite=$displayColorSource.IndexOf('TryDtcfgSet(dtcfg',[StringComparison]::Ordinal)
+if($firstColorRead -lt 0 -or $firstColorWrite -lt 0 -or $firstColorRead -ge $firstColorWrite){
+    throw 'Legacy dtcfg must read current slider values before issuing any writes.'
+}
 if($nvapiSource -notmatch 'TryCheckNvApiSupport'){
     throw 'NVAPI wrapper must expose a real initialization probe.'
 }
