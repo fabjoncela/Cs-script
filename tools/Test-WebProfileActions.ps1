@@ -95,7 +95,7 @@ Reset-ProfileActionTest
 if(-not (Test-CafeWebPinnedActionTarget -SteamUserId $script:SteamUser -SteamPath $script:SteamPath -CfgDirectory $script:CfgPath)){throw 'The focused Steam/CS2 target check rejected its pinned fixture.'}
 if(Test-CafeWebPinnedActionTarget -SteamUserId ($script:SteamUser+1) -SteamPath $script:SteamPath -CfgDirectory $script:CfgPath){throw 'The focused target check accepted a different Steam account.'}
 if(-not (Test-CafeWebPinnedActionTarget -SteamUserId 0 -SteamPath $script:SteamPath -CfgDirectory $script:CfgPath)){throw 'The focused target check rejected a signed-out Steam session.'}
-if(Test-CafeWebPinnedActionTarget -SteamUserId 0 -SteamPath $script:SteamPath -CfgDirectory $script:CfgPath -and $script:SteamUser -ne 0){throw 'The signed-out target check accepted a changed Steam session.'}
+if(Test-CafeWebPinnedActionTarget -SteamUserId 0 -SteamPath $script:SteamPath -CfgDirectory $script:CfgPath){throw 'The signed-out target check accepted a changed Steam session.'}
 if(Test-CafeWebPinnedActionTarget -SteamUserId $script:SteamUser -SteamPath $script:SteamPath -CfgDirectory ($script:CfgPath+'\missing')){throw 'The focused target check accepted a missing config path.'}
 
 Reset-ProfileActionTest
