@@ -10780,18 +10780,17 @@ function Invoke-CafeWebApplyProfile {
         if($pending){Complete-CafeWebProgressStage -Name 'Check profile state and refresh verified snapshot' -Status 'SKIPPED' -Detail $pending;return (New-CafeWebProfileActionEnvelope -State 'SKIPPED' -Summary $pending -Steps @([ordered]@{name='Profile state';status='SKIPPED';detail=$pending}))}
         if(-not $snapshot){$snapshot=Get-CafeWebActionSnapshot -ProfileName $ProfileName -Revision $pinnedRevision}
         Complete-CafeWebProgressStage -Name 'Check profile state and refresh verified snapshot' -Status 'SUCCESS' -Detail 'The profile, graphics, and CFG snapshot is ready.'
-        Start-CafeWebProgressStage -Name 'Verify Steam and CS2 target' -Detail 'Checking the active Steam session and unique CS2 config folder.'
+        Start-CafeWebProgressStage -Name 'Verify Steam and CS2 target' -Detail 'Checking the Steam installation and unique CS2 config folder. Steam sign-in is optional.'
         $inventory=Get-PCDiagnostics -AsObject
         $steamUser=Get-CafeWebActiveSteamUserId
         $steamPath=[string]$inventory.Steam.Executable
         $cfgPath=[string]$inventory.CS2.ConfigPath
-        if(-not $inventory.Steam.ActiveSessionPresent -or $steamUser -le 0 -or -not $steamPath -or
-           $inventory.CS2.Status -cne 'DETECTED' -or -not $cfgPath){
-            $detail='Sign in to Steam and ensure one CS2 install is detected before applying this profile. No profile settings were changed.'
+        if(-not $steamPath -or $inventory.CS2.Status -cne 'DETECTED' -or -not $cfgPath){
+            $detail='Steam or a unique CS2 installation/config folder could not be detected. Ensure Steam and CS2 are installed, then retry. Steam sign-in is not required. No profile settings were changed.'
             Complete-CafeWebProgressStage -Name 'Verify Steam and CS2 target' -Status 'SKIPPED' -Detail $detail
             return (New-CafeWebProfileActionEnvelope -State 'SKIPPED' -Summary $detail -Steps @([ordered]@{name='Steam/CS2 preflight';status='SKIPPED';detail=$detail}))
         }
-        Complete-CafeWebProgressStage -Name 'Verify Steam and CS2 target' -Status 'SUCCESS' -Detail 'The active Steam session and CS2 config target were verified.'
+        Complete-CafeWebProgressStage -Name 'Verify Steam and CS2 target' -Status 'SUCCESS' -Detail 'The Steam installation and unique CS2 config target were verified; Steam sign-in is not required.'
         Invoke-GamingProfile -ProfileName $ProfileName -WebAction -WebSnapshot $snapshot -WebSteamUserId $steamUser -WebCfgDirectory $cfgPath -WebSteamPath $steamPath
         $items=@($script:StepResults|Where-Object{$_.Run -eq $run})
         $steps=@($items|Select-Object -First 24|ForEach-Object{[ordered]@{name=[string]$_.Step;status=[string]$_.Status;detail=[string]$_.Detail}})
@@ -10895,7 +10894,7 @@ function Invoke-CafeWebApplyGraphics {
 function Test-CafeWebPinnedActionTarget {
     param([long]$SteamUserId,[string]$SteamPath,[string]$CfgDirectory)
     $activeUser=Get-CafeWebActiveSteamUserId
-    if($activeUser -le 0 -or $activeUser -ne $SteamUserId){return $false}
+    if($activeUser -ne $SteamUserId){return $false}
     if([string]::IsNullOrWhiteSpace($SteamPath) -or -not (Test-Path -LiteralPath $SteamPath -PathType Leaf)){return $false}
     if([string]::IsNullOrWhiteSpace($CfgDirectory) -or $CfgDirectory -notmatch '(?i)\\game\\csgo\\cfg$' -or
        -not (Test-Path -LiteralPath $CfgDirectory -PathType Container)){return $false}
