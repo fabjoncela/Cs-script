@@ -4,13 +4,13 @@ if (-not (Test-Path -LiteralPath $compiler -PathType Leaf)) { throw 'The .NET Fr
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $runnerCode = [IO.File]::ReadAllText((Join-Path $repoRoot 'web-runner\CafeLauncherWebRunner.cs'))
 $launcherCode = [IO.File]::ReadAllText((Join-Path $repoRoot 'cafe.bat'))
-$manifestPath = Join-Path $repoRoot 'web-runner\\CafeLauncherWebRunner.manifest'
-$buildScript = [IO.File]::ReadAllText((Join-Path $repoRoot 'web-runner\\Build-WebRunner.ps1'))
+$manifestPath = Join-Path $repoRoot 'web-runner\CafeLauncherWebRunner.manifest'
+$buildScript = [IO.File]::ReadAllText((Join-Path $repoRoot 'web-runner\Build-WebRunner.ps1'))
 if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) { throw 'The runner Windows manifest is missing.' }
 $manifest = [IO.File]::ReadAllText($manifestPath)
-if ($manifest -notmatch '<requestedExecutionLevel\\s+level="asInvoker"\\s+uiAccess="false"\\s*/>' -or
+if ($manifest -notmatch '<requestedExecutionLevel\s+level="asInvoker"\s+uiAccess="false"\s*/>' -or
     $manifest -notmatch '8e0f7a12-bfb3-4fe8-b9a5-48fd50a15a9a' -or
-    $buildScript -notmatch '/win32manifest:\\$manifest') {
+    $buildScript -notmatch '/win32manifest:\$manifest') {
     throw 'The runner build must embed the explicit asInvoker Windows manifest to avoid installer-detection heuristics.'
 }
 $requiredRevisionForwarding = 'start.EnvironmentVariables["CAFE_WEB_PROFILE_REVISION"] = profileRevision.ToString(CultureInfo.InvariantCulture);'
