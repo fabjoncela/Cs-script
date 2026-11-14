@@ -11,6 +11,10 @@ on:
       - '.github/workflows/web-runner-release.yml'
   workflow_dispatch:
 
+concurrency:
+  group: cafelauncher-web-runner-release-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: write
 
