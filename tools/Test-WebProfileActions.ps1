@@ -202,12 +202,15 @@ try{
 
 function Reset-DoAllTest {
     $script:DoAllWaitResult=$true
+    $script:DoAllWaitCalls=0
     $script:DoAllFaceitState='LOGGED_IN'
+    $script:DoAllSteamUserId=123456
     $script:DoAllOrder=New-Object 'System.Collections.Generic.List[string]'
     $script:DoAllStates=@{'Apply Profile'='COMPLETED';'Game Graphics'='COMPLETED';'Play + Settings'='COMPLETED'}
 }
-function Wait-CafeFaceitAcLogin { param([int]$TimeoutSeconds=0); if($TimeoutSeconds -ne 600){throw 'Do All did not use the bounded FACEIT login wait.'};return $script:DoAllWaitResult }
+function Wait-CafeFaceitAcLogin { param([int]$TimeoutSeconds=0); $script:DoAllWaitCalls++;if($TimeoutSeconds -ne 600){throw 'Do All did not use the bounded FACEIT login wait.'};return $script:DoAllWaitResult }
 function Get-CafeFaceitAcLoginStatus { return [pscustomobject]@{State=$script:DoAllFaceitState;Detail='mock'} }
+function Get-CafeWebActiveSteamUserId { return [long]$script:DoAllSteamUserId }
 function New-DoAllMockResult { param([string]$Name);return [pscustomobject]@{state=$script:DoAllStates[$Name];result=[ordered]@{summary=($Name+' mock result');steps=@();data=[ordered]@{executionOutcomeKnown=$true}}} }
 function Invoke-CafeWebApplyProfile { param([string]$ProfileName);$script:DoAllOrder.Add('Apply Profile');return (New-DoAllMockResult 'Apply Profile') }
 function Invoke-CafeWebApplyGraphics { param([string]$ProfileName);$script:DoAllOrder.Add('Game Graphics');return (New-DoAllMockResult 'Game Graphics') }
@@ -216,8 +219,17 @@ function Invoke-CafeWebPlayExec { param([string]$ProfileName);$script:DoAllOrder
 Reset-DoAllTest
 $result=Invoke-CafeWebDoAll -ProfileName FabMode
 if($result.state -cne 'COMPLETED' -or (($script:DoAllOrder -join '|') -cne 'Apply Profile|Game Graphics|Play + Settings') -or
-   (($result.result.steps.name -join '|') -cne 'FACEIT Anti-Cheat login|Apply Profile|Game Graphics|Play + Settings')){
-    throw 'Do All did not verify FACEIT login and run the three profile actions in the requested order.'
+   (($result.result.steps.name -join '|') -cne 'Steam session|FACEIT Anti-Cheat login|Apply Profile|Game Graphics|Play + Settings')){
+    throw 'Do All did not verify Steam and FACEIT before running the three profile actions in order.'
+}
+
+Reset-DoAllTest
+$script:DoAllSteamUserId=0
+$result=Invoke-CafeWebDoAll -ProfileName FabMode
+if($result.state -cne 'SKIPPED' -or $script:DoAllOrder.Count -ne 0 -or
+   $result.result.steps.Count -ne 1 -or $result.result.steps[0].name -cne 'Steam session' -or
+   $result.result.steps[0].status -cne 'SKIPPED' -or $script:DoAllWaitCalls -ne 0){
+    throw 'Do All must stop before profile changes when Steam has no active signed-in account.'
 }
 
 Reset-DoAllTest
@@ -251,5 +263,5 @@ if(-not $waitResult -or $script:FaceitWaitRead -ne 2 -or $script:FaceitLaunchCal
     throw 'Do All must bring up the FACEIT client once when signed out, then continue polling until Connected.'
 }
 
-'Web profile action checks passed: FACEIT activation and login wait, ordered Do All sequencing, signed-out Steam Apply Profile, fail-closed stop behavior, and timed progress.'
+'Web profile action checks passed: Steam preflight, FACEIT activation and login wait, ordered Do All sequencing, signed-out Steam Apply Profile, fail-closed stop behavior, and timed progress.'
 Remove-Item -LiteralPath $script:TargetRoot -Recurse -Force

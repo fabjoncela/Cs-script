@@ -11,7 +11,7 @@ del /q "%CAFE_RESTART_SIGNAL%" >nul 2>&1
 exit /b
 
 # POWERSHELL_GUI
-# CAFE_RELEASE=2026.11.15.2
+# CAFE_RELEASE=2026.11.15.3
 
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
@@ -11287,6 +11287,15 @@ function Invoke-CafeWebDoAll {
     $startedActions=0
     $hadPartial=$false
     try{
+        Start-CafeWebProgressStage -Name 'Check Steam session' -Detail 'Checking for an active signed-in Steam account before changing profile settings.'
+        if((Get-CafeWebActiveSteamUserId) -le 0){
+            $detail='Sign in to Steam in this Windows session before pressing Do All. No profile settings or CFG files were changed.'
+            Complete-CafeWebProgressStage -Name 'Check Steam session' -Status 'SKIPPED' -Detail $detail
+            [void]$steps.Add([ordered]@{name='Steam session';status='SKIPPED';detail=$detail})
+            return (New-CafeWebProfileActionEnvelope -State 'SKIPPED' -Summary 'Do All did not start because no active signed-in Steam account was found. Sign in to Steam and retry.' -Steps $steps.ToArray())
+        }
+        Complete-CafeWebProgressStage -Name 'Check Steam session' -Status 'SUCCESS' -Detail 'An active signed-in Steam account was found.'
+        [void]$steps.Add([ordered]@{name='Steam session';status='SUCCESS';detail='An active signed-in Steam account was found.'})
         if(-not (Wait-CafeFaceitAcLogin -TimeoutSeconds 600)){
             [void]$steps.Add([ordered]@{name='FACEIT Anti-Cheat login';status='SKIPPED';detail='Sign in to FACEIT AC and wait until it shows Connected, then press Do All again.'})
             return (New-CafeWebProfileActionEnvelope -State 'SKIPPED' -Summary 'No CafeLauncher actions ran because FACEIT Anti-Cheat login was not verified.' -Steps $steps.ToArray())
