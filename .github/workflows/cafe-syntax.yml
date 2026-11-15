@@ -277,7 +277,7 @@ jobs:
           for ($attempt = 1; $attempt -le $maxPushAttempts; $attempt++) {
             git fetch origin main
             if ($LASTEXITCODE -ne 0) { throw 'Could not fetch the latest main before pushing the release update.' }
-            git rebase origin/main
+            git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' rebase origin/main
             if ($LASTEXITCODE -ne 0) { throw 'Could not rebase the release update onto the latest main.' }
             & "$env:GITHUB_WORKSPACE\tools\Test-CafeLauncher.ps1"
             if ($LASTEXITCODE -ne 0) { throw 'Launcher validation failed after rebasing the release update.' }

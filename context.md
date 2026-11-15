@@ -14,7 +14,7 @@ This file gives Codex and maintainers the operational context needed to work saf
 - `main` is the production source. A `codex/*`, `feature/*`, or other non-main branch is testing/development until merged. A feature present in a testing branch is **not** shipped just because it is documented here or pushed to GitHub.
 - Describe behavior from the current checkout. When discussing release status, compare the current branch with `origin/main`; do not infer production behavior from branch-local code.
 - The release marker reports the launcher file's version; it does not prove that the current branch's code has shipped to `main`.
-- The main CafeLauncher validation workflow watches changes to `cafe.bat`. On `main`, if a launcher change did not change `CAFE_RELEASE`, it increments the date-based release marker, refreshes `README.md` and `context.md`, validates them, and commits the update. It then publishes that exact resulting commit to Google Drive. If a change already includes a release bump, it preserves that version. The workflow uses serialized release updates so closely spaced merges do not race each other.
+- The main CafeLauncher validation workflow watches changes to `cafe.bat`. On `main`, if a launcher change did not change `CAFE_RELEASE`, it increments the date-based release marker, refreshes `README.md` and `context.md`, validates them, and commits the update. It then publishes that exact resulting commit to Google Drive. If a change already includes a release bump, it preserves that version. The workflow uses serialized release updates so closely spaced merges do not race each other; the retry rebase sets the GitHub Actions bot identity before replaying its metadata commit.
 
 ## What this project is
 
