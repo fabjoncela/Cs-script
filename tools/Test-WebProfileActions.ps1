@@ -28,11 +28,12 @@ $stageOffsets=@($resultStages|ForEach-Object{$source.IndexOf("-Name '$_'",[Strin
 if(@($stageOffsets|Where-Object{$_ -lt 0}).Count -or $stageOffsets[0] -ge $stageOffsets[1] -or $stageOffsets[1] -ge $stageOffsets[2]){
     throw 'Web profile actions must report result construction, serialization, and result-file writing in order.'
 }
-foreach($name in @('Test-CafeWebPinnedActionTarget','New-CafeWebProfileActionEnvelope','Get-CafeWebPendingReason','Reset-CafeWebPendingEditsAfterRunnerUpdate','Complete-CafeWebRunnerProfileReset','Request-LogitechLiveDPI','Write-CafeWebProgress','Start-CafeWebProgressStage','Complete-CafeWebProgressStage','Get-CafeFaceitAcLoginStatus','Wait-CafeFaceitAcLogin','Invoke-CafeWebApplyProfile','Invoke-CafeWebApplyGraphics','Invoke-CafeWebDoAll')){
+foreach($name in @('Test-CafeWebPinnedActionTarget','New-CafeWebProfileActionEnvelope','Get-CafeWebPendingReason','Reset-CafeWebPendingEditsAfterRunnerUpdate','Complete-CafeWebRunnerProfileReset','Request-LogitechLiveDPI','Write-CafeWebProgress','Start-CafeWebProgressStage','Complete-CafeWebProgressStage','Get-CafeFaceitAcLoginStatus','Open-CafeFaceitAcClient','Wait-CafeFaceitAcLogin','Invoke-CafeWebApplyProfile','Invoke-CafeWebApplyGraphics','Invoke-CafeWebDoAll')){
     $definition=@($ast.FindAll({param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst]},$true)|Where-Object{$_.Name -eq $name})
     if($definition.Count -ne 1){throw ('Expected one definition for '+$name)}
     Invoke-Expression $definition[0].Extent.Text
 }
+$script:OriginalCafeFaceitWait=(Get-Command Wait-CafeFaceitAcLogin).ScriptBlock
 if($ProbeFaceitUi){
     $liveFaceitStatus=Get-CafeFaceitAcLoginStatus
     if($liveFaceitStatus.State -notin @('LOGGED_IN','LOGGED_OUT','UNKNOWN')){throw 'The FACEIT login detector returned an unsupported status.'}
@@ -222,5 +223,23 @@ $script:DoAllWaitResult=$false
 $result=Invoke-CafeWebDoAll -ProfileName FabMode
 if($result.state -cne 'SKIPPED' -or $script:DoAllOrder.Count -ne 0){throw 'Do All changed settings before FACEIT login was confirmed.'}
 
-'Web profile action checks passed: pinned profile actions, FACEIT login gate, ordered Do All sequencing, fail-closed stop behavior, and timed progress.'
+$script:FaceitWaitRead=0
+$script:FaceitLaunchCalls=0
+$script:FaceitSleepSeconds=0
+$script:FaceitStatuses=@(
+    [pscustomobject]@{State='LOGGED_OUT';Reason='LOGIN_BUTTON';Detail='Sign in to FACEIT.'},
+    [pscustomobject]@{State='LOGGED_IN';Reason='ACCOUNT_AND_CONNECTED';Detail='FACEIT is connected.'}
+)
+function Find-App { param([string[]]$Paths);$script:FaceitCandidatePaths=$Paths;return 'C:\Mock\faceitclient.exe' }
+function Launch-App { param([string[]]$Paths,[string]$Name);$script:FaceitLaunchCalls++;$script:FaceitLaunchedPath=$Paths[0];$script:FaceitLaunchedName=$Name }
+function Get-CafeFaceitAcLoginStatus { $status=$script:FaceitStatuses[$script:FaceitWaitRead];$script:FaceitWaitRead++;return $status }
+function Start-Sleep { param([int]$Seconds);$script:FaceitSleepSeconds+=$Seconds }
+$waitResult=& $script:OriginalCafeFaceitWait -TimeoutSeconds 600
+if(-not $waitResult -or $script:FaceitWaitRead -ne 2 -or $script:FaceitLaunchCalls -ne 1 -or
+   $script:FaceitLaunchedName -cne 'FACEIT Anti-Cheat' -or $script:FaceitLaunchedPath -cne 'C:\Mock\faceitclient.exe' -or
+   $script:FaceitSleepSeconds -ne 2){
+    throw 'Do All must bring up the FACEIT client once when signed out, then continue polling until Connected.'
+}
+
+'Web profile action checks passed: FACEIT activation, login wait, pinned profile actions, ordered Do All sequencing, fail-closed stop behavior, and timed progress.'
 Remove-Item -LiteralPath $script:TargetRoot -Recurse -Force

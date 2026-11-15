@@ -11050,17 +11050,33 @@ public static class CafeLauncherFaceitWindowCapture {
     }
 }
 
+function Open-CafeFaceitAcClient {
+    $faceitPath=Find-App -Paths @(
+        "$env:ProgramFiles\FACEIT AC\faceitclient.exe",
+        "${env:ProgramFiles(x86)}\FACEIT AC\faceitclient.exe"
+    )
+    if(-not $faceitPath){return $false}
+    Launch-App -Name 'FACEIT Anti-Cheat' -Paths @($faceitPath)
+    return $true
+}
+
 function Wait-CafeFaceitAcLogin {
     param([int]$TimeoutSeconds=600)
     Start-CafeWebProgressStage -Name 'Wait for FACEIT Anti-Cheat login' -Detail 'Waiting for the FACEIT AC window to show a signed-in account and Connected status. Sign in manually if needed.'
     $deadline=[DateTime]::UtcNow.AddSeconds([Math]::Max(1,$TimeoutSeconds))
     $lastState=''
     $lastDetail=''
+    $faceitActivationAttempted=$false
     while([DateTime]::UtcNow -lt $deadline){
         $status=Get-CafeFaceitAcLoginStatus
         if($status.State -ceq 'LOGGED_IN'){
             Complete-CafeWebProgressStage -Name 'Wait for FACEIT Anti-Cheat login' -Status 'SUCCESS' -Detail 'The FACEIT Anti-Cheat window shows a signed-in account and Connected status.'
             return $true
+        }
+        if(-not $faceitActivationAttempted -and
+           ($status.State -ceq 'LOGGED_OUT' -or ($status.State -ceq 'UNKNOWN' -and $status.Reason -in @('NO_WINDOW','NEED_FOREGROUND')))){
+            $faceitActivationAttempted=$true
+            $null=Open-CafeFaceitAcClient
         }
         if($status.State -cne $lastState -or $status.Detail -cne $lastDetail){
             Write-CafeWebProgress -Name 'Wait for FACEIT Anti-Cheat login' -Status 'RUNNING' -Detail ([string]$status.Detail)
