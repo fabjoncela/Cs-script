@@ -34,6 +34,7 @@ function Reset-WebPlayTestState {
     $script:TestCfgPath=Join-Path $script:TestTargetRoot 'game\csgo\cfg'
     $script:TestRevision=7
     $script:TestRevisionFloor=7
+    $env:CAFE_WEB_PROFILE_REVISION=[string]$script:TestRevision
     $script:TestRollbackApproved=$true
     $script:TestPending=$false
     $script:TestSteamActive=$true
@@ -107,6 +108,7 @@ function Get-CafeHttpBytes {
 function Get-CafeBackendProfileHistoryRevision {
     [CmdletBinding()]
     param([string]$ProfileName,[int]$Revision)
+    if($script:TestBackendUnavailable){throw 'Simulated backend outage.'}
     $script:TestHistoryRevision=$Revision
     [pscustomobject]@{
         Source='Backend'
@@ -181,6 +183,7 @@ if($script:TestInstallTargets.Count -ne 0 -or $script:TestLaunchArguments.Count 
 Reset-WebPlayTestState
 $script:TestRevision=6
 $script:TestRevisionFloor=7
+$env:CAFE_WEB_PROFILE_REVISION=[string]$script:TestRevision
 $script:TestRollbackApproved=$false
 $rollback=Invoke-CafeWebPlayExec -ProfileName 'FabMode'
 Assert-WebPlayResult $rollback 'SKIPPED' $true
