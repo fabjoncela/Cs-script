@@ -105,6 +105,10 @@ function Write-Log { param($Message,$Level) }
 Reset-ProfileActionTest
 if(-not (Test-CafeWebPinnedActionTarget -SteamUserId $script:SteamUser -SteamPath $script:SteamPath -CfgDirectory $script:CfgPath)){throw 'The focused Steam/CS2 target check rejected its pinned fixture.'}
 if(Test-CafeWebPinnedActionTarget -SteamUserId ($script:SteamUser+1) -SteamPath $script:SteamPath -CfgDirectory $script:CfgPath){throw 'The focused target check accepted a different Steam account.'}
+$script:SteamUser=0
+if(-not (Test-CafeWebPinnedActionTarget -SteamUserId 0 -SteamPath $script:SteamPath -CfgDirectory $script:CfgPath)){throw 'The focused target check rejected a signed-out Steam session.'}
+$script:SteamUser=76561198000000000L
+if(Test-CafeWebPinnedActionTarget -SteamUserId 0 -SteamPath $script:SteamPath -CfgDirectory $script:CfgPath){throw 'The signed-out target check accepted a changed Steam session.'}
 if(Test-CafeWebPinnedActionTarget -SteamUserId $script:SteamUser -SteamPath $script:SteamPath -CfgDirectory ($script:CfgPath+'\missing')){throw 'The focused target check accepted a missing config path.'}
 
 Reset-ProfileActionTest
@@ -151,8 +155,14 @@ if($result.state -cne 'COMPLETED' -or $script:SnapshotCalls -ne 1 -or $script:Re
 
 Reset-ProfileActionTest
 $script:SteamAvailable=$false
+$script:SteamUser=0
 $result=Invoke-CafeWebApplyProfile -ProfileName FabMode
-if($result.state -cne 'SKIPPED' -or $script:ApplyCalls -ne 0){throw 'Missing Steam session did not stop web profile apply before changes.'}
+if($result.state -cne 'COMPLETED' -or $script:ApplyCalls -ne 1){throw 'Web Apply Profile did not continue when Steam was signed out.'}
+
+Reset-ProfileActionTest
+$script:SteamPath=$null
+$result=Invoke-CafeWebApplyProfile -ProfileName FabMode
+if($result.state -cne 'SKIPPED' -or $script:ApplyCalls -ne 0){throw 'Missing Steam installation did not stop web profile apply safely.'}
 
 Reset-ProfileActionTest
 $script:ThrowSnapshot=$true
@@ -241,5 +251,5 @@ if(-not $waitResult -or $script:FaceitWaitRead -ne 2 -or $script:FaceitLaunchCal
     throw 'Do All must bring up the FACEIT client once when signed out, then continue polling until Connected.'
 }
 
-'Web profile action checks passed: FACEIT activation, login wait, pinned profile actions, ordered Do All sequencing, fail-closed stop behavior, and timed progress.'
+'Web profile action checks passed: FACEIT activation and login wait, ordered Do All sequencing, signed-out Steam Apply Profile, fail-closed stop behavior, and timed progress.'
 Remove-Item -LiteralPath $script:TargetRoot -Recurse -Force

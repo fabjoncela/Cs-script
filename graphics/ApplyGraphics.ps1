@@ -181,7 +181,7 @@ function Get-ActiveSteamCS2Video {
     if(-not $steam){throw 'Steam installation not found.'}
     $video=Join-Path (Split-Path -Parent $steam) ("userdata\"+$id+"\730\local\cfg\cs2_video.txt")
     if(-not (Test-Path -LiteralPath $video -PathType Leaf)){
-        throw ("Missing cs2_video.txt for signed-in account "+$id+" at "+$video+". Launch CS2 to generate the missing cs2_video.txt file, close CS2, then click Apply Graphics again.")
+        throw 'CS2 graphics settings file not found yet. Open CS2, go to Settings > Video, change one video setting and apply it. Then close CS2 completely and click Apply Graphics again.'
     }
     return [pscustomobject]@{Path=$video;AccountID=[string]$id}
 }

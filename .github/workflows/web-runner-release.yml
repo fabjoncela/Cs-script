@@ -5,10 +5,15 @@ on:
     branches: [main]
     paths:
       - 'web-runner/**'
+      - 'web-runner/CafeLauncherWebRunner.manifest'
       - 'tools/Test-WebRunnerInstall.ps1'
       - 'tools/Test-WebRunnerCompatibility.ps1'
       - '.github/workflows/web-runner-release.yml'
   workflow_dispatch:
+
+concurrency:
+  group: cafelauncher-web-runner-release-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: write
