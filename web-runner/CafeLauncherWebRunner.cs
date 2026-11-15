@@ -26,7 +26,7 @@ using Microsoft.Win32;
 internal static class CafeLauncherWebRunner
 {
     private const string BackendOrigin = "https://fabjon-hp.tail681ec9.ts.net:10000";
-    private const string RunnerVersion = "0.7.6";
+    private const string RunnerVersion = "0.7.7";
     private const string RunnerUninstallKey = @"Software\Microsoft\Windows\CurrentVersion\Uninstall\CafeLauncherWebRunner";
     private const int MaxLauncherBytes = 1000000;
     private const int MaxRunnerBytes = 8 * 1024 * 1024;
@@ -647,7 +647,7 @@ internal static class CafeLauncherWebRunner
         bool localPlayOutcomeKnown = false;
         try
         {
-            if (action == "apply-profile")
+            if (action == "apply-profile" || action == "do-all")
             {
                 SendEvent(requestId, capability, "RUNNING", "Logitech helper setup", "RUNNING",
                     "Checking the pinned Logitech helper cache before starting the profile action.", null);
@@ -1049,13 +1049,13 @@ internal static class CafeLauncherWebRunner
         string source = Encoding.UTF8.GetString(bytes);
         string branch = @"(?m)^\s*if\s*\(\$env:CAFE_WEB_ACTION\s+-ceq\s+'" + Regex.Escape(action) + @"'\)\s*\{";
         if (Regex.IsMatch(source, branch, RegexOptions.CultureInvariant)) return true;
-        return (action == "apply-profile" || action == "apply-graphics") &&
-            Regex.IsMatch(source, @"\$env:CAFE_WEB_ACTION\s+-in\s+@\('apply-profile','apply-graphics'\)", RegexOptions.CultureInvariant);
+        return (action == "apply-profile" || action == "apply-graphics" || action == "do-all") &&
+            Regex.IsMatch(source, @"\$env:CAFE_WEB_ACTION\s+-in\s+@\('apply-profile','apply-graphics','do-all'\)", RegexOptions.CultureInvariant);
     }
 
     private static bool IsSupportedAction(string action)
     {
-        return action == "detect-pc" || action == "play-exec" || action == "apply-profile" || action == "apply-graphics";
+        return action == "detect-pc" || action == "play-exec" || action == "apply-profile" || action == "apply-graphics" || action == "do-all";
     }
 
     internal static string GitBlobSha(byte[] bytes)
@@ -1108,7 +1108,8 @@ internal static class CafeLauncherWebRunner
             {
                 if (process == null) throw new InvalidOperationException("Windows PowerShell could not be started.");
                 WriteRunnerLog("Started the local PowerShell action host.");
-                DateTime deadline = DateTime.UtcNow.AddMilliseconds(120000);
+                int timeoutMilliseconds = action == "do-all" ? 780000 : 120000;
+                DateTime deadline = DateTime.UtcNow.AddMilliseconds(timeoutMilliseconds);
                 DateTime nextControlCheck = DateTime.MinValue;
                 DateTime resultFirstObserved = DateTime.MinValue;
                 int nextProgressIndex = 1;
@@ -1151,7 +1152,7 @@ internal static class CafeLauncherWebRunner
                         try { process.Kill(); } catch { }
                         process.WaitForExit(5000);
                         ForwardProgressEvents(progressDirectory, requestId, capability, ref nextProgressIndex);
-                        string diagnostic = BuildLocalActionTimeoutDiagnostic(resultPath, progressDirectory);
+                        string diagnostic = BuildLocalActionTimeoutDiagnostic(resultPath, progressDirectory, action);
                         WriteRunnerLog(diagnostic);
                         throw new TimeoutException(diagnostic);
                     }
@@ -1201,7 +1202,7 @@ internal static class CafeLauncherWebRunner
         catch { return false; }
     }
 
-    internal static string BuildLocalActionTimeoutDiagnostic(string resultPath, string progressDirectory)
+    internal static string BuildLocalActionTimeoutDiagnostic(string resultPath, string progressDirectory, string action = null)
     {
         string resultStatus = "not present";
         try
@@ -1239,7 +1240,8 @@ internal static class CafeLauncherWebRunner
         }
         catch { }
 
-        return "The local CafeLauncher action exceeded 120 seconds and was stopped. Final result file: " + resultStatus + "; last local progress stage: " + lastProgress + ".";
+        int timeoutSeconds = action == "do-all" ? 780 : 120;
+        return "The local CafeLauncher action exceeded " + timeoutSeconds.ToString(CultureInfo.InvariantCulture) + " seconds and was stopped. Final result file: " + resultStatus + "; last local progress stage: " + lastProgress + ".";
     }
 
     internal static bool TryStopLauncherAfterCompletedResult(Process process, string resultPath, DateTime firstObservedUtc, DateTime nowUtc, out Dictionary<string, object> result)
@@ -1387,12 +1389,12 @@ internal static class CafeLauncherWebRunner
                 { "data", new Dictionary<string, object> { { "steamLaunchRequested", false }, { "cs2AlreadyRunning", false }, { "executionOutcomeKnown", true }, { "cfgName", ProfileCfg(profile) }, { "consoleCommands", new object[0] } } }
             };
         }
-        if (action == "apply-profile" || action == "apply-graphics")
+        if (action == "apply-profile" || action == "apply-graphics" || action == "do-all")
         {
             return new Dictionary<string, object>
             {
                 { "summary", summary },
-                { "steps", new object[] { Step(action == "apply-profile" ? "Apply profile" : "Apply game graphics", "FAILED", "The runner did not receive a local result. Check this PC before retrying.") } },
+                { "steps", new object[] { Step(action == "apply-profile" ? "Apply profile" : action == "apply-graphics" ? "Apply game graphics" : "Do All", "FAILED", "The runner did not receive a local result. Check this PC before retrying.") } },
                 { "data", new Dictionary<string, object> { { "executionOutcomeKnown", true } } }
             };
         }

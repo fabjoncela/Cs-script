@@ -11,7 +11,7 @@ del /q "%CAFE_RESTART_SIGNAL%" >nul 2>&1
 exit /b
 
 # POWERSHELL_GUI
-# CAFE_RELEASE=2026.11.14.1
+# CAFE_RELEASE=2026.11.15.1
 
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
@@ -4081,7 +4081,7 @@ if($env:CAFE_WEB_ACTION -ceq 'detect-pc'){
         exit 1
     }
 }
-if($env:CAFE_WEB_ACTION -and $env:CAFE_WEB_ACTION -notin @('play-exec','apply-profile','apply-graphics')){exit 1}
+if($env:CAFE_WEB_ACTION -and $env:CAFE_WEB_ACTION -notin @('play-exec','apply-profile','apply-graphics','do-all')){exit 1}
 
 function Show-PCDiagnostics {
     Write-Log 'PC detection started.'
@@ -7274,7 +7274,7 @@ function Confirm-CafeBackendRevisionRollback {
         $approvedRevision=[int]$script:BackendRevisionRollbackApprovals[$ProfileName]
     }
     if($approvedRevision -gt 0 -and $revision -ge $approvedRevision){return $true}
-    if($env:CAFE_WEB_ACTION -ceq 'play-exec' -and $env:CAFE_WEB_REQUEST_ID -match '^[A-Za-z0-9_-]{43}$'){
+    if($env:CAFE_WEB_ACTION -in @('play-exec','do-all') -and $env:CAFE_WEB_REQUEST_ID -match '^[A-Za-z0-9_-]{43}$'){
         Write-Log ($ProfileName+' web action blocked because backend revision rollback requires review in the Windows dashboard.') 'WARN'
         return $false
     }
@@ -10951,6 +10951,128 @@ function Get-CafeWebActiveSteamUserId {
     return $activeUser
 }
 
+function Get-CafeFaceitAcLoginStatus {
+    try{
+        Add-Type -AssemblyName System.Drawing -ErrorAction Stop
+        Add-Type -AssemblyName System.Runtime.WindowsRuntime -ErrorAction Stop
+        Add-Type -AssemblyName UIAutomationClient -ErrorAction Stop
+        if(-not ('CafeLauncherFaceitWindowCapture' -as [type])){
+            $drawingAssembly=[System.Drawing.Bitmap].Assembly.Location
+            Add-Type -TypeDefinition @'
+using System;
+using System.Drawing;
+using System.Drawing.Imaging;
+using System.IO;
+using System.Runtime.InteropServices;
+using System.Text;
+public static class CafeLauncherFaceitWindowCapture {
+    [DllImport("user32.dll")] private static extern IntPtr GetForegroundWindow();
+    [DllImport("user32.dll")] private static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint processId);
+    public static int ForegroundProcessId() {
+        uint processId; GetWindowThreadProcessId(GetForegroundWindow(),out processId); return (int)processId;
+    }
+    public static byte[] CaptureScreenPng(int x,int y,int width,int height) {
+        if(width<160 || height<100 || width>2000 || height>1200) throw new InvalidOperationException("FACEIT Anti-Cheat window is minimized or outside the screen.");
+        using(Bitmap bitmap=new Bitmap(width,height)) using(Graphics graphics=Graphics.FromImage(bitmap)) {
+            graphics.CopyFromScreen(x,y,0,0,new Size(width,height),CopyPixelOperation.SourceCopy);
+            using(MemoryStream stream=new MemoryStream()) { bitmap.Save(stream,ImageFormat.Png); return stream.ToArray(); }
+        }
+    }
+}
+'@ -ReferencedAssemblies $drawingAssembly -ErrorAction Stop
+        }
+        function Wait-CafeWinRtOperation($Operation,[Type]$ResultType){
+            $method=[System.WindowsRuntimeSystemExtensions].GetMethods()|Where-Object{$_.Name -eq 'AsTask' -and $_.IsGenericMethod -and $_.GetParameters().Count -eq 1}|Select-Object -First 1
+            if(-not $method){throw 'Windows OCR async support is unavailable.'}
+            $task=$method.MakeGenericMethod($ResultType).Invoke($null,@($Operation))
+            return $task.GetAwaiter().GetResult()
+        }
+        $faceitProcess=Get-Process -Name 'faceitclient' -ErrorAction SilentlyContinue|Select-Object -First 1
+        if(-not $faceitProcess){return [pscustomobject]@{State='UNKNOWN';Reason='NO_WINDOW';Detail='Open the FACEIT Anti-Cheat window so CafeLauncher can read its login state.'}}
+        $condition=New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::NameProperty,'FACEIT Anti-cheat')
+        $windowElements=[System.Windows.Automation.AutomationElement]::RootElement.FindAll([System.Windows.Automation.TreeScope]::Children,$condition)
+        $faceitElement=@($windowElements|Where-Object{$_.Current.ProcessId -eq $faceitProcess.Id}|Select-Object -First 1)
+        if(-not $faceitElement.Count){return [pscustomobject]@{State='UNKNOWN';Reason='NO_WINDOW';Detail='Open the FACEIT Anti-Cheat window so CafeLauncher can read its login state.'}}
+        $childElements=$faceitElement[0].FindAll([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.Condition]::TrueCondition)
+        $uiNames=@($childElements|ForEach-Object{[string]$_.Current.Name}|Where-Object{$_})
+        $normalizedUi=[regex]::Replace((($faceitElement[0].Current.Name+' '+($uiNames -join ' ')).ToUpperInvariant()),'[^A-Z0-9]+',' ').Trim()
+        if($normalizedUi -match '\bLOGIN WITH FACEIT\b'){
+            return [pscustomobject]@{State='LOGGED_OUT';Reason='LOGIN_BUTTON';Detail='FACEIT Anti-Cheat is signed out. Sign in there; CafeLauncher is waiting for the account and Connected status.'}
+        }
+        if($normalizedUi -match '\bLOGOUT\b' -and $normalizedUi -match '\bCONNECTED\b' -and $normalizedUi -match '\bWAITING FOR GAME TO LAUNCH\b'){
+            return [pscustomobject]@{State='LOGGED_IN';Reason='ACCOUNT_AND_CONNECTED';Detail='FACEIT Anti-Cheat shows a signed-in account and Connected status.'}
+        }
+        if([CafeLauncherFaceitWindowCapture]::ForegroundProcessId() -ne $faceitProcess.Id){
+            return [pscustomobject]@{State='UNKNOWN';Reason='NEED_FOREGROUND';Detail='Bring the FACEIT Anti-Cheat window to the front so CafeLauncher can verify Connected.'}
+        }
+        $faceitBounds=$faceitElement[0].Current.BoundingRectangle
+        $screenX=[int][Math]::Floor($faceitBounds.Left);$screenY=[int][Math]::Floor($faceitBounds.Top)
+        $screenWidth=[int][Math]::Ceiling($faceitBounds.Width);$screenHeight=[int][Math]::Ceiling($faceitBounds.Height)
+        $pngBytes=[CafeLauncherFaceitWindowCapture]::CaptureScreenPng($screenX,$screenY,$screenWidth,$screenHeight)
+        $streamType=[Windows.Storage.Streams.InMemoryRandomAccessStream,Windows.Storage,ContentType=WindowsRuntime]
+        $writerType=[Windows.Storage.Streams.DataWriter,Windows.Storage,ContentType=WindowsRuntime]
+        $stream=$null;$writer=$null;$bitmap=$null
+        try{
+            $stream=$streamType::new()
+            $writer=$writerType::new($stream)
+            $writer.WriteBytes($pngBytes)
+            $null=Wait-CafeWinRtOperation ($writer.StoreAsync()) ([uint32])
+            $null=Wait-CafeWinRtOperation ($writer.FlushAsync()) ([bool])
+            $writer.DetachStream()|Out-Null
+            $stream.Seek(0)
+            $decoderType=[Windows.Graphics.Imaging.BitmapDecoder,Windows.Graphics.Imaging,ContentType=WindowsRuntime]
+            $decoder=Wait-CafeWinRtOperation ($decoderType::CreateAsync($stream)) $decoderType
+            $bitmapType=[Windows.Graphics.Imaging.SoftwareBitmap,Windows.Graphics.Imaging,ContentType=WindowsRuntime]
+            $bitmap=Wait-CafeWinRtOperation ($decoder.GetSoftwareBitmapAsync()) $bitmapType
+            $engineType=[Windows.Media.Ocr.OcrEngine,Windows.Foundation,ContentType=WindowsRuntime]
+            $engine=$engineType::TryCreateFromUserProfileLanguages()
+            if(-not $engine){return [pscustomobject]@{State='UNKNOWN';Reason='OCR_UNAVAILABLE';Detail='Windows OCR is unavailable for the installed language settings.'}}
+            $resultType=[Windows.Media.Ocr.OcrResult,Windows.Foundation,ContentType=WindowsRuntime]
+            $ocr=Wait-CafeWinRtOperation ($engine.RecognizeAsync($bitmap)) $resultType
+            $normalized=[regex]::Replace(([string]$ocr.Text).ToUpperInvariant(),'[^A-Z0-9]+',' ').Trim()
+            if($normalized -match '\bLOGIN WITH FACEIT\b'){
+                return [pscustomobject]@{State='LOGGED_OUT';Reason='LOGIN_BUTTON';Detail='FACEIT Anti-Cheat is signed out. Sign in there; CafeLauncher is waiting for the account and Connected status.'}
+            }
+            if($normalized -match '\bLOGOUT\b' -and $normalized -match '\bCONNECTED\b' -and $normalized -match '\bWAITING FOR GAME TO LAUNCH\b'){
+                return [pscustomobject]@{State='LOGGED_IN';Reason='ACCOUNT_AND_CONNECTED';Detail='FACEIT Anti-Cheat shows a signed-in account and Connected status.'}
+            }
+            $reason='STATUS_UNRECOGNIZED; login='+[bool]($normalized -match '\bLOGIN WITH FACEIT\b')+' logout='+[bool]($normalized -match '\bLOGOUT\b')+' connected='+[bool]($normalized -match '\bCONNECTED\b')+' waiting='+[bool]($normalized -match '\bWAITING FOR GAME TO LAUNCH\b')
+            return [pscustomobject]@{State='UNKNOWN';Reason=$reason;Detail='CafeLauncher could not verify the FACEIT account and Connected status. Keep the FACEIT Anti-Cheat window open in English.'}
+        }finally{
+            if($bitmap){try{$bitmap.Dispose()}catch{}}
+            if($writer){try{$writer.Dispose()}catch{}}
+            if($stream){try{$stream.Dispose()}catch{}}
+        }
+    }catch{
+        $reason=[regex]::Replace([string]$_.Exception.Message,'[\r\n\t]+',' ')
+        if($reason.Length -gt 240){$reason=$reason.Substring(0,240)}
+        return [pscustomobject]@{State='UNKNOWN';Reason=('READ_ERROR_'+$reason);Detail='CafeLauncher could not read the FACEIT Anti-Cheat window. Keep it open and visible, then retry.'}
+    }
+}
+
+function Wait-CafeFaceitAcLogin {
+    param([int]$TimeoutSeconds=600)
+    Start-CafeWebProgressStage -Name 'Wait for FACEIT Anti-Cheat login' -Detail 'Waiting for the FACEIT AC window to show a signed-in account and Connected status. Sign in manually if needed.'
+    $deadline=[DateTime]::UtcNow.AddSeconds([Math]::Max(1,$TimeoutSeconds))
+    $lastState=''
+    $lastDetail=''
+    while([DateTime]::UtcNow -lt $deadline){
+        $status=Get-CafeFaceitAcLoginStatus
+        if($status.State -ceq 'LOGGED_IN'){
+            Complete-CafeWebProgressStage -Name 'Wait for FACEIT Anti-Cheat login' -Status 'SUCCESS' -Detail 'The FACEIT Anti-Cheat window shows a signed-in account and Connected status.'
+            return $true
+        }
+        if($status.State -cne $lastState -or $status.Detail -cne $lastDetail){
+            Write-CafeWebProgress -Name 'Wait for FACEIT Anti-Cheat login' -Status 'RUNNING' -Detail ([string]$status.Detail)
+            $lastState=[string]$status.State
+            $lastDetail=[string]$status.Detail
+        }
+        Start-Sleep -Seconds 2
+    }
+    Complete-CafeWebProgressStage -Name 'Wait for FACEIT Anti-Cheat login' -Status 'SKIPPED' -Detail 'No profile settings or game files were changed because FACEIT did not show a confirmed signed-in and Connected state within 10 minutes.'
+    return $false
+}
+
 $script:CafeWebProgressSequence=0
 $script:CafeWebProgressTimers=@{}
 function Write-CafeWebProgress {
@@ -11144,6 +11266,57 @@ function Invoke-CafeWebPlayExec {
     }
 }
 
+function Invoke-CafeWebDoAll {
+    param([Parameter(Mandatory=$true)][string]$ProfileName)
+    $steps=New-Object 'System.Collections.Generic.List[object]'
+    $startedActions=0
+    $hadPartial=$false
+    try{
+        if(-not (Wait-CafeFaceitAcLogin -TimeoutSeconds 600)){
+            [void]$steps.Add([ordered]@{name='FACEIT Anti-Cheat login';status='SKIPPED';detail='Sign in to FACEIT AC and wait until it shows Connected, then press Do All again.'})
+            return (New-CafeWebProfileActionEnvelope -State 'SKIPPED' -Summary 'No CafeLauncher actions ran because FACEIT Anti-Cheat login was not verified.' -Steps $steps.ToArray())
+        }
+        [void]$steps.Add([ordered]@{name='FACEIT Anti-Cheat login';status='SUCCESS';detail='A signed-in account and Connected state were read from the FACEIT AC window.'})
+        foreach($action in @(
+            [pscustomobject]@{Name='Apply Profile';Call={Invoke-CafeWebApplyProfile -ProfileName $ProfileName}},
+            [pscustomobject]@{Name='Game Graphics';Call={Invoke-CafeWebApplyGraphics -ProfileName $ProfileName}},
+            [pscustomobject]@{Name='Play + Settings';Call={Invoke-CafeWebPlayExec -ProfileName $ProfileName}}
+        )){
+            if($action.Name -ceq 'Play + Settings'){
+                $faceit=Get-CafeFaceitAcLoginStatus
+                if($faceit.State -cne 'LOGGED_IN'){
+                    $status=if($startedActions){'PARTIAL'}else{'SKIPPED'}
+                    [void]$steps.Add([ordered]@{name=$action.Name;status='SKIPPED';detail='FACEIT AC no longer shows the signed-in Connected state; CS2 was not launched.'})
+                    $hadPartial=$true
+                    $state=if($startedActions){'PARTIAL'}else{'SKIPPED'}
+                    return (New-CafeWebProfileActionEnvelope -State $state -Summary 'The chain stopped because FACEIT Anti-Cheat was no longer connected. CS2 was not launched.' -Steps $steps.ToArray())
+                }
+            }
+            $startedActions++
+            $result=& $action.Call
+            $resultState=[string]$result.state
+            $known=$true
+            if($result.result -and $result.result.data -and $null -ne $result.result.data.executionOutcomeKnown){$known=[bool]$result.result.data.executionOutcomeKnown}
+            $stepStatus=switch($resultState){'COMPLETED'{'SUCCESS'}'PARTIAL'{'PARTIAL'}'SKIPPED'{'SKIPPED'}'FAILED'{'FAILED'}'INTERRUPTED'{'PARTIAL'}default{'FAILED'}}
+            [void]$steps.Add([ordered]@{name=$action.Name;status=$stepStatus;detail=[string]$result.result.summary})
+            if($stepStatus -eq 'PARTIAL'){$hadPartial=$true}
+            if($resultState -notin @('COMPLETED','PARTIAL') -or -not $known){
+                $stopState=if($resultState -eq 'INTERRUPTED' -or -not $known){'INTERRUPTED'}elseif($startedActions -gt 0){'PARTIAL'}else{$resultState}
+                if($stopState -eq 'FAILED' -and $startedActions -gt 0){$stopState='PARTIAL'}
+                return (New-CafeWebProfileActionEnvelope -State $stopState -Summary ('Do All stopped at '+$action.Name+'. Later steps were not run.') -Steps $steps.ToArray() -ExecutionOutcomeKnown $known)
+            }
+        }
+        $finalState=if($hadPartial){'PARTIAL'}else{'COMPLETED'}
+        $summary=if($hadPartial){'Do All finished with one or more partial results. Review the steps before playing.'}else{'Do All completed in order: Apply Profile, Game Graphics, then Play + Settings.'}
+        return (New-CafeWebProfileActionEnvelope -State $finalState -Summary $summary -Steps $steps.ToArray())
+    }catch{
+        $activeProgressStage=Get-Variable -Name CafeWebCurrentProgressStage -Scope Script -ValueOnly -ErrorAction SilentlyContinue
+        if($activeProgressStage){Complete-CafeWebProgressStage -Name ([string]$activeProgressStage) -Status 'FAILED' -Detail 'Do All stopped before the full sequence completed.'}
+        [void]$steps.Add([ordered]@{name='Do All';status=$(if($startedActions){'PARTIAL'}else{'FAILED'});detail='The sequence stopped before CafeLauncher could confirm the next step.'})
+        return (New-CafeWebProfileActionEnvelope -State $(if($startedActions){'INTERRUPTED'}else{'FAILED'}) -Summary 'Do All did not complete. Check this PC before retrying.' -Steps $steps.ToArray() -ExecutionOutcomeKnown:(-not $startedActions))
+    }
+}
+
 if($env:CAFE_WEB_ACTION -ceq 'play-exec'){
     try{
         if($env:CAFE_WEB_REQUEST_ID -notmatch '^[A-Za-z0-9_-]{43}$' -or $env:CAFE_WEB_PROFILE -notmatch '^(FabMode|ArliMode|BrileMode|ArmlMode|OliMode|Provmode)$' -or $env:CAFE_WEB_PROFILE_REVISION -notmatch '^[1-9][0-9]{0,8}$'){
@@ -11170,7 +11343,7 @@ if($env:CAFE_WEB_ACTION -ceq 'play-exec'){
     }
 }
 
-if($env:CAFE_WEB_ACTION -in @('apply-profile','apply-graphics')){
+if($env:CAFE_WEB_ACTION -in @('apply-profile','apply-graphics','do-all')){
     $webProfile=[string]$env:CAFE_WEB_PROFILE
     try{
         if($env:CAFE_WEB_REQUEST_ID -notmatch '^[A-Za-z0-9_-]{43}$' -or $webProfile -notmatch '^(FabMode|ArliMode|BrileMode|ArmlMode|OliMode|Provmode)$' -or $env:CAFE_WEB_PROFILE_REVISION -notmatch '^[1-9][0-9]{0,8}$'){
@@ -11182,7 +11355,11 @@ if($env:CAFE_WEB_ACTION -in @('apply-profile','apply-graphics')){
             throw 'CafeLauncher web result path is invalid.'
         }
         Write-CafeWebProgress -Name 'Build final action result' -Status 'RUNNING' -Detail 'The local action finished its settings work; building the structured result.'
-        $webOutput=if($env:CAFE_WEB_ACTION -ceq 'apply-profile'){Invoke-CafeWebApplyProfile -ProfileName $webProfile}else{Invoke-CafeWebApplyGraphics -ProfileName $webProfile}
+        $webOutput=switch($env:CAFE_WEB_ACTION){
+            'apply-profile'{Invoke-CafeWebApplyProfile -ProfileName $webProfile}
+            'apply-graphics'{Invoke-CafeWebApplyGraphics -ProfileName $webProfile}
+            'do-all'{Invoke-CafeWebDoAll -ProfileName $webProfile}
+        }
         Write-CafeWebProgress -Name 'Build final action result' -Status 'SUCCESS' -Detail 'The action routine returned its structured result.'
         Write-CafeWebProgress -Name 'Serialize final action result' -Status 'RUNNING' -Detail 'Converting the structured result to JSON for the local runner.'
         $json=ConvertTo-Json -InputObject $webOutput -Depth 12 -Compress

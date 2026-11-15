@@ -51,7 +51,7 @@ internal static class CompatibilityTests
         string source = "@echo off\r\n# CAFE_RELEASE=2026.11.12.1\r\n# POWERSHELL_GUI\r\n" +
             "if($env:CAFE_WEB_ACTION -ceq 'detect-pc'){ exit 0 }\r\n" +
             "if($env:CAFE_WEB_ACTION -ceq 'play-exec'){ exit 0 }\r\n" +
-            "if($env:CAFE_WEB_ACTION -in @('apply-profile','apply-graphics')){ exit 0 }\r\n# " + new string('x', 12000) + "\r\n";
+            "if($env:CAFE_WEB_ACTION -in @('apply-profile','apply-graphics','do-all')){ exit 0 }\r\n# " + new string('x', 12000) + "\r\n";
         byte[] bytes = Encoding.UTF8.GetBytes(source);
         if (!CafeLauncherWebRunner.IsWarmupUri("cafelauncher://v1/warmup") ||
             CafeLauncherWebRunner.IsWarmupUri("cafelauncher://v1/warmup?run=anything") ||
@@ -64,13 +64,14 @@ internal static class CompatibilityTests
         if (!CafeLauncherWebRunner.LauncherSupportsAction(validated, "detect-pc") ||
             !CafeLauncherWebRunner.LauncherSupportsAction(validated, "play-exec") ||
             !CafeLauncherWebRunner.LauncherSupportsAction(validated, "apply-profile") ||
-            !CafeLauncherWebRunner.LauncherSupportsAction(validated, "apply-graphics"))
+            !CafeLauncherWebRunner.LauncherSupportsAction(validated, "apply-graphics") ||
+            !CafeLauncherWebRunner.LauncherSupportsAction(validated, "do-all"))
             throw new Exception("Web action capability detection failed.");
         Dictionary<string, object> release = new Dictionary<string, object> {
             { "version", "0.7.0" }, { "sha256", new string('a', 64) }, { "size", 50000 }
         };
         Dictionary<string, object> checkedRelease = CafeLauncherWebRunner.ValidateRunnerReleaseMetadata(release);
-        if ((int)checkedRelease["size"] != 50000 || !CafeLauncherWebRunner.IsRunnerVersionNewer("0.7.6", "0.7.5") ||
+        if ((int)checkedRelease["size"] != 50000 || !CafeLauncherWebRunner.IsRunnerVersionNewer("0.7.7", "0.7.6") ||
             !CafeLauncherWebRunner.IsRunnerVersionNewer("0.7.0", "0.6.0") || CafeLauncherWebRunner.IsRunnerVersionNewer("0.6.0", "0.7.0"))
             throw new Exception("Runner release metadata validation or update ordering failed.");
         if (!CafeLauncherWebRunner.IsLauncherReleaseVersionNewer("2026.11.13.4", "2026.11.13.3") ||
@@ -83,7 +84,7 @@ internal static class CompatibilityTests
         Dictionary<string, object> githubLauncher = new Dictionary<string, object> { { "version", "2026.11.13.4" }, { "bytes", newerLauncher }, { "source", "github" } };
         if (!Object.ReferenceEquals(CafeLauncherWebRunner.SelectNewestLauncherSource(backendLauncher, githubLauncher, "apply-graphics"), githubLauncher))
             throw new Exception("A newer action-compatible GitHub launcher was not selected over the older backend package.");
-        byte[] incompatibleNewLauncher = Encoding.UTF8.GetBytes(Encoding.UTF8.GetString(newerLauncher).Replace("$env:CAFE_WEB_ACTION -in @('apply-profile','apply-graphics')", "$env:CAFE_WEB_ACTION -ceq 'apply-profile'"));
+        byte[] incompatibleNewLauncher = Encoding.UTF8.GetBytes(Encoding.UTF8.GetString(newerLauncher).Replace("$env:CAFE_WEB_ACTION -in @('apply-profile','apply-graphics','do-all')", "$env:CAFE_WEB_ACTION -ceq 'apply-profile'"));
         Dictionary<string, object> incompatibleGithubLauncher = new Dictionary<string, object> { { "version", "2026.11.13.4" }, { "bytes", incompatibleNewLauncher }, { "source", "github" } };
         if (!Object.ReferenceEquals(CafeLauncherWebRunner.SelectNewestLauncherSource(backendLauncher, incompatibleGithubLauncher, "apply-graphics"), backendLauncher))
             throw new Exception("An incompatible newer GitHub launcher replaced a compatible backend package.");

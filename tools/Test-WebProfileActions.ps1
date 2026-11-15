@@ -1,4 +1,5 @@
 # Focused web profile-action checks with PC, backend, and Windows side effects stubbed.
+param([switch]$ProbeFaceitUi)
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
@@ -27,10 +28,19 @@ $stageOffsets=@($resultStages|ForEach-Object{$source.IndexOf("-Name '$_'",[Strin
 if(@($stageOffsets|Where-Object{$_ -lt 0}).Count -or $stageOffsets[0] -ge $stageOffsets[1] -or $stageOffsets[1] -ge $stageOffsets[2]){
     throw 'Web profile actions must report result construction, serialization, and result-file writing in order.'
 }
-foreach($name in @('Test-CafeWebPinnedActionTarget','New-CafeWebProfileActionEnvelope','Get-CafeWebPendingReason','Reset-CafeWebPendingEditsAfterRunnerUpdate','Complete-CafeWebRunnerProfileReset','Request-LogitechLiveDPI','Write-CafeWebProgress','Start-CafeWebProgressStage','Complete-CafeWebProgressStage','Invoke-CafeWebApplyProfile','Invoke-CafeWebApplyGraphics')){
+foreach($name in @('Test-CafeWebPinnedActionTarget','New-CafeWebProfileActionEnvelope','Get-CafeWebPendingReason','Reset-CafeWebPendingEditsAfterRunnerUpdate','Complete-CafeWebRunnerProfileReset','Request-LogitechLiveDPI','Write-CafeWebProgress','Start-CafeWebProgressStage','Complete-CafeWebProgressStage','Get-CafeFaceitAcLoginStatus','Wait-CafeFaceitAcLogin','Invoke-CafeWebApplyProfile','Invoke-CafeWebApplyGraphics','Invoke-CafeWebDoAll')){
     $definition=@($ast.FindAll({param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst]},$true)|Where-Object{$_.Name -eq $name})
     if($definition.Count -ne 1){throw ('Expected one definition for '+$name)}
     Invoke-Expression $definition[0].Extent.Text
+}
+if($ProbeFaceitUi){
+    $liveFaceitStatus=Get-CafeFaceitAcLoginStatus
+    if($liveFaceitStatus.State -notin @('LOGGED_IN','LOGGED_OUT','UNKNOWN')){throw 'The FACEIT login detector returned an unsupported status.'}
+    Write-Output ('Live FACEIT AC detector: '+$liveFaceitStatus.State+' ('+$liveFaceitStatus.Reason+')')
+    Add-Type -AssemblyName UIAutomationClient
+    $condition=New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::NameProperty,'FACEIT Anti-cheat')
+    $elements=[System.Windows.Automation.AutomationElement]::RootElement.FindAll([System.Windows.Automation.TreeScope]::Children,$condition)
+    foreach($element in $elements){$rect=$element.Current.BoundingRectangle;Write-Output ('UIA window='+$element.Current.NativeWindowHandle+' rect='+$rect.ToString()+' process='+$element.Current.ProcessId)}
 }
 
 $script:TargetRoot=Join-Path $env:TEMP ('CafeLauncher-WebProfileTarget-'+[guid]::NewGuid().ToString('N'))
@@ -179,5 +189,38 @@ try{
     if(Test-Path -LiteralPath $progressTestDirectory){Remove-Item -LiteralPath $progressTestDirectory -Recurse -Force}
 }
 
-'Web profile action checks passed: result mapping, timed progress, pending-edit and Steam gates, pinned-target recheck, and graphics block.'
+function Reset-DoAllTest {
+    $script:DoAllWaitResult=$true
+    $script:DoAllFaceitState='LOGGED_IN'
+    $script:DoAllOrder=New-Object 'System.Collections.Generic.List[string]'
+    $script:DoAllStates=@{'Apply Profile'='COMPLETED';'Game Graphics'='COMPLETED';'Play + Settings'='COMPLETED'}
+}
+function Wait-CafeFaceitAcLogin { param([int]$TimeoutSeconds=0); if($TimeoutSeconds -ne 600){throw 'Do All did not use the bounded FACEIT login wait.'};return $script:DoAllWaitResult }
+function Get-CafeFaceitAcLoginStatus { return [pscustomobject]@{State=$script:DoAllFaceitState;Detail='mock'} }
+function New-DoAllMockResult { param([string]$Name);return [pscustomobject]@{state=$script:DoAllStates[$Name];result=[ordered]@{summary=($Name+' mock result');steps=@();data=[ordered]@{executionOutcomeKnown=$true}}} }
+function Invoke-CafeWebApplyProfile { param([string]$ProfileName);$script:DoAllOrder.Add('Apply Profile');return (New-DoAllMockResult 'Apply Profile') }
+function Invoke-CafeWebApplyGraphics { param([string]$ProfileName);$script:DoAllOrder.Add('Game Graphics');return (New-DoAllMockResult 'Game Graphics') }
+function Invoke-CafeWebPlayExec { param([string]$ProfileName);$script:DoAllOrder.Add('Play + Settings');return (New-DoAllMockResult 'Play + Settings') }
+
+Reset-DoAllTest
+$result=Invoke-CafeWebDoAll -ProfileName FabMode
+if($result.state -cne 'COMPLETED' -or (($script:DoAllOrder -join '|') -cne 'Apply Profile|Game Graphics|Play + Settings') -or
+   (($result.result.steps.name -join '|') -cne 'FACEIT Anti-Cheat login|Apply Profile|Game Graphics|Play + Settings')){
+    throw 'Do All did not verify FACEIT login and run the three profile actions in the requested order.'
+}
+
+Reset-DoAllTest
+$script:DoAllStates['Game Graphics']='FAILED'
+$result=Invoke-CafeWebDoAll -ProfileName FabMode
+if($result.state -cne 'PARTIAL' -or (($script:DoAllOrder -join '|') -cne 'Apply Profile|Game Graphics') -or
+   $result.result.steps[-1].name -cne 'Game Graphics'){
+    throw 'Do All did not stop before Play + Settings after Game Graphics failed.'
+}
+
+Reset-DoAllTest
+$script:DoAllWaitResult=$false
+$result=Invoke-CafeWebDoAll -ProfileName FabMode
+if($result.state -cne 'SKIPPED' -or $script:DoAllOrder.Count -ne 0){throw 'Do All changed settings before FACEIT login was confirmed.'}
+
+'Web profile action checks passed: pinned profile actions, FACEIT login gate, ordered Do All sequencing, fail-closed stop behavior, and timed progress.'
 Remove-Item -LiteralPath $script:TargetRoot -Recurse -Force

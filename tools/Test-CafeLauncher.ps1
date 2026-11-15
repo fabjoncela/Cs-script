@@ -347,7 +347,7 @@ $graphicsLoader=@($psAst.FindAll({
 if($graphicsLoader.Count -ne 1 -or $graphicsLoader[0].Extent.Text -notmatch 'Add-CafeCacheBust' -or $graphicsLoader[0].Extent.Text -notmatch 'Get-GitBlobSha'){
     throw 'The shared graphics loader must cache-bust remote fetches and enforce the pinned Git blob hash.'
 }
-$webGraphicsDispatchAt=$psSource.IndexOf("if(`$env:CAFE_WEB_ACTION -in @('apply-profile','apply-graphics')){",[StringComparison]::Ordinal)
+$webGraphicsDispatchAt=$psSource.IndexOf("if(`$env:CAFE_WEB_ACTION -in @('apply-profile','apply-graphics','do-all')){",[StringComparison]::Ordinal)
 if($webGraphicsDispatchAt -lt 0 -or $graphicsLoader[0].Extent.StartOffset -ge $webGraphicsDispatchAt){
     throw 'The verified graphics helper must be defined before the top-level web action dispatch can invoke it.'
 }
@@ -362,6 +362,7 @@ if($webGraphics.Count -ne 1 -or $graphicsCore.Count -ne 1 -or $standardGraphics.
 $webPlayDispatchAt=$psSource.IndexOf("if(`$env:CAFE_WEB_ACTION -ceq 'play-exec'){",[StringComparison]::Ordinal)
 Assert-CafeActionCallsDefinedBeforeDispatch -Ast $psAst -Action 'Apply profile' -EntryPoint 'Invoke-CafeWebApplyProfile' -DispatchOffset $webGraphicsDispatchAt
 Assert-CafeActionCallsDefinedBeforeDispatch -Ast $psAst -Action 'Apply game graphics' -EntryPoint 'Invoke-CafeWebApplyGraphics' -DispatchOffset $webGraphicsDispatchAt
+Assert-CafeActionCallsDefinedBeforeDispatch -Ast $psAst -Action 'Do All' -EntryPoint 'Invoke-CafeWebDoAll' -DispatchOffset $webGraphicsDispatchAt
 Assert-CafeActionCallsDefinedBeforeDispatch -Ast $psAst -Action 'Play + Exec' -EntryPoint 'Invoke-CafeWebPlayExec' -DispatchOffset $webPlayDispatchAt
 $profileApiFunction=@($psAst.FindAll({
     param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
